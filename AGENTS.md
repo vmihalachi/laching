@@ -57,3 +57,7 @@ In a cloud container: `sudo pg_ctlcluster 16 main start` (and set the `postgres`
   "Webling X.Y.Z" && git push origin vX.Y.Z`, or dispatch `release.yml` with the version. Tags never move.
 - C# style is `.editorconfig`; `dotnet format` enforces it in CI. Warnings are errors. Central package versions in
   `Directory.Packages.props`.
+
+## Sessions
+
+One task per session: start a new one for unrelated work and hand off follow-ups instead of continuing here. Before searching for code you don't know the location of, use the `context-explorer` subagent (or `jbcontext search`) so the reads stay out of this context. Read big files by outline (`grep -n '^\(func\|class\|struct\|extension\|public\|##\)'`) and then a range, never whole. `/compact` at a milestone in a long session.
