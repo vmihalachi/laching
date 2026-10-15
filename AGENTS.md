@@ -32,6 +32,9 @@ scripts/tailwind-sample.sh
 scripts/verify.sh
 ```
 
+A Stop hook runs `scripts/verify.sh --fast` and `dotnet format --verify-no-changes` on the files you edited
+(`.claude/hooks/validate.json` says which); fix what it reports before ending.
+
 In a cloud container: `sudo pg_ctlcluster 16 main start` (and set the `postgres` user's password to `postgres`), or
 `docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16`.
 
