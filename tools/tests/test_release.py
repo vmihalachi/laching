@@ -160,11 +160,18 @@ class ReleaseTests(unittest.TestCase):
         self.change("tools/landing/src/index.ts")
         self.assertEqual(self.out("landing"), "yes (tools/landing changed since 0.13.0, the version on npm)")
 
-    def step(self, name: str, cwd: Path | None = None, **env: str) -> tuple[subprocess.CompletedProcess, dict[str, str]]:
-        """The release.yml step called `name`, its script as the workflow has it, run in `cwd` (the checkout here) with
-        the origin here: the result and the step's outputs."""
+    @staticmethod
+    def job(name: str) -> str:
+        """release.yml's job `name`, up to the next job."""
+        return re.split(r"\n  [a-z-]+:\n", WORKFLOW.read_text("utf8").split(f"\n  {name}:\n", 1)[1], maxsplit=1)[0]
+
+    def step(self, name: str, cwd: Path | None = None, job: str | None = None,
+             **env: str) -> tuple[subprocess.CompletedProcess, dict[str, str]]:
+        """The release.yml step called `name` (in `job`, else the first), its script as the workflow has it, run in `cwd`
+        (the checkout here) with the origin here: the result and the step's outputs."""
         lines = WORKFLOW.read_text("utf8").splitlines()
-        start = next(n for n, line in enumerate(lines) if line.endswith(f"name: {name}"))
+        first = lines.index(f"  {job}:") if job else 0
+        start = next(n for n in range(first, len(lines)) if lines[n].endswith(f"name: {name}"))
         indent = lines[start].index("name:")
         start = lines.index(" " * indent + "run: |", start) + 1
         end = next(n for n in range(start, len(lines)) if lines[n].strip() and not lines[n].startswith(" " * (indent + 2)))
@@ -184,13 +191,18 @@ class ReleaseTests(unittest.TestCase):
         self.git("reset", "-q", "--hard")  # the runner's bump goes with the runner
         return result, outputs, summary.read_text("utf8")
 
-    def checkout(self, origin: Path, commit: str) -> Path:
-        """A fresh checkout of `commit`, as a later job of the run makes."""
-        folder = self.tmp / f"job-{commit[:7]}-{len(list(self.tmp.glob('job-*')))}"
-        subprocess.run(["git", "clone", "-q", str(origin), str(folder)], check=True)
-        subprocess.run(["git", "-C", str(folder), "checkout", "-q", commit], check=True)
-        for name in ("user.name", "user.email"):
-            subprocess.run(["git", "-C", str(folder), "config", name, "fixture"], check=True)
+    def checkout(self, origin: Path, commit: str, job: str) -> Path:
+        """A fresh checkout of `commit`, as `job`'s actions/checkout makes it: the commit alone, without the tags, unless
+        the job asks for `fetch-depth: 0` (the history and the tags)."""
+        folder = self.tmp / f"job-{job}-{len(list(self.tmp.glob('job-*')))}"
+        folder.mkdir()
+        options = self.job(job).split("uses: actions/checkout@", 1)[1].split("\n      - ", 1)[0]
+        refs = (["--tags", "+refs/heads/*:refs/remotes/origin/*"] if "fetch-depth: 0" in options
+                else ["--depth", "1", "--no-tags", commit])
+        for args in (["init", "-q"], ["remote", "add", "origin", origin.as_uri()], ["fetch", "-q", "origin", *refs],
+                     ["checkout", "-q", "--detach", commit], ["config", "user.name", "fixture"],
+                     ["config", "user.email", "fixture"]):
+            subprocess.run(["git", "-C", str(folder), *args], check=True)
         return folder
 
     def origin(self) -> Path:
@@ -240,11 +252,12 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(self.remote(origin, "tag", "--list", "v0.13.1"), "")
 
         jobs = {"VERSION": plan["version"], "TREE": plan["tree"], "BASE": plan["base"]}
-        build, _ = self.step("Bump, as the release commit will be", self.checkout(origin, head), **jobs)
-        self.assertEqual(build.returncode, 0, "a build job bumps to the planned tree: " + build.stdout + build.stderr)
+        for job in ("core", "windows"):
+            build, _ = self.step("Bump, as the release commit will be", self.checkout(origin, head, job), job, **jobs)
+            self.assertEqual(build.returncode, 0, f"{job} bumps to the planned tree: " + build.stdout + build.stderr)
 
         # A failing pages dispatch strands nothing: the tag is out and the step's output written.
-        result, tag = self.step("Commit the bump and tag it, in one push", self.checkout(origin, head),
+        result, tag = self.step("Commit the bump and tag it, in one push", self.checkout(origin, head, "tag"),
                                 FAKE_GH_WORKFLOW_STATUS="1", **jobs)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.remote(origin, "log", "-1", "--format=%s", "master"), "0.13.1: release")
@@ -267,7 +280,7 @@ class ReleaseTests(unittest.TestCase):
         self.change("docs/b.md", pr=111)
         self.git("push", "-q", "origin", "HEAD:refs/heads/master")  # merged while the builds ran
         moved = self.git("rev-parse", "HEAD")
-        result, outputs = self.step("Commit the bump and tag it, in one push", self.checkout(origin, head),
+        result, outputs = self.step("Commit the bump and tag it, in one push", self.checkout(origin, head, "tag"),
                                     VERSION=plan["version"], TREE=plan["tree"], BASE=plan["base"])
         self.assertEqual(result.returncode, 1)
         self.assertIn("master moved since the plan: nothing was pushed; dispatch the release again", result.stdout)

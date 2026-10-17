@@ -131,6 +131,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 0  # the tags, for the bump (release.sh nuget diffs since v<LachingVersion>)
           ref: ${{ needs.plan.outputs.base }}
           persist-credentials: false
 
@@ -177,6 +178,7 @@ jobs:
 
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 0  # the tags, for the bump
           ref: ${{ needs.plan.outputs.base }}
           persist-credentials: false
 
@@ -256,6 +258,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 0  # the tags, for the bump
           ref: ${{ needs.plan.outputs.base }}
 
       - id: tag
