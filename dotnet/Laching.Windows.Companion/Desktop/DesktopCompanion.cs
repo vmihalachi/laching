@@ -144,12 +144,6 @@ public sealed class DesktopCompanion : IDesktopCompanion, IDisposable
 
     public bool IsShown => character.IsShown;
 
-    /// <summary>The character's window, for a script or a screenshot.</summary>
-    public DesktopWindow CharacterWindow => character;
-
-    /// <summary>The bubble's window.</summary>
-    public DesktopWindow BubbleWindow => bubble;
-
     public void Show(bool animated)
     {
         if (!character.IsShown)

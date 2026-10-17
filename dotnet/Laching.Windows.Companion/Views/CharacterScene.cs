@@ -39,7 +39,7 @@ public static class CharacterScene
         );
 
     /// <summary>Where <paramref name="point"/> lands under <paramref name="matrix"/>, as the compositor maps it.</summary>
-    public static Point Apply(Matrix4x4 matrix, Point point)
+    internal static Point Apply(Matrix4x4 matrix, Point point)
     {
         var v = Vector2.Transform(new Vector2((float)point.X, (float)point.Y), matrix);
         return new(v.X, v.Y);
