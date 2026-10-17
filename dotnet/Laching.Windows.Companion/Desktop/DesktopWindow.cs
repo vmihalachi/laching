@@ -271,12 +271,6 @@ public sealed class DesktopWindow : IDisposable
         return areas;
     }
 
-    public void SetContent(UIElement content)
-    {
-        root.Children.Clear();
-        root.Children.Add(content);
-    }
-
     /// <summary>Resizes around the anchor: the bottom middle stays put.</summary>
     public void SetSize(FigureSize size)
     {
