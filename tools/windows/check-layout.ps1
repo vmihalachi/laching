@@ -1,7 +1,7 @@
 <#
 Renders the WinUI app's windows in each language and fails when one has a problem: text that doesn't fit its box
-(LayoutCheck), a window that didn't open or couldn't be drawn, a shot that wasn't written (the checks screenshots.ps1
-fails on). Longer translations are where text runs out of room, so run it after changing text or a window's layout.
+(LayoutCheck), a window that didn't open, couldn't be drawn or was captured before it drew, a shot that wasn't written
+(the checks screenshots.ps1 fails on). Longer translations are where text runs out of room, so run it after changing text or a window's layout.
 Windows only; the Mac's is check-layout.sh.
 
 Usage: laching/tools/windows/check-layout.ps1 [-Only name,name] [-Jobs n] [-Platform x64|ARM64] [-Project path] [-Out folder]

@@ -28,9 +28,9 @@ Usage: laching/tools/windows/screenshots.ps1 [-Only name,name] [-Hidden|-Front] 
   -BuildOnly      just build.
   -Project        another WinUI project than companion.json's (Laching's fixture app).
 Fails, after copying the shots, when the run reports problems (problems.txt, left next to the shots): a window that
-didn't open or couldn't be drawn, a shot that wasn't written, text that doesn't fit (LayoutCheck); or when the app
-didn't finish the run (it crashed or was closed partway, so some windows have no shot). check-layout.ps1 runs it per
-language.
+didn't open or couldn't be drawn, one captured before it drew (one flat colour, taken again), a shot that wasn't
+written, text that doesn't fit (LayoutCheck); or when the app didn't finish the run (it crashed or was closed partway,
+so some windows have no shot). check-layout.ps1 runs it per language.
 #>
 param(
     [string[]] $Only = @(),

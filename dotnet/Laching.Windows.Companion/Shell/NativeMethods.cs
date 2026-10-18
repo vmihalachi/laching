@@ -83,6 +83,10 @@ internal static partial class NativeMethods
     public static RECT VisibleFrame(nint hwnd, RECT outer) =>
         DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, out var visible, Marshal.SizeOf<RECT>()) == 0 ? visible : outer;
 
+    /// <summary>Blocks until the compositor has presented what this process has drawn so far (DirectComposition content included).</summary>
+    [LibraryImport("dwmapi.dll")]
+    public static partial int DwmFlush();
+
     // MARK: Hidden windows (a hidden screenshot run, the window manager's)
 
     private static readonly nint HWND_BOTTOM = 1;

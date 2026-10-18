@@ -113,7 +113,7 @@ public sealed class ScreenshotScript<TWindow, TSettings>(
                 {
                     await Drawn(sequence.Id, ScreenshotCapture.Settle);
                     if (ScreenshotCapture.Wants(shotName) && host.Windows.Find(sequence.Id) is { } window)
-                        ScreenshotCapture.Capture(window, Path(shotName));
+                        await ScreenshotCapture.Capture(window, Path(shotName));
                     host.Windows.Close(sequence.Id);
                     host.Windows.Show(sequence.Id);
                 }
@@ -133,7 +133,7 @@ public sealed class ScreenshotScript<TWindow, TSettings>(
         host.Windows.Show(id);
         await Drawn(id, ScreenshotCapture.Settle);
         if (host.Windows.Find(id) is { } window)
-            ScreenshotCapture.Capture(window, path);
+            await ScreenshotCapture.Capture(window, path);
         else
             ScreenshotCapture.Report($"{IOPath.GetFileName(path)}: the window didn't open");
     }

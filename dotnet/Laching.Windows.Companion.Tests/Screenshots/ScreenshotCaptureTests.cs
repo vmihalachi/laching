@@ -33,6 +33,54 @@ public sealed class ScreenshotCaptureTests
         }
     }
 
+    private const int White = unchecked((int)0xFFFFFFFF);
+    private const int Black = unchecked((int)0xFF000000);
+    private const int Paper = unchecked((int)0xFFF3F3F3);
+
+    /// <summary>A 20 by 16 capture in <paramref name="background"/>, with grey caption buttons in its top four rows.</summary>
+    private static int[] Window(int background)
+    {
+        var pixels = Enumerable.Repeat(background, 20 * 16).ToArray();
+        for (var y = 0; y < 4; y++)
+            for (var x = 14; x < 20; x++)
+                pixels[y * 20 + x] = unchecked((int)0xFF808080);
+        return pixels;
+    }
+
+    [Theory]
+    [InlineData(White)]
+    [InlineData(Black)]
+    public void AWindowCapturedBeforeItDrewIsBlank(int background) =>
+        Assert.True(ScreenshotCapture.IsBlank(Window(background), width: 20, band: 4, inset: 2));
+
+    [Fact]
+    public void AnythingDrawnUnderTheCaptionButtonsIsNotBlank()
+    {
+        var pixels = Window(Paper);
+        pixels[10 * 20 + 9] = Black;
+        Assert.False(ScreenshotCapture.IsBlank(pixels, width: 20, band: 4, inset: 2));
+    }
+
+    [Fact]
+    public void TheFramesEdgesAndAlphaDontCount()
+    {
+        var pixels = Window(White);
+        // The border and a rounded corner, which Windows draws before the content.
+        for (var x = 0; x < 20; x++)
+            pixels[15 * 20 + x] = Paper;
+        pixels[14 * 20 + 0] = 0;
+        pixels[10 * 20 + 19] = Black;
+        // The same white, see-through.
+        pixels[8 * 20 + 8] = 0x00FFFFFF;
+        Assert.True(ScreenshotCapture.IsBlank(pixels, width: 20, band: 4, inset: 2));
+    }
+
+    [Theory]
+    [InlineData(12, 2)]
+    [InlineData(4, 10)]
+    public void ACaptureWithNothingLeftToLookAtIsNotBlank(int band, int inset) =>
+        Assert.False(ScreenshotCapture.IsBlank(Window(White), width: 20, band, inset));
+
     [Fact]
     public void EachProcessShootsIntoAFolderOfItsOwnUnlessTold()
     {
