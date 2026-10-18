@@ -48,7 +48,7 @@ the code it was extracted from. The `jitter-*` vectors add the one new behavior.
 - `steps[].op`:
   - `ticks`: repeat `count` times: advance the clock by `everySeconds` (0 or missing: don't), then call `tick()`
     with `idleSeconds` since the last input and the `busy` reasons (`call`, `fullScreen`) active.
-  - `setTime` (`time`), `snooze` (`minutes`), `snoozeUntilAfterCall`, `pauseFor` (`seconds`), `pauseUntil` (`time`),
+  - `setTime` (`time`), `snooze` (`minutes`), `snoozeFor` (`seconds`), `snoozeUntilAfterCall`, `pauseFor` (`seconds`), `pauseUntil` (`time`),
     `pauseUntilEndOfToday`, `resume`, `sessionCompleted`, `updateConfig` (`config`), `restore` (`time`: the next
     fire date an earlier run scheduled; ignored while paused, outside the active hours or when not after now),
     `reminderDelivered` (the system delivered a reminder scheduled ahead: unanswered, so `snooze` reminds in its minutes).

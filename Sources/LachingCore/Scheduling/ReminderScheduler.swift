@@ -236,7 +236,12 @@ public final class ReminderScheduler {
     /// Answering a reminder (unanswered, held during a call, or already snoozed until after a call)
     /// reminds again in `minutes`. Otherwise snooze only ever pushes the next reminder later, never closer.
     public func snooze(minutes: Int = 10) {
-        let snoozed = clock.now.addingTimeInterval(TimeInterval(minutes * 60))
+        snooze(for: TimeInterval(minutes * 60))
+    }
+
+    /// `snooze(minutes:)` for a duration in seconds, for a snooze that isn't whole minutes (say 90 seconds).
+    public func snooze(for duration: TimeInterval) {
+        let snoozed = clock.now.addingTimeInterval(duration)
         let answering = hasUnansweredReminder || isHolding || isAfterCallArmed
         pausedUntil = nil
         clearBusyState()

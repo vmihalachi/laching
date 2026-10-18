@@ -112,6 +112,9 @@ public sealed class SchedulerVectorsTests
                 case "snooze":
                     scheduler.Snooze(step.GetProperty("minutes").GetInt32());
                     break;
+                case "snoozeFor":
+                    scheduler.SnoozeFor(step.GetProperty("seconds").GetInt32());
+                    break;
                 case "snoozeUntilAfterCall":
                     scheduler.SnoozeUntilAfterCall();
                     break;

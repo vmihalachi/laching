@@ -109,6 +109,25 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertEqual(run(s, minutes: 15), [10])
     }
 
+    func testSnoozeForSecondsRemindsAfterThatLong() {
+        let s = makeScheduler(start: ConformanceSupport.monday(10))
+        XCTAssertEqual(run(s, minutes: 45), [45])
+        s.snooze(for: 90)
+        XCTAssertEqual(s.nextFireDate, ConformanceSupport.monday(10, 46).addingTimeInterval(30))
+        XCTAssertEqual(tick(s, seconds: 120), [.none, .none, .none, .none, .remind, .none])
+    }
+
+    func testSnoozeMinutesIsSnoozeForSixtyTimesAsManySeconds() {
+        let s = makeScheduler(start: ConformanceSupport.monday(10))
+        _ = run(s, minutes: 45)
+        s.snooze(minutes: 10)
+        let byMinutes = s.nextFireDate
+        let t = makeScheduler(start: ConformanceSupport.monday(10))
+        _ = run(t, minutes: 45)
+        t.snooze(for: 600)
+        XCTAssertEqual(t.nextFireDate, byMinutes)
+    }
+
     func testSnoozeWithoutReminderNeverBringsItCloser() {
         let s = makeScheduler(start: ConformanceSupport.monday(10))
         XCTAssertEqual(run(s, minutes: 20), [])
