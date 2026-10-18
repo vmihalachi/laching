@@ -55,6 +55,14 @@ class ScriptTests(FixtureAppTestCase):
         path.write_text("#!/bin/sh\n" + body, "utf8", newline="\n")
         path.chmod(0o755)
 
+    def fake_python(self, name: str, script: Path) -> None:
+        """A fake command that runs the Python `script`: a shell script on macOS and Linux, a `.cmd` on Windows, which
+        can't start a `#!/bin/sh` file."""
+        if WINDOWS:
+            (self.bin / f"{name}.cmd").write_text(f'@"{sys.executable}" "{script}" %*\n', "utf8")
+        else:
+            self.fake(name, f'exec "{sys.executable}" "{script}" "$@"\n')
+
     def run_script(self, script: str, *args: str, env: dict | None = None, cwd: Path | None = None):
         if script.endswith(".sh") and BASH is None:
             self.skipTest(NO_SHELL)
@@ -290,7 +298,7 @@ elif command == "shell":
             for theme in ("light", "dark"):
                 (screens / f"{{shot}}-{{theme}}.png").write_bytes(b"png")
         if language == "de":
-            with open(screens / "problems.txt", "a") as problems:
+            with open(screens / "problems.txt", "a", encoding="utf8") as problems:
                 problems.write(f"{{value('LACHING_SCREENS')}}-light.png: “Wiederholungen” is cut short\\n")
         (screens / "done").touch()
     elif words[:1] == ["run-as"]:
@@ -302,8 +310,16 @@ elif command == "shell":
         elif sub == ["ls", "files/screens"]:
             print("\\n".join(sorted(p.name for p in screens.iterdir())))
 """, "utf8")
-        self.fake("adb", f'exec "{sys.executable}" "{fake_adb}" "$@"\n')
-        self.fake("emulator", f'echo "emulator $*" >> "{self.log}"\nwhile [ ! -f "{state}/killed" ]; do sleep 0.1; done\n')
+        fake_emulator = self.root / "fake_emulator.py"
+        fake_emulator.write_text(f"""import sys, time
+from pathlib import Path
+with open({str(self.log)!r}, "a") as out:
+    out.write("emulator " + " ".join(sys.argv[1:]) + "\\n")
+while not (Path({str(state)!r}) / "killed").exists():
+    time.sleep(0.1)
+""", "utf8")
+        self.fake_python("adb", fake_adb)
+        self.fake_python("emulator", fake_emulator)
         apk = self.root / "app-debug.apk"
         apk.write_bytes(b"apk")
 
@@ -312,7 +328,7 @@ elif command == "shell":
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertEqual([line for line in result.stdout.splitlines() if line.startswith("==")],
                          ["== android-Pixel_8 en", "== android-Pixel_8 de"])
-        self.assertIn("settings-light.png: “Wiederholungen” is cut short", result.stdout)
+        self.assertIn("settings-light.png: “Wiederholungen” is cut short", result.stdout, result.stderr)
         self.assertIn("today-light.png: “Wiederholungen” is cut short", result.stdout)
         self.assertIn("Layout problems in: android-Pixel_8/de", result.stderr)
         checked = self.root / "macos" / "build" / "layout-check" / "android-Pixel_8"

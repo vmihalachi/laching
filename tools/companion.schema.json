@@ -321,6 +321,7 @@
           "properties": {
             "appId": { "type": "string", "description": "The app's Apple ID in App Store Connect." },
             "platform": { "type": "string", "enum": ["MAC_OS", "IOS"], "description": "MAC_OS by default." },
+            "releaseType": { "enum": ["MANUAL", "AFTER_APPROVAL"], "description": "How an approved version is released: push.py sets it on an editable version of every platform. Without it, a version push.py creates is manual and an existing one keeps its own." },
             "copyright": { "type": "string" },
             "locales": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Listing language → App Store Connect locale (en → en-US)." },
             "extraLocales": { "type": "object", "additionalProperties": { "type": "array", "items": { "type": "string" } }, "description": "More App Store Connect locales a listing language fills when they exist (en → en-GB, en-CA)." },
@@ -334,7 +335,8 @@
               "additionalProperties": false,
               "properties": {
                 "iphoneScreenshots": { "type": "string", "description": "<lang>/*.png per language, the iPhone 6.9\" set; apple/iphone by default." },
-                "ipadScreenshots": { "type": "string", "description": "<lang>/*.png per language, the iPad 13\" set; apple/ipad by default." }
+                "ipadScreenshots": { "type": "string", "description": "<lang>/*.png per language, the iPad 13\" set; apple/ipad by default." },
+                "header": { "type": "string", "description": "The iOS 27 product page header, one PNG for every language (3840x1646, no alpha); apple/header.png by default. push.py's ios-header part places it when the file exists." }
               },
               "description": "A universal app's iPhone and iPad version page: the listing then has ios.promo, ios.keywords, ios.description and an optional ios.whatsnew (check.py), and push.py fills the iOS version too (--only ios-text,ios-screenshots)."
             },

@@ -248,6 +248,10 @@ app builds, packages and checks the same way. Its `.csproj` sets its own propert
   in a JSON file and the app takes `MockStoreBackend` (`PackageIdentity.IsPackaged`). **Every other configuration is an
   MSIX with Native AOT**; `-p:WindowsPackageType=None` builds a Release exe that runs unpackaged, which is what
   `screenshots.ps1 -Configuration Release` shoots.
+- **Notifications need the MSIX.** Unpackaged, Windows 11 may never show the app's notifications, although it logs them
+  as delivered and Settings says they're on, and after Quit a button on one starts nothing (COM finds no server). So check
+  notifications, their buttons and the startup task in the installed package (`smoke-package.ps1 -Keep`), never in a
+  Debug run.
 - **Native AOT breaks what a Debug run hides**: a cast of an untyped XAML object throws or quietly fails, so the app
   goes through `XamlCast.As<T>`; `check-winui.py` fails on the patterns, and `verify.sh` runs it on the changed files.
   The Release screenshots and `smoke-package.ps1` on the built package are the proof before an upload.
