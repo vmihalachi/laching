@@ -47,6 +47,27 @@ An app without a phrase bank or a character (a reminder app, say) leaves `charac
 `companion.json`: `l10n.py`, the store tools, `verify.sh` and the hook work as usual; `phrases.py`, `voice.py`,
 `character.py` and `conformance.sh` say the app has no conformance section.
 
+**Xcode builds share one compilation cache.** Each xcodebuild the tools run passes `companion.xcode_cache_settings()`.
+`screenshots.sh`, `sim.py`, `l10n.py` and `verify.sh`'s test get them from `companion.py env` as `$XCODE_CACHE`. The
+settings turn on Xcode's compilation caching (`COMPILATION_CACHE_ENABLE_CACHING`, Xcode 26 and later). They also point
+it at the cache Xcode keeps when a build names no derived-data folder: `~/Library/Developer/Xcode/DerivedData/CompilationCache.noindex`.
+Without that, a build given `-derivedDataPath` keeps its cache inside that folder. A new worktree's first build of
+`build/screenshots.noindex` then compiles everything again.
+
+The builds that are only run, `screenshots.sh` and `sim.py` (`$XCODE_CACHE_MAPPED`), also map their paths
+(`SWIFT_`/`CLANG_ENABLE_[PROJECT_]PREFIX_MAPPING`). The SDK, project and derived-data folders then leave the cache keys,
+so a checkout at another path reuses the compiles too. On mybackhurts, a cold build into a second folder took:
+
+| Build | No cache | Shared cache | Shared cache, mapped |
+|---|---|---|---|
+| Mac Debug | 40 s | 19 s | 8 s |
+| iOS Simulator Debug | 33 s | 24 s | 9 s |
+
+Mapping also writes those paths as `/^src`, `/^sdk`… into the debug info, `#filePath` and `.stringsdata`. `l10n.py`
+reads strings from a build, and tests use `#filePath`, so both get the cache without the mapping.
+`LACHING_COMPILATION_CACHE=0` turns the cache off for every tool. The cache holds about 0.4 GB per app for the Mac and
+0.6 GB for the Simulator, and it's safe to delete.
+
 ## Adopting the tools in an app
 
 1. **Submodule, pinned to the release.** Vendor Laching at the tag the app pins in SwiftPM (NuGet takes that release's
