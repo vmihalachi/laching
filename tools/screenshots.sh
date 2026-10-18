@@ -1,7 +1,7 @@
 #!/bin/sh
 # Renders the Mac app's windows in light and dark to PNGs, with sample state and throwaway settings: a Debug build run
 # in screenshot mode (Laching's ScreenshotCapture, started by `mac.screenshotEnv`). Your real settings aren't touched.
-# Usage: laching/tools/screenshots.sh [--only name,name] [--hidden|--front] [--no-build] [output-dir] [language]
+# Usage: laching/tools/screenshots.sh [--only name,name] [--hidden|--front] [--skin id] [--no-build] [output-dir] [language]
 #        (defaults: screenshots.out, the source language)
 #   --only      just the shots whose file names start with one of the names, for checking a change: the app renders
 #               those, and only those are copied. Pair it with a scratch output-dir so the committed screenshots stay as
@@ -9,6 +9,8 @@
 #   --hidden    the windows open transparent, behind everything and without taking the focus, so you can keep working;
 #               the shots show them inactive (grey traffic lights and controls). For checks, never the committed shots.
 #   --front     the windows come forward and are shot key, as in use (the default without --only); leave the Mac alone.
+#   --skin      the skin the run wears (a skin id: auguste), owning in the sample store whatever unlocks it; the app's
+#               default skin otherwise. Pair it with an output-dir of its own: the file names don't carry the skin.
 #   --no-build  run the last build (check-layout.sh builds once, then runs the languages side by side).
 #   --build-only  just build.
 # Fails, after copying the shots, when the run reports problems (ScreenshotCapture's problems.txt, left next to the
@@ -17,6 +19,7 @@
 set -e
 ONLY=""
 HIDDEN=""
+SKIN=""
 BUILD=1
 RUN=1
 while [ $# -gt 0 ]; do
@@ -24,6 +27,7 @@ while [ $# -gt 0 ]; do
     --only) ONLY="$2"; [ -n "$HIDDEN" ] || HIDDEN=1; shift 2 ;;
     --hidden) HIDDEN=1; shift ;;
     --front) HIDDEN=0; shift ;;
+    --skin) SKIN="$2"; shift 2 ;;
     --no-build) BUILD=""; shift ;;
     --build-only) RUN=""; shift ;;
     *) break ;;
@@ -46,7 +50,7 @@ if [ -n "$BUILD" ]; then
 fi
 [ -n "$RUN" ] || exit 0
 # A sandboxed app renders into its container's temp folder and prints that path last.
-SRC=$(env "$ENV_NAME=${ONLY:-all}" LACHING_SCREENSHOT_HIDDEN="$HIDDEN" "$DERIVED/Build/Products/Debug/$APP.app/Contents/MacOS/$APP" \
+SRC=$(env "$ENV_NAME=${ONLY:-all}" LACHING_SCREENSHOT_HIDDEN="$HIDDEN" LACHING_SCREENSHOT_SKIN="$SKIN" "$DERIVED/Build/Products/Debug/$APP.app/Contents/MacOS/$APP" \
   -AppleLanguages "($LANG_CODE)" -AppleLocale "$LANG_CODE" | tail -1)
 [ -d "$SRC" ] || { echo "No screenshots were rendered" >&2; exit 1; }
 mkdir -p "$OUT"

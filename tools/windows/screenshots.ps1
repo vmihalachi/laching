@@ -1,11 +1,12 @@
 <#
-Renders a companion app's windows to PNGs, in light and dark (or in the contrast theme alone, while Windows is in one):
-the app's screenshot run (Laching.Windows.Companion's ScreenshotCapture) over sample state, never the user's
+Renders a companion app's windows to PNGs, in light and dark (or in the contrast theme alone, while Windows is in one;
+-Contrast adds it): the app's screenshot run (Laching.Windows.Companion's ScreenshotCapture) over sample state, never the user's
 settings. Windows only. Reads companion.json (found from the current folder up, then from this script's, or
 $env:COMPANION_ROOT) for the app's project (windows.dir + windows.app) and where the shots go (windows.screenshots).
 
 Usage: laching/tools/windows/screenshots.ps1 [-Only name,name] [-Hidden|-Front] [-Out folder] [-Language tag]
-                                              [-Platform x64|ARM64] [-Configuration Debug|Release] [-NoBuild|-BuildOnly]
+                                              [-Skin id] [-Contrast] [-Platform x64|ARM64]
+                                              [-Configuration Debug|Release] [-NoBuild|-BuildOnly]
                                               [-Project path\to\App.csproj]
   -Only           just the shots whose file names start with one of the names (home, settings, onboarding, …), for
                   checking a change: the app renders those, and only those are copied (an app may render more). Pair it
@@ -16,6 +17,15 @@ Usage: laching/tools/windows/screenshots.ps1 [-Only name,name] [-Hidden|-Front] 
                   older than 0.10.5 opens its windows in front, as before.
   -Front          the windows come forward and are shot active, as in use (the default without -Only); leave the PC alone.
   -Language       the language to shoot in ("it"); the app's own choice otherwise.
+  -Skin           the skin the run wears (a skin id: auguste), owning in the sample store whatever unlocks it; the app's
+                  default skin otherwise. Pair it with an -Out of its own: the file names don't carry the skin.
+  -Contrast       also the contrast theme (<name>-contrast.png), which an app can't turn on for itself: after the light and
+                  dark run, Windows' contrast theme is turned on (the one last used; Settings > Accessibility > Contrast
+                  themes picks it), the app runs again, and the theme is turned off, whatever happens. That repaints the
+                  whole screen for a minute and any screenshot run on this PC meanwhile would shoot it too, so it first
+                  waits for the other runs it can see (screenshots.ps1, check-layout.ps1) to end, and holds a lock that
+                  another -Contrast run waits for. While Windows is already in a contrast theme there's nothing to turn
+                  on: the one run shoots it.
   -Configuration  Debug (the default) builds and runs the Debug app. A packaged one (WindowsPackageType MSIX, for
                   package identity) is registered from its build output as a development package, as Visual Studio's F5
                   does (Developer Mode; other development registrations of it are removed first, a Store install never),
@@ -36,11 +46,13 @@ param(
     [string[]] $Only = @(),
     [string] $Out = "",
     [string] $Language = "",
+    [string] $Skin = "",
     [ValidateSet("x64", "ARM64")][string] $Platform = $(if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq "Arm64") { "ARM64" } else { "x64" }),
     [ValidateSet("Debug", "Release")][string] $Configuration = "Debug",
     [string] $Project = "",
     [switch] $Hidden,
     [switch] $Front,
+    [switch] $Contrast,
     [switch] $NoBuild,
     [switch] $BuildOnly
 )
@@ -131,6 +143,7 @@ $settings = [ordered]@{
     LACHING_SCREENSHOT_DIR      = $work
     LACHING_SCREENSHOT_LANGUAGE = $Language
     LACHING_SCREENSHOT_HIDDEN   = if ($hide) { "1" } else { "0" }
+    LACHING_SCREENSHOT_SKIN     = $Skin
 }
 if ($packaged) {
     # A copy already running from this build would take the launch (an app is usually single-instance), and the
@@ -146,34 +159,133 @@ if ($packaged) {
         Remove-AppxPackage -PreserveApplicationData
     Add-AppxPackage -Register $manifest -ForceApplicationShutdown
     $package = Get-AppxPackage -Name $identity | Where-Object IsDevelopmentMode | Select-Object -First 1
-    # NAME="value" stays one argument, quotes removed, as Windows splits a command line.
-    $arguments = ($settings.GetEnumerator() | ForEach-Object { "$($_.Key)=`"$($_.Value)`"" }) -join " "
-    Invoke-CommandInDesktopPackage -PackageFamilyName $package.PackageFamilyName -AppId $application -Command $exe -Args $arguments
-    $deadline = (Get-Date).AddSeconds(30)
-    while (-not ($run = Get-Process -Name $assembly -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe } | Select-Object -First 1) -and
-        (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
-    if (-not $run) { throw "The app didn't start in its package." }
-    $null = $run.Handle # held, so its exit code can be read once it has exited
-    if (-not $run.WaitForExit(600000)) { $run.Kill(); throw "The screenshot run didn't finish in 10 minutes." }
 }
-else {
-    foreach ($setting in $settings.GetEnumerator()) { [Environment]::SetEnvironmentVariable($setting.Key, $setting.Value) }
-    try {
-        $run = Start-Process $exe -PassThru
+
+# One run of the app into $work: its process, once it has exited.
+function Invoke-Run {
+    if ($packaged) {
+        # NAME="value" stays one argument, quotes removed, as Windows splits a command line.
+        $arguments = ($settings.GetEnumerator() | ForEach-Object { "$($_.Key)=`"$($_.Value)`"" }) -join " "
+        $null = Invoke-CommandInDesktopPackage -PackageFamilyName $package.PackageFamilyName -AppId $application -Command $exe -Args $arguments
+        $deadline = (Get-Date).AddSeconds(30)
+        while (-not ($run = Get-Process -Name $assembly -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe } | Select-Object -First 1) -and
+            (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+        if (-not $run) { throw "The app didn't start in its package." }
+        $null = $run.Handle # held, so its exit code can be read once it has exited
         if (-not $run.WaitForExit(600000)) { $run.Kill(); throw "The screenshot run didn't finish in 10 minutes." }
     }
-    finally {
-        $settings.Keys | ForEach-Object { [Environment]::SetEnvironmentVariable($_, $null) }
+    else {
+        foreach ($setting in $settings.GetEnumerator()) { [Environment]::SetEnvironmentVariable($setting.Key, $setting.Value) }
+        try {
+            $run = Start-Process $exe -PassThru
+            if (-not $run.WaitForExit(600000)) { $run.Kill(); throw "The screenshot run didn't finish in 10 minutes." }
+        }
+        finally {
+            $settings.Keys | ForEach-Object { [Environment]::SetEnvironmentVariable($_, $null) }
+        }
+    }
+    $run
+}
+
+# Windows' contrast theme, on and off as Settings does it (SPI_SETHIGHCONTRAST, the scheme last used), and the window
+# color, which changes once the theme has reached the screen (a few seconds after the call returns).
+function Use-ContrastApi {
+    if ('LachingContrastTheme' -as [type]) { return }
+    Add-Type -TypeDefinition @"
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class LachingContrastTheme {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct HighContrast { public int Size; public int Flags; public IntPtr Scheme; }
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool SystemParametersInfo(uint action, uint param, ref HighContrast value, uint winIni);
+    [DllImport("user32.dll")]
+    public static extern uint GetSysColor(int index);
+    private static HighContrast Read() {
+        var value = new HighContrast { Size = Marshal.SizeOf(typeof(HighContrast)) };
+        if (!SystemParametersInfo(0x42, (uint)value.Size, ref value, 0)) throw new Win32Exception();
+        return value;
+    }
+    public static bool IsOn { get { return (Read().Flags & 1) != 0; } }
+    public static void Set(bool on) {
+        var value = Read();
+        value.Flags = on ? value.Flags | 1 : value.Flags & ~1;
+        // SPIF_UPDATEINIFILE | SPIF_SENDCHANGE, as Settings does.
+        if (!SystemParametersInfo(0x43, (uint)value.Size, ref value, 3)) throw new Win32Exception();
     }
 }
+"@
+}
+
+# Turns the contrast theme on or off, then waits for it to reach the screen (the window color changes, then the shell and
+# the apps repaint).
+function Set-ContrastTheme([bool] $on) {
+    $color = [LachingContrastTheme]::GetSysColor(5)
+    [LachingContrastTheme]::Set($on)
+    $deadline = (Get-Date).AddSeconds(20)
+    while ([LachingContrastTheme]::GetSysColor(5) -eq $color -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+    Start-Sleep -Seconds 3
+}
+
+# The other screenshot runs on this PC that a contrast theme would reach: PowerShell running screenshots.ps1 or
+# check-layout.ps1 (by -File, or in an -EncodedCommand, as vm.sh starts them), apart from this one and its parents.
+function Get-OtherRuns {
+    $processes = @(Get-CimInstance Win32_Process)
+    $mine = @()
+    for ($id = $PID; $id -and $mine -notcontains $id; $id = ($processes | Where-Object ProcessId -eq $id).ParentProcessId) { $mine += $id }
+    $processes | Where-Object { ($_.Name -in @("powershell.exe", "pwsh.exe")) -and ($mine -notcontains $_.ProcessId) } | Where-Object {
+        $line = "$($_.CommandLine)"
+        if ($line -match '-(?:e|ec|enc|encodedcommand)\s+(\S+)') {
+            try { $line += [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($Matches[1])) } catch { }
+        }
+        $line -match '(screenshots|check-layout)\.ps1'
+    }
+}
+
+$runs = @(@{ Work = $work; Run = (Invoke-Run) })
+$noContrast = $null # why a -Contrast run has no contrast shots
+if ($Contrast) {
+    Use-ContrastApi
+    if ([LachingContrastTheme]::IsOn) {
+        "Windows is in a contrast theme: the run shot it, not light and dark."
+    }
+    else {
+        # One contrast pass at a time on this PC, and none while another screenshot run it can see is going.
+        $lock = New-Object Threading.Mutex($false, "Local\LachingScreenshotContrast")
+        try { $held = $lock.WaitOne([TimeSpan]::FromMinutes(20)) } catch [Threading.AbandonedMutexException] { $held = $true }
+        if (-not $held) { $noContrast = "Another -Contrast run kept the contrast theme for 20 minutes: no contrast shots." }
+        else {
+            try {
+                $deadline = (Get-Date).AddMinutes(20)
+                while (-not $noContrast -and ($others = @(Get-OtherRuns)).Count -gt 0) {
+                    if ((Get-Date) -gt $deadline) { $noContrast = "Other screenshot runs kept going for 20 minutes (process $($others.ProcessId -join ', ')): no contrast shots." }
+                    else {
+                        "Waiting for another screenshot run to end (process $($others.ProcessId -join ', ')) before the contrast theme."
+                        Start-Sleep -Seconds 10
+                    }
+                }
+                if (-not $noContrast) {
+                    $contrastWork = "$work-contrast"
+                    $settings.LACHING_SCREENSHOT_DIR = $contrastWork
+                    Set-ContrastTheme $true
+                    try { $runs += @{ Work = $contrastWork; Run = (Invoke-Run) } }
+                    finally { Set-ContrastTheme $false }
+                }
+            }
+            finally { $lock.ReleaseMutex(); $lock.Dispose() }
+        }
+    }
+}
+
 # An app may render more than it was asked for (all of a demo's shots in one go): keep only those.
-$shots = @(Get-ChildItem $work -Filter *.png -ErrorAction SilentlyContinue | Where-Object {
+$shots = @($runs | ForEach-Object { Get-ChildItem $_.Work -Filter *.png -ErrorAction SilentlyContinue } | Where-Object {
         $shot = $_.Name
         -not $Only -or @($Only -split "," | Where-Object { $shot.StartsWith($_.Trim(), [StringComparison]::Ordinal) }).Count -gt 0
     })
 if ($shots.Count -eq 0) {
-    Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
-    throw "No screenshots were rendered (exit code $($run.ExitCode))."
+    $runs | ForEach-Object { Remove-Item -LiteralPath $_.Work -Recurse -Force -ErrorAction SilentlyContinue }
+    throw "No screenshots were rendered (exit code $(($runs | ForEach-Object { $_.Run.ExitCode }) -join ', '))."
 }
 New-Item -ItemType Directory -Force $Out | Out-Null
 Remove-Item (Join-Path $Out "problems.txt") -ErrorAction SilentlyContinue
@@ -181,16 +293,22 @@ foreach ($shot in $shots) {
     Copy-Item $shot.FullName $Out -Force
 }
 "$($shots.Count) screenshots in $Out"
-$problems = Join-Path $work "problems.txt"
-$found = @(if (Test-Path $problems) { Get-Content $problems -Encoding UTF8 })
-Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+$found = @(foreach ($run in $runs) {
+        $problems = Join-Path $run.Work "problems.txt"
+        if (Test-Path $problems) { Get-Content $problems -Encoding UTF8 }
+        Remove-Item -LiteralPath $run.Work -Recurse -Force -ErrorAction SilentlyContinue
+    })
 if ($found.Count -gt 0) {
     $found | Set-Content (Join-Path $Out "problems.txt") -Encoding UTF8
     [Console]::Error.WriteLine("Problems$(if ($Language) { " ($Language)" }):")
     $found | ForEach-Object { [Console]::Error.WriteLine("  $_") }
     exit 1
 }
-if ($run.ExitCode -ne 0) {
-    [Console]::Error.WriteLine("The app stopped before the end of the run (exit code $($run.ExitCode)), so some windows have no shot.")
+if ($noContrast) {
+    [Console]::Error.WriteLine($noContrast)
+    exit 1
+}
+if ($stopped = @($runs | Where-Object { $_.Run.ExitCode -ne 0 })) {
+    [Console]::Error.WriteLine("The app stopped before the end of the run (exit code $(($stopped | ForEach-Object { $_.Run.ExitCode }) -join ', ')), so some windows have no shot.")
     exit 1
 }

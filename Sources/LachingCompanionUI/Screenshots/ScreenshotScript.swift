@@ -88,7 +88,8 @@
             /// A view on its own at its fitting size (the panel, a sheet of poses).
             case fitting(name: String, AnyView)
             /// The Support window bought while open (`thanks`: only the thank-you), then opened again (`supporter`: the
-            /// tips); ownership is back to none afterwards.
+            /// tips); ownership is back to what it was afterwards. A run that already owns `product` (it wears a skin the
+            /// product unlocks) can't buy it again, so it shoots only `supporter`.
             case supporterSequence(window: Window, product: String, thanks: String, supporter: String)
             /// Anything else: the app writes the picture to the URL it's given.
             case custom(name: String, (URL) async -> Void)
@@ -160,13 +161,15 @@
                 guard ScreenshotCapture.wants(name) else { return }
                 await ScreenshotCapture.captureFitting(root(view), to: url(name))
             case .supporterSequence(let id, let product, let thanks, let supporter):
-                guard ScreenshotCapture.wants(thanks) || ScreenshotCapture.wants(supporter) else { return }
+                let owned = backend.owned
+                let names = owned.contains(product) ? [supporter] : [thanks, supporter]
+                guard names.contains(where: { ScreenshotCapture.wants($0) }) else { return }
                 model.windows.show(id)
                 try? await Task.sleep(for: .seconds(0.6))
-                backend.owned = [product]
+                backend.owned = owned.union([product])
                 await model.purchases.refreshEntitlements()
                 try? await Task.sleep(for: .seconds(1.2))
-                for name in [thanks, supporter] {
+                for name in names {
                     if ScreenshotCapture.wants(name), let window = model.windows.window(for: id) {
                         await ScreenshotCapture.capture(window, to: url(name))
                     }
@@ -175,8 +178,10 @@
                     try? await Task.sleep(for: .seconds(1.2))
                 }
                 model.windows.close(id)
-                backend.owned = []
-                await model.purchases.refreshEntitlements()
+                if backend.owned != owned {
+                    backend.owned = owned
+                    await model.purchases.refreshEntitlements()
+                }
             case .custom(let name, let capture):
                 guard ScreenshotCapture.wants(name) else { return }
                 await capture(url(name))

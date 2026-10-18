@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
+using Laching.Companion.Phrases;
 using Laching.Windows.Companion.Views;
 using Laching.Windows.Shell;
 using Microsoft.UI;
@@ -77,6 +78,13 @@ public static class ScreenshotCapture
     /// </summary>
     public const string HiddenVariable = "LACHING_SCREENSHOT_HIDDEN";
 
+    /// <summary>
+    /// The skin the run wears (a <see cref="SkinId"/> raw value: <c>auguste</c>), so each costume gets its own set of
+    /// shots; unset, the app's default skin. The app wears it before its shots, owning in the sample store whatever
+    /// unlocks it. screenshots.ps1 <c>-Skin</c> sets it.
+    /// </summary>
+    public const string SkinVariable = "LACHING_SCREENSHOT_SKIN";
+
     public static bool IsEnabled => Setting(ModeVariable) is not null;
 
     /// <summary>
@@ -100,6 +108,9 @@ public static class ScreenshotCapture
     /// </summary>
     public static string? Language =>
         IsEnabled && Setting(LanguageVariable) is { Length: > 0 } language ? language : null;
+
+    /// <summary>The skin asked for (<see cref="SkinVariable"/>), else null.</summary>
+    public static SkinId? Skin => IsEnabled && Setting(SkinVariable) is { Length: > 0 } skin ? new SkinId(skin) : (SkinId?)null;
 
     /// <summary>The shot name prefixes asked for; empty means all.</summary>
     public static IReadOnlyList<string> Wanted => WantedIn(Setting(ModeVariable));
