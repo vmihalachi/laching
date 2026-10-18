@@ -11,8 +11,9 @@ launch (the app's own mode names; "screens" when the shot's env names none), `LA
 `adb exec-out run-as <app> cat`, which works on every debuggable build (adb pull can't read an app's private files).
 
 Needs the Android SDK: `emulator` and `adb` on PATH or under $ANDROID_HOME ($ANDROID_SDK_ROOT, else
-~/Library/Android/sdk or ~/Android/Sdk). The Debug APK comes from `./gradlew :<android.app>:assembleDebug` in
-`android.dir`; its application id is `android.devApplicationId` (`devBundleId`), else the release one.
+~/Library/Android/sdk, ~/Android/Sdk, or Android/Sdk under %LOCALAPPDATA% on Windows). The Debug APK comes from
+`./gradlew :<android.app>:assembleDebug` in `android.dir`; its application id is `android.devApplicationId`
+(`devBundleId`), else the release one.
 """
 
 from __future__ import annotations
@@ -34,14 +35,17 @@ FIRST_PORT = 5554  # adb's emulator ports: 5554, 5556, … (each AVD takes a con
 
 
 def sdk_tool(name: str) -> str:
-    """`emulator` or `adb`: on PATH, else under the SDK."""
+    """`emulator` or `adb`: on PATH, else under the SDK (`adb.exe` and Android Studio's folder on Windows)."""
     if found := shutil.which(name):
         return found
+    local = os.environ.get("LOCALAPPDATA")
     roots = [os.environ.get("ANDROID_HOME"), os.environ.get("ANDROID_SDK_ROOT"),
-             Path.home() / "Library" / "Android" / "sdk", Path.home() / "Android" / "Sdk"]
+             Path.home() / "Library" / "Android" / "sdk", Path.home() / "Android" / "Sdk",
+             Path(local) / "Android" / "Sdk" if local else None]
     folder = {"emulator": "emulator", "adb": "platform-tools"}[name]
+    file = f"{name}.exe" if os.name == "nt" else name
     for root in roots:
-        if root and (path := Path(root) / folder / name).is_file():
+        if root and (path := Path(root) / folder / file).is_file():
             return str(path)
     raise RuntimeError(f"no {name} on PATH or under ANDROID_HOME (the Android SDK's {folder})")
 
