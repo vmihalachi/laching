@@ -72,11 +72,12 @@ The package ships no strings, product ids or window lists: the app passes them i
   content above other windows on every Space (not full-screen ones) without activating the app: click, drag, right-click
   menu and pinch callbacks, fades, a window riding along beside it (a speech bubble), and `FloatingPlacement` for the
   math (kept on a screen when displays change, a side facing the middle, a platform-neutral top-left origin).
-- **Store.** `PurchaseStore(catalog: ProductCatalog(unlockables:tips:))`; `owned`, `isOwned(_:)`, `buy`, `tip`,
-  `restore`; `error: PurchaseError?` is for the app to put into words. Tests use `MockStoreBackend`. On Windows the
-  same store (`Laching.Core.Store`) runs over `StoreContextBackend(dispatcher, windowHandle)`, which matches add-ons by
-  their Partner Center Product ID and reports consumables fulfilled so tips can be bought again; `MockStoreBackend`
-  ships in `Laching.Core` there, for tests and an app's preview modes.
+- **Store.** `PurchaseStore(catalog: ProductCatalog(unlockables:tips:))`, `@Observable` (hold it in `@State` or your
+  model); `owned`, `isOwned(_:)`, `buy`, `tip`, `restore`; `error: PurchaseError?` is for the app to put into words.
+  Tests use `MockStoreBackend`. On Windows the same store (`Laching.Core.Store`) runs over
+  `StoreContextBackend(dispatcher, windowHandle)`, which matches add-ons by their Partner Center Product ID and reports
+  consumables fulfilled so tips can be bought again; `MockStoreBackend` ships in `Laching.Core` there, for tests and an
+  app's preview modes.
 - **A companion's profile.** `CompanionDefaults(skin:phraseFlavors:)` states the two product choices (the default
   skin, the flavors on); the package's numbers fill the rest. Subclass
   `CompanionSettings(store:defaults:)` (an `@Observable open class` over any `SettingsStore`) to add the app's own

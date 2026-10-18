@@ -2,6 +2,7 @@
     import LachingCore
     import LachingStore
     import LachingTesting
+    import Observation
     import XCTest
 
     @MainActor
@@ -44,6 +45,23 @@
             XCTAssertEqual(backend.purchased, [supporter])
             XCTAssertFalse(store.justTipped)
             XCTAssertNil(store.error)
+        }
+
+        func testAViewReadingOwnershipHearsThePurchase() async {
+            let settings = InMemorySettingsStore()
+            let store = makeStore(makeBackend(), settings: settings)
+            await store.start()
+            let changed = Changed()
+            withObservationTracking {
+                _ = store.isOwned(supporter)
+            } onChange: {
+                changed.fire()
+            }
+            await store.tip(smallTip)
+            XCTAssertFalse(changed.fired, "a tip unlocks nothing")
+            await store.buy(supporter)
+            XCTAssertTrue(changed.fired)
+            XCTAssertEqual(settings.strings(forKey: "test.owned"), [supporter], "the change still writes through to the cache")
         }
 
         func testOwnershipIsCachedForNextLaunch() async {
@@ -213,5 +231,11 @@
             await store.loadProductsIfNeeded()
             XCTAssertEqual(store.loadState, .loaded)
         }
+    }
+
+    /// Whether an observation's `onChange` ran (it runs on the main actor, where the store changes).
+    private final class Changed: @unchecked Sendable {
+        private(set) var fired = false
+        func fire() { fired = true }
     }
 #endif
