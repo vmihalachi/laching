@@ -46,7 +46,7 @@ DERIVED="build/screenshots.noindex"
 
 if [ -n "$BUILD" ]; then
   xcodebuild -project "$MAC_PROJECT" -scheme "$MAC_SCHEME" -configuration Debug \
-    -destination 'platform=macOS' -derivedDataPath "$DERIVED" build -quiet 2>&1 | grep -v 'warning:' || true
+    -destination 'platform=macOS' -derivedDataPath "$DERIVED" build -quiet $XCODE_CACHE_MAPPED 2>&1 | grep -v 'warning:' || true
 fi
 [ -n "$RUN" ] || exit 0
 # A sandboxed app renders into its container's temp folder and prints that path last.

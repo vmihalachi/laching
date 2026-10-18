@@ -138,6 +138,17 @@ chmod +x "$app/Fixture"
         self.assertEqual([line.split(" -Apple")[0] for line in runs],
                          ["panel hidden=1 skin=", "panel hidden=0 skin=", "all hidden=0 skin=", "all hidden=0 skin=auguste"])
 
+    def test_screenshots_build_with_the_shared_compilation_cache_unless_turned_off(self):
+        self.fake("xcodebuild", f'echo "$*" > "{self.log}"\n')
+        self.assertEqual(self.run_script("screenshots.sh", "--build-only").returncode, 0)
+        arguments = self.log.read_text().split()
+        self.assertIn("COMPILATION_CACHE_ENABLE_CACHING=YES", arguments)
+        self.assertIn(f"COMPILATION_CACHE_CAS_PATH={companion.COMPILATION_CACHE}", arguments)
+        self.assertIn("SWIFT_ENABLE_PROJECT_PREFIX_MAPPING=YES", arguments, "a build that's only run maps its paths")
+        self.assertEqual(self.run_script("screenshots.sh", "--build-only",
+                                         env={"LACHING_COMPILATION_CACHE": "0"}).returncode, 0)
+        self.assertNotIn("COMPILATION_CACHE", self.log.read_text())
+
     def fake_app(self, problems: dict[str, str] | None = None) -> None:
         """xcodebuild "builds" an app that writes a shot and prints its folder; in the languages named in `problems`
         it also writes that problems.txt, as ScreenshotCapture.finish() does."""

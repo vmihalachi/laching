@@ -142,6 +142,28 @@ def utf8_console() -> None:
             stream.reconfigure(encoding="utf-8", errors="replace")
 
 
+# Where Xcode keeps its compilation cache when a build doesn't name a derived-data folder.
+COMPILATION_CACHE = Path.home() / "Library" / "Developer" / "Xcode" / "DerivedData" / "CompilationCache.noindex"
+
+
+def xcode_cache_settings(*, mapped: bool = False) -> list[str]:
+    """The xcodebuild build settings that turn on Xcode's compilation caching (Xcode 26 and later) in one cache that
+    every derived-data folder shares. Without COMPILATION_CACHE_CAS_PATH, a build given `-derivedDataPath` keeps its
+    cache inside that folder, so a second folder starts cold. With `mapped`, the prefix-mapping settings also take the
+    SDK, project, derived-data and build-products paths out of the cache keys, so a build into another folder reuses the
+    first one's compiles too: a second cold build of mybackhurts drops from 40 s to 8 s on the Mac and from 33 s to 9 s
+    for the Simulator. It also writes those paths as `/^src`, `/^derived`… into the debug info, `#filePath` and the
+    `.stringsdata`, so it's only for builds that are run, never tested, debugged or read. Empty when
+    LACHING_COMPILATION_CACHE=0."""
+    if os.environ.get("LACHING_COMPILATION_CACHE") == "0":
+        return []
+    settings = ["COMPILATION_CACHE_ENABLE_CACHING=YES", f"COMPILATION_CACHE_CAS_PATH={COMPILATION_CACHE}"]
+    if mapped:
+        settings += [f"{language}_ENABLE_{paths}PREFIX_MAPPING=YES"
+                     for language in ("SWIFT", "CLANG") for paths in ("", "PROJECT_")]
+    return settings
+
+
 def fail(message: str) -> None:
     """Prints `error: message` and exits 2, the tools' usage-or-setup error."""
     print(f"error: {message}", file=sys.stderr)
@@ -233,6 +255,9 @@ def derived(config: Config) -> dict[str, str]:
         "MAC_TESTS": tests,
         "MAC_CORE": core,
         "DERIVED": config.derived_data.relative_to(config.root).as_posix(),
+        # xcodebuild's compilation-cache settings, space-separated: `xcodebuild … $XCODE_CACHE` (xcode_cache_settings).
+        "XCODE_CACHE": " ".join(xcode_cache_settings()),
+        "XCODE_CACHE_MAPPED": " ".join(xcode_cache_settings(mapped=True)),
         "CATALOG": rel("l10n.catalog"),
         "LANDING_DIR": landing,
         "LANDING_I18N": landing_i18n,

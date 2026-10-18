@@ -27,6 +27,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import companion
+
 # The simulators' folders (simctl's default set, the one these tools use): each one's data, preferences included.
 DEVICES = Path.home() / "Library" / "Developer" / "CoreSimulator" / "Devices"
 LAUNCH_TIMEOUT = 600  # seconds for one run; a simulator under load can hang a launch for good
@@ -109,7 +111,7 @@ def build(config, derived: Path, log: Path | None = None) -> Path:
     the app, or a RuntimeError saying why there's none."""
     command = ["xcodebuild", "-project", config.require("mac.project"), "-scheme", config.require("mac.iosScheme"),
                "-configuration", "Debug", "-destination", "generic/platform=iOS Simulator", "-derivedDataPath",
-               str(derived), "build", "-quiet"]
+               str(derived), "build", "-quiet", *companion.xcode_cache_settings(mapped=True)]
     began = time.monotonic()
     result = subprocess.run(command, cwd=config.mac_dir, capture_output=True, text=True)
     if log:

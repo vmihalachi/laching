@@ -107,6 +107,26 @@ class ManifestTests(FixtureAppTestCase):
             with self.assertRaisesRegex(RuntimeError, "supports iPad Pro"):
                 screens.simulator("app screens ipad", "iPad Pro")
 
+    def test_the_simulator_build_shares_the_compilation_cache_unless_turned_off(self):
+        derived = self.root / "derived"
+        config = self.screens.config
+        config.data["mac"]["iosScheme"] = "FixtureiOS"
+        commands = []
+
+        def run(command, **_):
+            commands.append(command)
+            (derived / "Build" / "Products" / "Debug-iphonesimulator" / "Fixture.app").mkdir(parents=True, exist_ok=True)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with mock.patch.object(sim.subprocess, "run", run):
+            sim.build(config, derived)
+            with mock.patch.dict(sim.companion.os.environ, {"LACHING_COMPILATION_CACHE": "0"}):
+                sim.build(config, derived)
+        self.assertEqual(commands[0][-len(companion.xcode_cache_settings(mapped=True)):],
+                         companion.xcode_cache_settings(mapped=True))
+        self.assertIn("CLANG_ENABLE_PREFIX_MAPPING=YES", commands[0])
+        self.assertFalse([a for a in commands[1] if a.startswith(("COMPILATION_CACHE", "SWIFT_", "CLANG_"))])
+
     def test_ios_takes_each_language_in_one_launch_and_a_shot_with_its_own_env_in_another(self):
         capture = screens.Capture(self.screens, [self.phone], ["en"], ["home", "settings"], ["light"], 1, False)
         drawn = self.root / "container"
