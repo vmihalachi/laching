@@ -4,13 +4,13 @@ taller than the screen outside a scroll view, text cut short or pushed off the s
 (ScreenshotRun's checks, `laching.android`). The Android twin of check-layout-ios.py.
 
     python3 laching/tools/check-layout-android.py [--devices AVD,AVD] [--only shot,shot] [--jobs N]
-        [--font-scale 2.0] [--mode MODE] [--apk PATH] [--out DIR] [language ...]
+        [--font-scale 2.0] [--mode MODE] [--apk PATH] [--cold] [--out DIR] [language ...]
 
 Defaults: the AVDs of the `screens.platforms` entries captured on android (their `avd`), every language in
 languages.all, LAYOUT_JOBS (else 2) emulators at a time. Shots and problems go to <work dir>/layout-check/
 android-<avd>/<language> (problems.txt as the app wrote it; the emulator's log beside the languages). It builds the
 Debug APK once (`./gradlew :<android.app>:assembleDebug` in `android.dir`; --apk runs one already built), boots each
-AVD without a window (avd.py), installs the APK and runs the languages on it, each one launch per distinct shot env in
+AVD without a window (avd.py: from the snapshot its first run saved; --cold boots it cold and saves a new one), installs the APK and runs the languages on it, each one launch per distinct shot env in
 screenshot mode with Laching's intent extras (`LACHING_SCREENSHOT_MODE`, `LACHING_SCREENS`, `LACHING_LANG`,
 `LACHING_REGION`): no reboot between languages. The shots are the ones `screens.list` names for the AVD's platform,
 each with its `env` (--only names other shots, in one launch); --mode is the screenshot mode of shots whose env sets
@@ -92,6 +92,7 @@ def main() -> int:
     parser.add_argument("--font-scale", type=float, help="the system font scale for the run, e.g. 2.0")
     parser.add_argument("--mode", default=avd.DEFAULT_MODE, help="LACHING_SCREENSHOT_MODE for shots whose env sets none")
     parser.add_argument("--apk", type=Path, help="a Debug APK to run instead of building one")
+    parser.add_argument("--cold", action="store_true", help="cold-boot each AVD and save its snapshot anew")
     parser.add_argument("--out", type=Path, help="default: <work dir>/layout-check")
     args = parser.parse_args()
 
@@ -118,7 +119,8 @@ def main() -> int:
             emulator_log = folder / "emulator.log"
             emulator_log.write_text("", "utf8")
             try:
-                emulator = avd.Emulator(device, index, emulator_log, camera=any(camera for _, _, camera in plan[device]))
+                emulator = avd.Emulator(device, index, emulator_log, camera=any(camera for _, _, camera in plan[device]),
+                                        cold=args.cold)
                 emulator.boot()
                 emulator.install(apk)
                 component = emulator.launcher(app_id)

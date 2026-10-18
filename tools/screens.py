@@ -3,7 +3,7 @@
 what changed since the last accepted run.
 
     laching/tools/screens.py capture [--platforms mac,windows,ios,android] [--langs en,fr|all]
-                                      [--only screen,…] [--themes light,dark] [--jobs N] [--no-build]
+                                      [--only screen,…] [--themes light,dark] [--jobs N] [--no-build] [--cold]
     laching/tools/screens.py compare [--langs …] [--only …] [--themes …]     # sheets and index.html
     laching/tools/screens.py diff [--against NAME] [--threshold BITS]       # what changed since NAME was accepted
     laching/tools/screens.py accept [NAME]                                   # the captures as they are become NAME
@@ -30,7 +30,8 @@ launch of their own; `--jobs` is also the iOS simulators in all, at least one pe
 languages side by side on clones of its simulator (sim.py's `on_clones`, deleted at the end); Android on headless
 emulators (`avd`, one per platform, side by side; avd.py), each language one launch with Laching's intent extras
 (`LACHING_SCREENSHOT_MODE`, `LACHING_SCREENS`, `LACHING_LANG`, `LACHING_REGION`; a shot's `env` adds extras, `camera`
-gives the emulator the host's webcam), the status bar in demo mode at 09:41. Every platform checks that text fits (its
+gives the emulator the host's webcam), the status bar in demo mode at 09:41, each emulator quick-booting from the
+snapshot its first run saved (`--cold` boots them cold and saves new ones). Every platform checks that text fits (its
 problems.txt) and reports a screen it didn't capture. Exits 1 when there are problems, 3 when no platform could run.
 
 `--only` takes canonical screen names; `--platforms` platform names or capture kinds. A sheet leaves out platforms
@@ -190,6 +191,7 @@ class Capture:
     themes: list[str]
     jobs: int
     build: bool
+    cold: bool = False  # cold-boot the AVDs (and save their snapshots anew) instead of loading their snapshots
     problems: list[tuple[int, str, str]] = field(default_factory=list)  # (platform index, language, text)
     ran: set = field(default_factory=set)
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -530,7 +532,7 @@ class Capture:
             return
         wanted = self.wanted(platform)
         try:
-            emulator = avd.Emulator(name, index, log, camera=any(shot.camera for _, shot in wanted))
+            emulator = avd.Emulator(name, index, log, camera=any(shot.camera for _, shot in wanted), cold=self.cold)
             self.say(f"{platform.name}: booting {name}")
             emulator.boot()
             emulator.install(apk)
@@ -931,6 +933,7 @@ def main(argv: list[str]) -> int:
     capture.add_argument("--jobs", type=int, default=int(os.environ.get("LAYOUT_JOBS", 3)),
                          help="Mac and Windows languages at a time, iOS simulators in all (LAYOUT_JOBS, 3)")
     capture.add_argument("--no-build", action="store_true", help="run the last builds")
+    capture.add_argument("--cold", action="store_true", help="cold-boot the Android emulators and save their snapshots anew")
     sheets = commands.add_parser("compare", help="one sheet per screen, language and theme, and index.html")
     sheets.add_argument("--langs", help="languages, comma-separated, or all (default: the captured ones)")
     sheets.add_argument("--only", help="canonical screen names, comma-separated")
@@ -951,7 +954,7 @@ def main(argv: list[str]) -> int:
         if args.command == "capture":
             platforms = screens.pick_platforms(words(args.platforms))
             languages = screens.pick_languages(words(args.langs), [screens.config.source_language])
-            return Capture(screens, platforms, languages, names, themes, args.jobs, not args.no_build).run()
+            return Capture(screens, platforms, languages, names, themes, args.jobs, not args.no_build, args.cold).run()
         if args.command == "compare":
             languages = screens.pick_languages(words(args.langs), screens.captured_languages())
             return compare(screens, languages, names, themes)

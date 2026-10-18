@@ -228,8 +228,8 @@ class ManifestTests(FixtureAppTestCase):
         calls = []
 
         class FakeEmulator:
-            def __init__(self, avd, index, log, camera=False):
-                calls.append(("boot", avd, index, camera, log.name))
+            def __init__(self, avd, index, log, camera=False, cold=False):
+                calls.append(("boot", avd, index, camera, cold, log.name))
 
             def boot(self):
                 pass
@@ -252,12 +252,12 @@ class ManifestTests(FixtureAppTestCase):
             def kill(self):
                 calls.append(("kill",))
 
-        capture = screens.Capture(manifest_, [droid], ["en", "de"], ["home", "settings"], ["light"], 1, False)
+        capture = screens.Capture(manifest_, [droid], ["en", "de"], ["home", "settings"], ["light"], 1, False, True)
         with mock.patch.object(screens.avd, "Emulator", FakeEmulator), redirect_stdout(io.StringIO()):
             code = capture.run()
         self.assertEqual(code, 1)
         self.assertEqual(calls, [
-            ("boot", "Pixel_8", 0, True, "droid.log"), ("install", "app-debug.apk"),
+            ("boot", "Pixel_8", 0, True, True, "droid.log"), ("install", "app-debug.apk"),
             ("run", "app.fixture.dev/.Main", "en", "US", ["today"], {}),
             ("run", "app.fixture.dev/.Main", "en", "US", ["settings"], {"LACHING_SCREENSHOT_MODE": "two"}),
             ("run", "app.fixture.dev/.Main", "de", "DE", ["today"], {}),
@@ -487,6 +487,180 @@ class SdkToolTests(unittest.TestCase):
                     self.assertEqual(avd.sdk_tool("adb"), str(local / "Android" / "Sdk" / "platform-tools" / name))
                 with self.assertRaisesRegex(RuntimeError, "no adb on PATH or under ANDROID_HOME"):
                     avd.sdk_tool("adb")
+
+
+class SnapshotTests(unittest.TestCase):
+    """avd.Emulator.boot's choice between the AVD's snapshot and a cold boot, against a faked device: `snapshots` is
+    what each saved snapshot's RAM holds, `broken` the ones the emulator can't load (it cold-boots instead), `exits`
+    the ones it dies on."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        self.sdk = root / "sdk"
+        self.image = self.sdk / "system-images" / "android-36" / "google_apis" / "arm64-v8a"
+        self.image.mkdir(parents=True)
+        (self.image / "source.properties").write_text("Pkg.Revision=7\n", "utf8")
+        (self.sdk / "emulator").mkdir()
+        (self.sdk / "emulator" / "emulator").write_bytes(b"")
+        (self.sdk / "emulator" / "source.properties").write_text("Pkg.Desc=Android Emulator\nPkg.Revision=37.2.12\n",
+                                                                 "utf8")
+        self.folder = root / "elsewhere" / "Pixel_8.avd"  # where the AVD's .ini says it is
+        self.folder.mkdir(parents=True)
+        (self.folder / "config.ini").write_text("hw.ramSize=2G\nimage.sysdir.1=system-images/android-36/google_apis/"
+                                                "arm64-v8a/\n", "utf8")
+        (root / "avd").mkdir()
+        (root / "avd" / "Pixel_8.ini").write_text(f"avd.ini.encoding=UTF-8\npath={self.folder}\n", "utf8")
+        self.log = root / "emulator.log"
+        self.log.write_text("", "utf8")
+        tools = {"adb": str(self.sdk / "platform-tools" / "adb"), "emulator": str(self.sdk / "emulator" / "emulator")}
+        for patch in (mock.patch.dict(avd.os.environ, {"ANDROID_AVD_HOME": str(root / "avd")}),
+                      mock.patch.object(avd, "sdk_tool", side_effect=tools.__getitem__)):
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.snapshots: dict[str, dict] = {}
+        self.broken: set[str] = set()
+        self.exits: set[str] = set()
+        self.saves_fail = False
+        self.clock_behind = False
+
+    def boot(self, camera: bool = False, cold: bool = False) -> list:
+        """Boots a faked emulator; what it did, in order."""
+        test, calls = self, []
+
+        class Fake(avd.Emulator):
+            ram: dict = {}
+
+            def start(self, snapshot):
+                calls.append(("start", *snapshot))
+                self.ram = {}
+                if "-snapshot" in snapshot:
+                    name = snapshot[snapshot.index("-snapshot") + 1]
+                    if name in test.exits:
+                        raise RuntimeError("the emulator exited (1)")
+                    if name not in test.broken:
+                        self.ram = dict(test.snapshots.get(name, {}))
+
+            def shell(self, *args, timeout=120, quiet=False):
+                if args[0] == "setprop":
+                    self.ram[args[1]] = args[2]
+                if args[0] == "date":  # a loaded snapshot's clock is behind until Android takes the host's
+                    calls.append(("date",))
+                    behind = 3600 if test.clock_behind and calls.count(("date",)) == 1 else 0
+                    return str(int(avd.time.time()) - behind)
+                return self.ram.get(args[1], "") if args[0] == "getprop" else ""
+
+            def adb(self, *args, timeout=120, binary=False, quiet=False):
+                calls.append(args)
+                if args[:4] == ("emu", "avd", "snapshot", "save") and not test.saves_fail:
+                    test.snapshots[args[4]] = dict(self.ram)
+                    return subprocess.CompletedProcess(args, 0, "OK\n", "")
+                return subprocess.CompletedProcess(args, 0, "KO: no\n" if test.saves_fail else "", "")
+
+            def demo_mode(self):
+                calls.append(("demo",))
+
+            def kill(self):
+                calls.append(("kill",))
+
+        Fake("Pixel_8", 1, self.log, camera=camera, cold=cold).boot()
+        return calls
+
+    COLD = [("start", "-no-snapshot-load", "-no-snapshot-save"), ("demo",),
+            ("emu", "avd", "snapshot", "save", "laching-screens")]
+    QUICK = [("start", "-snapshot", "laching-screens", "-no-snapshot-save"), ("date",), ("demo",)]
+
+    def marker(self, name: str = "laching-screens") -> dict:
+        return json.loads((self.folder / f"{name}.json").read_text("utf8"))
+
+    def test_the_first_run_cold_boots_and_saves_the_snapshot_and_later_runs_load_it(self):
+        self.assertEqual(self.boot(), self.COLD)
+        marker = self.marker()
+        self.assertEqual(marker["fingerprint"], {
+            "setup": avd.SETUP, "emulator": "37.2.12", "image": "system-images/android-36/google_apis/arm64-v8a/",
+            "imageRevision": "7"})
+        self.assertEqual(self.snapshots["laching-screens"], {avd.TOKEN: marker["token"]}, "the token is in the save")
+        self.assertEqual(self.boot(), self.QUICK, "demo mode again, but no save: a run never changes the snapshot")
+        self.assertEqual(self.boot(), self.QUICK)
+        self.assertIn("(quick boot from laching-screens)", self.log.read_text("utf8"))
+
+    def test_a_quick_boot_waits_for_the_clock_to_catch_up_with_the_hosts(self):
+        self.boot()
+        self.clock_behind = True
+        with mock.patch.object(avd.time, "sleep") as sleep:
+            self.assertEqual(self.boot(), [self.QUICK[0], ("date",), ("date",), ("demo",)])
+        sleep.assert_called_once_with(1)
+
+    def test_cold_boots_and_saves_anew_even_with_a_snapshot_to_load(self):
+        self.boot()
+        token = self.marker()["token"]
+        self.assertEqual(self.boot(cold=True), self.COLD)
+        self.assertNotEqual(self.marker()["token"], token)
+        self.assertEqual(self.boot(), self.QUICK)
+
+    def test_a_new_emulator_or_system_image_makes_a_new_snapshot(self):
+        self.boot()
+        (self.sdk / "emulator" / "source.properties").write_text("Pkg.Revision=37.3.1\n", "utf8")
+        self.assertEqual(self.boot(), self.COLD)
+        self.assertEqual(self.marker()["fingerprint"]["emulator"], "37.3.1")
+        (self.image / "source.properties").write_text("Pkg.Revision=8\n", "utf8")
+        self.assertEqual(self.boot(), self.COLD)
+        self.assertEqual(self.boot(), self.QUICK)
+
+    def test_without_source_properties_the_files_size_and_time_stand_in(self):
+        (self.image / "source.properties").unlink()
+        (self.image / "system.img").write_bytes(b"image")
+        self.boot()
+        self.assertRegex(self.marker()["fingerprint"]["imageRevision"], r"^5@\d+$")
+        self.assertEqual(self.boot(), self.QUICK)
+        (self.image / "system.img").write_bytes(b"a new image")
+        self.assertEqual(self.boot(), self.COLD)
+
+    def test_a_snapshot_the_emulator_couldnt_load_is_saved_again_from_the_cold_boot_it_did_instead(self):
+        self.boot()
+        token = self.marker()["token"]
+        self.broken.add("laching-screens")
+        self.assertEqual(self.boot(), [("start", "-snapshot", "laching-screens", "-no-snapshot-save"), ("demo",),
+                                       ("emu", "avd", "snapshot", "save", "laching-screens")])
+        self.assertNotEqual(self.marker()["token"], token)
+        self.assertIn("didn't load", self.log.read_text("utf8"))
+
+    def test_an_emulator_that_dies_loading_the_snapshot_boots_again_cold(self):
+        self.boot()
+        self.exits.add("laching-screens")
+        self.assertEqual(self.boot(), [("start", "-snapshot", "laching-screens", "-no-snapshot-save"), ("kill",),
+                                       *self.COLD])
+
+    def test_a_failed_save_leaves_no_marker_so_the_next_run_cold_boots_too(self):
+        self.boot()
+        self.saves_fail = True
+        self.boot(cold=True)
+        self.assertFalse((self.folder / "laching-screens.json").exists())
+        self.saves_fail = False
+        self.assertEqual(self.boot(), self.COLD)
+
+    def test_a_marker_that_isnt_json_is_no_marker(self):
+        (self.folder / "laching-screens.json").write_text("{", "utf8")
+        self.assertEqual(self.boot(), self.COLD)
+
+    def test_a_run_with_the_webcam_has_a_snapshot_of_its_own(self):
+        self.boot()
+        calls = self.boot(camera=True)
+        self.assertEqual(calls, [("start", "-no-snapshot-load", "-no-snapshot-save"), ("demo",),
+                                 ("emu", "avd", "snapshot", "save", "laching-screens-camera")])
+        self.assertEqual(self.boot(camera=True)[0], ("start", "-snapshot", "laching-screens-camera", "-no-snapshot-save"))
+        self.assertEqual(self.boot(), self.QUICK, "the plain one is still there")
+
+    def test_the_avd_folder_is_the_ini_files_path_else_name_avd_beside_it(self):
+        self.assertEqual(avd.avd_folder("Pixel_8"), self.folder)
+        self.assertEqual(avd.avd_folder("Other"), Path(avd.os.environ["ANDROID_AVD_HOME"]) / "Other.avd")
+        environ = {key: value for key, value in avd.os.environ.items() if not key.startswith("ANDROID_")}
+        with mock.patch.dict(avd.os.environ, environ, clear=True), \
+                mock.patch.object(avd.Path, "home", return_value=Path("/home/me")):
+            self.assertEqual(avd.avd_folder("Other"), Path("/home/me/.android/avd/Other.avd"))
+            with mock.patch.dict(avd.os.environ, {"ANDROID_USER_HOME": "/u"}):
+                self.assertEqual(avd.avd_folder("Other"), Path("/u/avd/Other.avd"))
 
 
 class LayoutReportTests(unittest.TestCase):
