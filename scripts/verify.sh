@@ -12,6 +12,8 @@
 #   dotnet/**, conformance/**           dotnet format whitespace, dotnet build + test
 #   tools/**, Tests/Fixtures/**         the tools' Python tests, fixture art current
 #   tools/landing/**                    @laching/landing: types, lint, format, tests (Node 24)
+#   web/**                              dotnet format (web's solution), its tests (the Jobs tests only with PostgreSQL:
+#                                       LACHING_WEB_TEST_POSTGRES, or localhost:5432), the Tailwind sample
 #   version sources, site/**, README.md  every version string agrees, LachingVersion at or below it (always)
 set -uo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -24,7 +26,7 @@ while [ $# -gt 0 ]; do
     --all) all=1 ;;
     --staged) mode=staged ;;
     --version) [ $# -ge 2 ] || { echo "--version needs X.Y.Z (see --help)" >&2; exit 2; }; version="$2"; shift ;;
-    -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1 (see --help)" >&2; exit 2 ;;
   esac
   shift
@@ -43,6 +45,16 @@ darwin=0; [ "$(uname)" = Darwin ] && darwin=1
 swift='^Package\.swift$|^Sources/|^Tests/|^\.swift-format$'
 dotnet='^dotnet/|^conformance/|^Tests/LachingCompanionTests/Resources/|^Tests/LachingShellTests/Resources/'
 tools='^tools/|^Tests/Fixtures/'
+web='^web/'
+tailwind='^web/(src/Laching\.Web\.Tailwind/|tests/Laching\.Web\.Tailwind\.Sample/|scripts/tailwind-sample\.sh$)'
+
+# True when the Jobs tests' PostgreSQL answers (LACHING_WEB_TEST_POSTGRES's host and port, else localhost:5432).
+web_postgres() {
+  local server="${LACHING_WEB_TEST_POSTGRES:-}" host port
+  host="$(printf '%s' "$server" | sed -n 's/.*Host=\([^;]*\).*/\1/p')"
+  port="$(printf '%s' "$server" | sed -n 's/.*Port=\([0-9]*\).*/\1/p')"
+  (exec 3<>"/dev/tcp/${host:-localhost}/${port:-5432}") 2>/dev/null
+}
 
 vectors_current() {
   scripts/conformance.sh || return 1
@@ -63,7 +75,7 @@ landing_check() {
 
 # With an argument, the agreed version must also be that one (release.yml checks the release's against it).
 versions_agree() {
-  local expected="${1:-}" found distinct nuget
+  local expected="${1:-}" found distinct nuget web
   found="$( {
     sed -n 's/.*public static let version = "\([^"]*\)".*/\1/p' Sources/LachingCore/Laching.swift
     sed -n 's/^lachingVersion=\(.*\)$/\1/p' kotlin/gradle.properties
@@ -92,6 +104,11 @@ versions_agree() {
   if [ -z "$nuget" ] || [ "$(printf '%s\n' "$nuget" "$distinct" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)" != "$distinct" ]; then
     echo "dotnet/Directory.Build.props' LachingVersion (${nuget:-none}) must be at or below $distinct"; return 1
   fi
+  # LachingWebVersion: the web packages' version, the same way.
+  web="$(sed -n 's/.*<LachingWebVersion[^>]*>\([^<]*\)<.*/\1/p' web/Directory.Build.props)"
+  if [ -z "$web" ] || [ "$(printf '%s\n' "$web" "$distinct" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)" != "$distinct" ]; then
+    echo "web/Directory.Build.props' LachingWebVersion (${web:-none}) must be at or below $distinct"; return 1
+  fi
 }
 
 if [ -n "$version" ]; then
@@ -108,6 +125,10 @@ fi
 if touched "$dotnet"; then
   if has dotnet; then check "dotnet format whitespace" dotnet format whitespace dotnet --folder --verify-no-changes
   else skip "dotnet format: needs the .NET SDK"; fi
+fi
+if touched "$web"; then
+  if has dotnet; then check "dotnet format whitespace (web)" dotnet format whitespace web --folder --verify-no-changes
+  else skip "dotnet format (web): needs the .NET SDK"; fi
 fi
 if touched "$tools"; then
   if has python3; then
@@ -133,6 +154,20 @@ if [ "$fast" = 0 ]; then
       check "dotnet build + test (Companion.Shell)" dotnet test dotnet/Laching.Companion.Shell.Tests/Laching.Companion.Shell.Tests.csproj -v q --nologo
       check "dotnet build + test (Testing)" dotnet test dotnet/Laching.Testing.Tests/Laching.Testing.Tests.csproj -v q --nologo
     else skip "dotnet test: needs the .NET SDK"; fi
+  fi
+  if touched "$web"; then
+    if has dotnet; then
+      check "dotnet format (web)" dotnet format web/Laching.Web.sln --verify-no-changes
+      for tests in web/tests/*.Tests; do
+        name="${tests##*/}"
+        if [ "$name" = Laching.Web.Jobs.Tests ] && ! web_postgres; then
+          skip "$name: needs PostgreSQL (LACHING_WEB_TEST_POSTGRES, or docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16)"
+          continue
+        fi
+        check "dotnet build + test ($name)" dotnet test "$tests/$name.csproj" -v q --nologo
+      done
+      if touched "$tailwind"; then check "Tailwind sample" web/scripts/tailwind-sample.sh; fi
+    else skip "dotnet test (web): needs the .NET SDK"; fi
   fi
 fi
 summary

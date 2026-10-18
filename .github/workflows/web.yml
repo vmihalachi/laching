@@ -1,0 +1,97 @@
+name: Web
+
+# The web packages (web/, Laching.Web.*): formatting, build and tests, the Jobs tests against a PostgreSQL service; the
+# Tailwind sample built against the packed Laching.Web.Tailwind on Linux, Windows and macOS (each downloads its own CLI);
+# and every Monday a check of the bundled Cloudflare IPv4 ranges, which catches a change before an app's deployment does.
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - "web/**"
+      - ".github/workflows/web.yml"
+  pull_request:
+    paths:
+      - "web/**"
+      - ".github/workflows/web.yml"
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  test:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      LACHING_WEB_TEST_POSTGRES: Host=localhost;Port=5432;Username=postgres;Password=postgres
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: web/global.json
+
+      - name: Check formatting
+        run: dotnet format Laching.Web.sln --verify-no-changes
+
+      - name: Build
+        run: dotnet build Laching.Web.sln -c Release
+
+      - name: Test
+        run: dotnet test Laching.Web.sln -c Release --no-build
+
+  tailwind:
+    if: github.event_name != 'schedule'
+    name: Tailwind sample on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: web/global.json
+
+      - name: Build the sample with the packed package
+        shell: bash
+        run: web/scripts/tailwind-sample.sh
+
+  cloudflare-ranges:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compare the bundled list with cloudflare.com/ips-v4
+        run: |
+          bundled=web/src/Laching.Web.Aspire/cloudflare-ips-v4.txt
+          curl --fail --silent --show-error https://www.cloudflare.com/ips-v4 --output "$RUNNER_TEMP/ips-v4.txt"
+          if ! diff <(tr -d '\r' < "$RUNNER_TEMP/ips-v4.txt" | sed '/^$/d' | sort) <(sed '/^$/d' "$bundled" | sort); then
+            echo "::error::Cloudflare's IPv4 ranges changed. Update $bundled and release."
+            exit 1
+          fi

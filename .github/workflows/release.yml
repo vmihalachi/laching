@@ -6,11 +6,11 @@ name: Release
 # when their code changed since their last one. The plan is scripts/release.sh's, the same by hand: `plan` numbers the
 # release from the pull requests merged since the last tag (a minor while 0.x, a major from 1.0, when one is labelled
 # `breaking`, else a patch; the bump input overrides it, and nothing committed since the tag releases nothing), `nuget`
-# whether the packages changed since LachingVersion (dotnet/Directory.Build.props), `landing` whether tools/landing
-# changed since npm's version.
+# whether the packages changed since LachingVersion (dotnet/Directory.Build.props), `web` whether the web packages
+# changed since LachingWebVersion (web/Directory.Build.props), `landing` whether tools/landing changed since npm's version.
 #
 # Nothing remote is written until everything that ships has been tested and packed: the plan job bumps in its runner
-# and checks the version strings (scripts/verify.sh --version); core, windows and landing test and pack that same bumped
+# and checks the version strings (scripts/verify.sh --version); core, windows, web and landing test and pack that same bumped
 # tree; only then does the tag job push the "X.Y.Z: release" commit and its vX.Y.Z tag, in one atomic push onto the
 # master that was planned (when master moved meanwhile it pushes nothing: dispatch again). After the push, npm publishes
 # @laching/landing and publish pushes the packages to NuGet.org and makes the GitHub release; both are re-runnable on
@@ -28,7 +28,7 @@ on:
         options: [auto, patch, minor, major]
         default: auto
       dry_run:
-        description: "Only print the plan (the version and why, whether NuGet and the landing ship) and stop"
+        description: "Only print the plan (the version and why, whether NuGet, the web packages and the landing ship) and stop"
         type: boolean
         default: false
 
@@ -58,6 +58,7 @@ jobs:
       base: ${{ steps.plan.outputs.base }}
       tree: ${{ steps.plan.outputs.tree }}
       nuget: ${{ steps.plan.outputs.nuget }}
+      web: ${{ steps.plan.outputs.web }}
       landing: ${{ steps.plan.outputs.landing }}
     steps:
       - uses: actions/checkout@v7
@@ -90,9 +91,11 @@ jobs:
           [ "$action" = release ] || { echo "scripts/release.sh plan said '$plan'"; exit 1; }
           previous=$(sed -n 's/.*public static let version = "\([^"]*\)".*/\1/p' Sources/LachingCore/Laching.swift)
           nuget=$(scripts/release.sh nuget "$version")
+          web=$(scripts/release.sh web "$version")
           landing=$(scripts/release.sh landing)
           say "Plan: $plan"
           say "NuGet: $nuget"
+          say "Web packages: $web"
           say "@laching/landing: $landing"
           # Tags never move: a v$version already on origin stops the release here.
           if [ -n "$(git ls-remote --tags origin "refs/tags/v$version")" ]; then
@@ -105,6 +108,8 @@ jobs:
           scripts/verify.sh --version "$version"
           [ "$(scripts/release.sh nuget "$version" | cut -d' ' -f1)" = "${nuget%% *}" ] ||
             { echo "after the bump, scripts/release.sh nuget $version answers otherwise"; exit 1; }
+          [ "$(scripts/release.sh web "$version" | cut -d' ' -f1)" = "${web%% *}" ] ||
+            { echo "after the bump, scripts/release.sh web $version answers otherwise"; exit 1; }
           git add -A
           if [ "$DRY_RUN" = true ]; then
             say "Dry run: nothing was built, committed, tagged or published."
@@ -117,6 +122,7 @@ jobs:
           out base "$(git rev-parse HEAD)"
           out tree "$(git write-tree)"
           out nuget "$([ "${nuget%% *}" = ship ] && echo true || echo false)"
+          out web "$([ "${web%% *}" = ship ] && echo true || echo false)"
           out landing "$([ "${landing%% *}" = yes ] && echo true || echo false)"
 
   # The packages that build anywhere (Laching.Core, Laching.Companion, Laching.Companion.Shell, Laching.Testing): their
@@ -207,6 +213,55 @@ jobs:
           name: nupkg-windows
           path: dotnet/artifacts/*.nupkg
 
+  # The web packages (web/src, Laching.Web.*): their tests, the Jobs ones against a PostgreSQL service, and packages, at
+  # the release's version. Skipped, with their part of the NuGet push, when the web packages don't ship.
+  web:
+    needs: plan
+    if: needs.plan.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      TREE: ${{ needs.plan.outputs.tree }}
+      LACHING_WEB_TEST_POSTGRES: Host=localhost;Port=5432;Username=postgres;Password=postgres
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # the tags, for the bump (release.sh web diffs since v<LachingWebVersion>)
+          ref: ${{ needs.plan.outputs.base }}
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: web/global.json
+
+      - name: Bump, as the release commit will be
+        run: |
+          scripts/release.sh bump "$VERSION"
+          git add -A
+          [ "$(git write-tree)" = "$TREE" ] || { echo "the bump doesn't give the planned tree"; exit 1; }
+
+      - name: Test and pack
+        run: |
+          dotnet test web/Laching.Web.sln -c Release
+          for project in $(scripts/release.sh web-projects); do
+            dotnet pack "web/src/$project/$project.csproj" -c Release -o web/artifacts
+            [ -f "web/artifacts/$project.$VERSION.nupkg" ] || { ls web/artifacts; echo "$project isn't $VERSION"; exit 1; }
+          done
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nupkg-web
+          path: web/artifacts/*.nupkg
+
   # @laching/landing (tools/landing) at the release's version: tested and packed here, published by `npm` after the
   # tag. Skipped, with `npm`, when tools/landing is unchanged since npm's version.
   landing:
@@ -243,11 +298,12 @@ jobs:
 
   # The first remote write, once everything that ships has been tested and packed: the release commit and its tag.
   tag:
-    needs: [plan, core, windows, landing]
+    needs: [plan, core, windows, web, landing]
     if: >-
       !cancelled() && needs.plan.outputs.release == 'true' &&
       (needs.core.result == 'success' || needs.core.result == 'skipped') &&
       (needs.windows.result == 'success' || needs.windows.result == 'skipped') &&
+      (needs.web.result == 'success' || needs.web.result == 'skipped') &&
       (needs.landing.result == 'success' || needs.landing.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
@@ -338,6 +394,7 @@ jobs:
       PREVIOUS: ${{ needs.plan.outputs.previous }}
       REF: ${{ needs.tag.outputs.ref }}
       NUGET: ${{ needs.plan.outputs.nuget }}
+      WEB: ${{ needs.plan.outputs.web }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -345,12 +402,12 @@ jobs:
           persist-credentials: false
 
       - uses: actions/setup-dotnet@v6
-        if: needs.plan.outputs.nuget == 'true'
+        if: needs.plan.outputs.nuget == 'true' || needs.plan.outputs.web == 'true'
         with:
           dotnet-version: "10.0.x"
 
       - uses: actions/download-artifact@v7
-        if: needs.plan.outputs.nuget == 'true'
+        if: needs.plan.outputs.nuget == 'true' || needs.plan.outputs.web == 'true'
         with:
           pattern: nupkg-*
           path: dotnet/artifacts
@@ -360,7 +417,7 @@ jobs:
       # Without the NUGET_USER variable the packages still land on the GitHub release below; set it (and the
       # nuget.org policy) and re-run this job to publish them.
       - name: Log in to NuGet.org (Trusted Publishing)
-        if: vars.NUGET_USER != '' && needs.plan.outputs.nuget == 'true'
+        if: vars.NUGET_USER != '' && (needs.plan.outputs.nuget == 'true' || needs.plan.outputs.web == 'true')
         id: nuget-login
         uses: NuGet/login@v1
         with:
@@ -368,7 +425,7 @@ jobs:
 
       - name: Push to NuGet.org
         id: push
-        if: needs.plan.outputs.nuget == 'true'
+        if: needs.plan.outputs.nuget == 'true' || needs.plan.outputs.web == 'true'
         env:
           NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
         run: |
@@ -403,13 +460,19 @@ jobs:
             echo
             echo "## Packages"
             echo
-            if [ "$PUSHED" = true ]; then
-              echo "- NuGet: the six \`Laching.*\` packages at $LACHING_VERSION"
-            elif [ "$NUGET" = true ]; then
-              echo "- NuGet: the six \`Laching.*\` packages at $LACHING_VERSION are attached here, not on NuGet.org yet"
+            where="on NuGet.org"
+            [ "$PUSHED" = true ] || where="attached here, not on NuGet.org yet"
+            if [ "$NUGET" = true ]; then
+              echo "- NuGet: the six \`Laching.*\` packages at $LACHING_VERSION, $where"
             else
               at=$(sed -n 's/.*<LachingVersion[^>]*>\([^<]*\)<.*/\1/p' dotnet/Directory.Build.props)
               echo "- NuGet: unchanged, still $at"
+            fi
+            if [ "$WEB" = true ]; then
+              echo "- NuGet: the six \`Laching.Web.*\` packages at $LACHING_VERSION, $where"
+            else
+              at=$(sed -n 's/.*<LachingWebVersion[^>]*>\([^<]*\)<.*/\1/p' web/Directory.Build.props)
+              echo "- NuGet, web: unchanged, still $at"
             fi
             if [ "$NPM" = success ]; then
               echo "- \`@laching/landing\` $LACHING_VERSION: published to npm"
