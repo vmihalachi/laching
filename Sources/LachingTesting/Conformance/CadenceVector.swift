@@ -101,6 +101,7 @@ public enum CadenceVector {
             hushInFullScreen: settings.hushInFullScreen)
     }
 
+    @MainActor
     public static func vector(_ c: Case) throws -> Vector {
         let calendar = try ConformanceSupport.calendar(c.timeZone)
         let start = ConformanceSupport.local(calendar, c.start.0, c.start.1, c.start.2, c.start.3, c.start.4)
@@ -111,6 +112,7 @@ public enum CadenceVector {
             fireMinutes: fires(config: config, start: start, calendar: calendar, seed: c.seed, minutes: c.minutes))
     }
 
+    @MainActor
     static func fires(config: SchedulerConfig, start: Date, calendar: Calendar, seed: UInt64, minutes: Int) -> [Int] {
         let clock = MockClock(start)
         let scheduler = ReminderScheduler(
@@ -124,10 +126,12 @@ public enum CadenceVector {
         return fires
     }
 
+    @MainActor
     public static func files(cases: [Case]) throws -> [String: Data] {
         try ConformanceSupport.files(in: directory, cases, name: \.name) { try vector($0) }
     }
 
+    @MainActor
     public static func verify(_ data: Data, file: String) throws -> [String] {
         let vector = try ConformanceSupport.decode(Vector.self, from: data)
         var problems: [String] = []

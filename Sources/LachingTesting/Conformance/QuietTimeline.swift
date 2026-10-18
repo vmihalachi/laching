@@ -37,6 +37,7 @@ public enum QuietTimeline {
             shushedUntil = nil
         }
 
+        @MainActor
         public func apply(to settings: CompanionSettings) throws {
             settings.channels = Channels(names: channels)
             guard let frequency = Frequency(rawValue: frequency) else {
@@ -139,6 +140,7 @@ public enum QuietTimeline {
     // MARK: Run
 
     /// Runs the timeline over `bank` and `defaults`, returning the steps with their outputs filled in.
+    @MainActor
     public static func run(
         timeZone: String, start: Date, seed: UInt64, language: String, settings settingsData: Settings, steps inputs: [Input],
         bank: PhraseBank, defaults: CompanionDefaults
@@ -208,6 +210,7 @@ public enum QuietTimeline {
         return steps
     }
 
+    @MainActor
     public static func vector(_ c: Case, bank: PhraseBank, defaults: CompanionDefaults) throws -> Vector {
         let calendar = try ConformanceSupport.calendar(c.timeZone)
         let start = ConformanceSupport.local(calendar, c.start.0, c.start.1, c.start.2, c.start.3, c.start.4)
@@ -219,10 +222,12 @@ public enum QuietTimeline {
             seed: c.seed, language: c.language == "en" ? nil : c.language, settings: c.settings, steps: steps)
     }
 
+    @MainActor
     public static func files(cases: [Case], bank: PhraseBank, defaults: CompanionDefaults) throws -> [String: Data] {
         try ConformanceSupport.files(in: directory, cases, name: \.name) { try vector($0, bank: bank, defaults: defaults) }
     }
 
+    @MainActor
     public static func verify(_ data: Data, file: String, bank: PhraseBank, defaults: CompanionDefaults) throws -> [String] {
         let vector = try ConformanceSupport.decode(Vector.self, from: data)
         let inputs = vector.steps.map {

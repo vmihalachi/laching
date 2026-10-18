@@ -3,6 +3,7 @@ import LachingCore
 import LachingTesting
 import XCTest
 
+@MainActor
 final class CompanionCoordinatorTests: XCTestCase {
     private let calendar = ConformanceSupport.utc
     private var clock: MockClock!

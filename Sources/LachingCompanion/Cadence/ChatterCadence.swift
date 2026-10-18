@@ -29,6 +29,7 @@ public enum ChatterCadence {
             intervalJitter: frequency.jitter)
     }
 
+    @MainActor
     public static func config(for settings: CompanionSettings) -> SchedulerConfig {
         config(
             frequency: settings.frequency, activeStartMinute: settings.activeStartMinute,

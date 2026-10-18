@@ -2,6 +2,7 @@ import LachingCore
 import LachingTesting
 import XCTest
 
+@MainActor
 final class ReminderSchedulerTests: XCTestCase {
     private let calendar = ConformanceSupport.utc
 

@@ -5,6 +5,7 @@ import XCTest
 /// Keeps `conformance/companion/` in step with the Swift reference, over the fixtures. The vectors are generated here
 /// and replayed by `dotnet/Laching.Companion.Tests`; change one only by regenerating it (`scripts/conformance.sh`,
 /// which runs this class's `testWriteVectors` too), never by hand.
+@MainActor
 final class ConformanceTests: XCTestCase {
     /// Set to 1 to regenerate the vectors in place (SwiftPM tests aren't sandboxed).
     static let writeFlag = "LACHING_WRITE_CONFORMANCE"

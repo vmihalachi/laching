@@ -3,6 +3,7 @@ import LachingCore
 import LachingTesting
 import XCTest
 
+@MainActor
 final class ChatterCadenceTests: XCTestCase {
     func testPresets() {
         let minutes = Frequency.allCases.map { [Int($0.interval / 60), Int($0.jitter / 60)] }

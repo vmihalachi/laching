@@ -1,7 +1,9 @@
 import Foundation
 
 /// A folder of generated vectors and the code that writes and replays them. Each check returns its problems (empty
-/// when all is well) for the test to assert on, so this library never links XCTest:
+/// when all is well) for the test to assert on, so this library never links XCTest. The generator and the replayers
+/// run on the main actor, where the scheduler, the coordinator and the settings live, so the checks do too: mark the
+/// test class `@MainActor`.
 ///
 /// ```swift
 /// let suite = ConformanceSuite(root: url, generatedFolders: ["picker"], generate: { try PickerVector.files(...) },
@@ -15,9 +17,9 @@ public struct ConformanceSuite: Sendable {
     /// Replays the committed files at `path`: one file, or every `.json` file in a folder.
     public struct Replayer: Sendable {
         public let path: String
-        public let verify: @Sendable (_ data: Data, _ file: String) throws -> [String]
+        public let verify: @MainActor @Sendable (_ data: Data, _ file: String) throws -> [String]
 
-        public init(path: String, verify: @escaping @Sendable (_ data: Data, _ file: String) throws -> [String]) {
+        public init(path: String, verify: @escaping @MainActor @Sendable (_ data: Data, _ file: String) throws -> [String]) {
             self.path = path
             self.verify = verify
         }
@@ -27,13 +29,13 @@ public struct ConformanceSuite: Sendable {
     public let root: URL
     /// Folders the generator owns: a committed file nothing generates is stale, and `writeIfAsked` empties them first.
     public let generatedFolders: [String]
-    public let generate: @Sendable () throws -> [String: Data]
+    public let generate: @MainActor @Sendable () throws -> [String: Data]
     public let replayers: [Replayer]
     /// What a stale-file message tells the reader to run.
     public let regenerateHint: String
 
     public init(
-        root: URL, generatedFolders: [String], generate: @escaping @Sendable () throws -> [String: Data], replayers: [Replayer],
+        root: URL, generatedFolders: [String], generate: @escaping @MainActor @Sendable () throws -> [String: Data], replayers: [Replayer],
         regenerateHint: String = "Regenerate the vectors and commit the result."
     ) {
         self.root = root
@@ -45,6 +47,7 @@ public struct ConformanceSuite: Sendable {
 
     /// Every generated file must be committed with the same bytes, and every committed file in a generated folder must
     /// still be generated.
+    @MainActor
     public func checkUpToDate() throws -> [String] {
         let generated = try generate()
         var problems: [String] = []
@@ -64,6 +67,7 @@ public struct ConformanceSuite: Sendable {
     }
 
     /// Replays the committed vectors the way a port does: read the input, run the code, compare.
+    @MainActor
     public func replayCommitted() throws -> [String] {
         var problems: [String] = []
         for replayer in replayers {
@@ -84,6 +88,7 @@ public struct ConformanceSuite: Sendable {
     }
 
     /// Generating twice gives the same bytes.
+    @MainActor
     public func checkDeterministic() throws -> [String] {
         let first = try generate()
         let second = try generate()
@@ -93,6 +98,7 @@ public struct ConformanceSuite: Sendable {
 
     /// When the environment sets `flag` to 1, empties the generated folders and writes every generated file; returns
     /// whether it wrote (false means "skip").
+    @MainActor
     public func writeIfAsked(flag: String) throws -> Bool {
         guard ProcessInfo.processInfo.environment[flag] == "1" else { return false }
         for folder in generatedFolders {

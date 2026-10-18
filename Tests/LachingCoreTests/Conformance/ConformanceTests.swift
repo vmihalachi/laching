@@ -3,6 +3,7 @@ import XCTest
 
 /// Keeps `conformance/scheduler` in step with the Swift reference. The vectors are generated here and replayed by
 /// `dotnet/Laching.Core.Tests`; change one only by regenerating it (`scripts/conformance.sh`), never by hand.
+@MainActor
 final class ConformanceTests: XCTestCase {
     /// Set to 1 to regenerate the vectors in place (SwiftPM tests aren't sandboxed).
     static let writeFlag = "LACHING_WRITE_CONFORMANCE"

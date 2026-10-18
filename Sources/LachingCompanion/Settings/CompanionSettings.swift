@@ -4,8 +4,8 @@ import Observation
 
 /// Every generic companion preference, observable, written through `store` under `SettingsKeys` as soon as it
 /// changes. First-launch values come from `defaults`; a missing or unreadable value falls back to the default.
-/// Reading writes nothing. Never touches the network; where values live is the store's business. Not thread-safe:
-/// use it from one actor (the main one, in an app).
+/// Reading writes nothing. Never touches the network; where values live is the store's business. Isolated to the main
+/// actor, and so is every subclass: read and write it there.
 ///
 /// An app subclasses it to add its own preferences, under keys of its own, with the same write-through pattern:
 ///
@@ -30,6 +30,7 @@ import Observation
 ///
 /// Mark the subclass `@Observable` too, so its own properties notify (the base's always do), and pass it wherever a
 /// `CompanionSettings` is wanted (`CompanionCoordinator`, `ChatterCadence.config(for:)`).
+@MainActor
 @Observable
 open class CompanionSettings {
     public let store: any SettingsStore

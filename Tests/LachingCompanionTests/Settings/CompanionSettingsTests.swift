@@ -3,6 +3,7 @@ import LachingCore
 import LachingTesting
 import XCTest
 
+@MainActor
 final class CompanionSettingsTests: XCTestCase {
     func testDefaultsOnAFreshStore() {
         let store = InMemorySettingsStore()

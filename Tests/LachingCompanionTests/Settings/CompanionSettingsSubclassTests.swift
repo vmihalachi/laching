@@ -28,6 +28,7 @@ private final class Count: @unchecked Sendable {
     var value = 0
 }
 
+@MainActor
 final class CompanionSettingsSubclassTests: XCTestCase {
     func testAnAppsOwnKeyWritesThroughAndResets() {
         let store = InMemorySettingsStore()

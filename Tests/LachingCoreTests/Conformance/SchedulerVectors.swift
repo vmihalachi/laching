@@ -147,6 +147,7 @@ enum SchedulerVectors {
 
     /// Runs the vector's inputs through `ReminderScheduler` and returns it with every
     /// expectation filled in from the Swift reference.
+    @MainActor
     static func evaluate(_ vector: Vector) throws -> Vector {
         let calendar = try ConformanceSupport.calendar(vector.timeZone)
         let tz = calendar.timeZone
@@ -694,6 +695,7 @@ enum SchedulerVectors {
         },
     ]
 
+    @MainActor
     static func vector(for c: Case) throws -> Vector {
         var script = Script(calendar: try ConformanceSupport.calendar(c.timeZone))
         c.build(&script)
@@ -703,6 +705,7 @@ enum SchedulerVectors {
         return try evaluate(input)
     }
 
+    @MainActor
     static func files() throws -> [String: Data] {
         var out: [String: Data] = [:]
         for c in cases { out["\(directory)/\(c.name).json"] = try ConformanceSupport.encode(try vector(for: c)) }
@@ -710,6 +713,7 @@ enum SchedulerVectors {
     }
 
     /// Replays a committed vector and returns the differences from the reference.
+    @MainActor
     static func verify(_ data: Data, file: String) throws -> [String] {
         let committed = try ConformanceSupport.decode(Vector.self, from: data)
         let actual = try evaluate(committed)

@@ -3,15 +3,16 @@ import LachingTesting
 import XCTest
 
 /// `ConformanceSuite` and `ConformanceRoot` over a scratch folder.
+@MainActor
 final class ConformanceSuiteTests: XCTestCase {
     private var root: URL!
 
-    override func setUpWithError() throws {
+    override func setUp() async throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("suite-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root.appendingPathComponent("cases"), withIntermediateDirectories: true)
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() async throws {
         try? FileManager.default.removeItem(at: root)
     }
 
