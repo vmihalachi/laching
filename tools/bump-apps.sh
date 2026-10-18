@@ -6,12 +6,14 @@
 #
 #   laching/tools/bump-apps.sh 0.9.1                     # ../*/companion.json, next to this checkout
 #   laching/tools/bump-apps.sh 0.9.1 ../app-a ../app-b
+#   laching/tools/bump-apps.sh --report [../app-a ...]  # each app's pin against the releases, and conform (companion.py apps)
 set -uo pipefail
 
 TOOLS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 case "${1:-}" in
-  -h|--help) sed -n '2,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
-  "") sed -n '2,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+  -h|--help) sed -n '2,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  "") sed -n '2,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+  --report) shift; exec python3 "$TOOLS/companion.py" apps "$@" ;;
 esac
 version="$1"
 shift
@@ -58,4 +60,6 @@ done
 echo
 echo "Laching $version (nothing committed):"
 printf '  %s\n' "${summary[@]}"
+echo
+python3 "$TOOLS/companion.py" apps "${apps[@]}"
 exit "$failed"

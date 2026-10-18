@@ -4,7 +4,8 @@
 Usage (from the app's root): python3 laching/tools/store/import.py [--out DIR] [lang ...]
 Then Partner Center → the submission → Store listings → Import listings → Import folder, and pick the folder this
 prints. One import fills every language: text, screenshots, captions and the three art slots. companion.json's
-`store.microsoft` names the folders (`screenshots`/<lang>/*.png, `art`/), the number of screenshots and the publisher.
+`store.microsoft` names the folders (`screenshots`/<lang>/*.png, `art`/), the screenshots (`shots`: one image and one
+caption per language each) and the publisher.
 Render each language's screenshots first: a language without its own is an error, since English images next to a
 translated description look odd.
 
@@ -45,7 +46,7 @@ def main():
     folder = listing.dir
     screenshots_dir = folder / microsoft.get("screenshots", "microsoft/screenshots")
     art_dir = folder / microsoft.get("art", "microsoft/art")
-    count = microsoft.get("screenshotCount", len(microsoft.get("shots", [])) or 8)
+    count = len(microsoft["shots"])
     name = listing.config.require("name")
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--out", default=str(listing.config.root / f"build/store-import/microsoft/{name}-listings"))

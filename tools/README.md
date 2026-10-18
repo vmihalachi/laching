@@ -7,8 +7,8 @@ or `$COMPANION_ROOT`); the schema is [`companion.schema.json`](companion.schema.
 
 | Tool | What |
 |---|---|
-| `companion.py` | Loads and validates `companion.json`; `get`, `path`, `root`, `validate`, `env` (paths and path patterns for shell), `pins` (the Laching version everywhere it's pinned), `bump` (every pin to a release), `link`/`unlink` (build against a Laching checkout): below, *Moving to a release, or trying one first*. |
-| `bump-apps.sh` | `companion.py bump` in every app checked out next to this Laching checkout (or the ones named), then each one's `verify.sh --fast`; commits nothing. |
+| `companion.py` | Loads and validates `companion.json`; `get`, `path`, `root`, `validate`, `env` (paths and path patterns for shell), `pins` (the Laching version everywhere it's pinned), `bump` (every pin to a release), `link`/`unlink` (build against a Laching checkout): below, *Moving to a release, or trying one first*; `conform` and `apps` (`conform.py`): below, *Staying on Laching's tools*; `checks` (the app's own `verify.checks`, for `verify.sh`). |
+| `bump-apps.sh` | `companion.py bump` in every app checked out next to this Laching checkout (or the ones named), then each one's `verify.sh --fast`; commits nothing. `--report` prints `companion.py apps`: each app's pin against the releases, and whether it conforms. |
 | `l10n.py` | String Catalog gaps, work files for translators, apply with validation, `.resw`/`.po` exports; language-scoped phrases. |
 | `phrases.py` | Keeps the catalog's `phrase.<id>` (and `.n` for jokes) keys in step with `phrases.json`; `check` also reports a phrase whose weight is under 1. |
 | `voice.py`, `voice-review.html` | Records, reviews and publishes the character's voices with ElevenLabs; a clip per joke part. |
@@ -24,17 +24,19 @@ or `$COMPANION_ROOT`); the schema is [`companion.schema.json`](companion.schema.
 | `conformance.sh` | Regenerates the app's vectors from its Swift core. |
 | `verify.sh`, `verify-lib.sh` | Runs the checks that apply to the changed paths, plus the pin check (`verify-lib.sh`: the check / skip harness it shares with Laching's own `scripts/verify.sh`). |
 | `setup-linux.sh` | Prepares a Linux container (cloud agents): submodules, .NET, landing dependencies, and for an app with an `android` section a JDK 17 and ktlint. |
-| `store/check.py`, `store/push.py`, `store/import.py` | The store listing (`store` in `companion.json`): each field against the stores' limits (with `store.apple.ios`, the iPhone and iPad version page's too; with `store.google`, Google Play's `google.*` fields: title 30, short description 80, full description 4000, each product's name 55 and description 200; no Google side in `push.py`); App Store Connect (text, in-app purchases, screenshots, previews, review notes, and a universal app's iOS page and iPhone and iPad screenshots; `--status` reads only); a Partner Center import folder. |
+| `store/check.py`, `store/push.py`, `store/import.py`, `store/push-microsoft.py` | The store listing (`store` in `companion.json`): each field against the stores' limits (with `store.apple.ios`, the iPhone and iPad version page's too; with `store.google`, Google Play's `google.*` fields: title 30, short description 80, full description 4000, each product's name 55 and description 200; no Google side in `push.py`); App Store Connect (text, in-app purchases, screenshots, previews, review notes, and a universal app's iOS page and iPhone and iPad screenshots; `--status` reads only); a Partner Center import folder; the Microsoft Store through the Partner Center submission API (`push-microsoft.py status|prepare|commit`: the bundle, the listing text, screenshots and art into a new submission from the last published one, dry run without `--apply`; `store.microsoft.storeId`; the credentials of one Entra application for every app of the account, set up as `store/microsoft-api-setup.md` says). |
 | `landing/` | `@laching/landing`, an npm package (Node 24): a landing page's localized pages, legal pages, sitemap, `_headers` and social cards as Vite plugins. Published to npm by `release.yml`; the app's landing repository depends on it by version. |
 | `windows/companion.targets` | What every companion's WinUI project imports, last: below, *Windows apps*. |
 | `windows/screenshots.ps1` | The WinUI app's windows in light and dark (`ScreenshotCapture`), in one language (`-Language`), from the Debug build or the Native AOT one (`-Configuration Release`); fails on the problems the run reports, or when the app stops before the end of it. `-Only` runs hidden (cloaked windows, shot as soon as they have drawn), so the PC stays usable, with `-Front` for active windows, and copies only the shots it names. `-Skin id` wears that skin, as `screenshots.sh --skin` does. `-Contrast` runs again in the machine's contrast theme and turns it off afterwards (one such run at a time on the PC, after any other screenshot run there ends; a PC already in one shoots only it). A Debug build that is packaged (`WindowsPackageType` MSIX, for an app that needs package identity) is registered from its build output as a development package (Developer Mode) and started in it, its settings passed as `LACHING_SCREENSHOT_…=value` arguments (`ScreenshotCapture.Setting`). |
 | `windows/check-layout.ps1` | `screenshots.ps1` in every language (or the ones named), side by side (a packaged app's one at a time) and hidden after one build, naming the languages whose text doesn't fit; each language's shots and `problems.txt` in `build/layout-check/<lang>` (or `-Out <folder>`). |
-| `windows/smoke-package.ps1` | Installs a built `.msix` the way a customer gets it and checks it starts (`-Keep` leaves it for the hand checks, `-SideBySide` next to a Store copy); `-CheckOnly` only checks the package is native. |
+| `windows/store-release.ps1` | The Microsoft Store release in one command (Windows PowerShell 5.1 or 7): per platform of `windows.release.platforms` (x64 and ARM64) the unsigned Native AOT package, checked native and installed fresh and started (`smoke-package.ps1`; 60 s for x64 emulated on ARM64; refuses without Developer Mode unless `-NoSmoke`), `-Screenshots` every window from a screenshot-mode package, then one `<windows.release.bundle>_<version>_x64_arm64.msixbundle` (makeappx); `-Store draft|submit` pushes it (`store/push-microsoft.py`), `-Tag`/`-TagOnly` tags `win-<version>`. The version is `Package.appxmanifest`'s, refused when its tag exists. The reusable workflows run it in CI. |
+| `windows/smoke-package.ps1` | Installs a built `.msix` the way a customer gets it and checks it starts (`-Keep` leaves it for the hand checks, `-SideBySide` next to a Store copy); `-Screenshots <folder> [-Language]` runs the screenshot run in the installed package instead (a Release publish with `-p:ScreenshotMode=true`); `-CheckOnly` only checks the package is native. |
 | `windows/check-winui.py` | WinUI code that runs in Debug but breaks the Native AOT build or the XAML compiler (each rule in its docstring). |
 | `windows/assets.py` | The MSIX logos and `AppIcon.ico` (and the Debug build's) from the app icon; `--check`. |
 | `windows/vm.sh` | On a Mac, the WinUI app built and checked in a Parallels Windows VM from the working tree as it is (uncommitted changes too): `build` (x64 and ARM64), `test`, `screenshots <folder>` (the PNGs back on the Mac), `check-layout [lang…]` (`check-layout.ps1`, the shots back in `<windows.dir>/build/layout-check`), `smoke`, `run -- <command>`, `status`. Without prlctl or the VM it says so in one line and exits 3. One run at a time on the VM, from any app or worktree: another waits, naming the run it waits for (its command and checkout); `status` names it and exits 4, so a caller can skip instead. |
 | `hooks/hook.py` | Agent guardrails: generated files, the stop-time checks (ktlint over the Kotlin files an agent edits), the Windows and Android parity reminders. |
-| `skills/` | `localization`, `add-phrase`, `add-setting`, `conformance`, `voice`, `windows-port`, `release-mac`, `review-invariants`. |
+| `skills/` | `localization`, `add-phrase`, `add-setting`, `conformance`, `voice`, `windows-port`, `release-mac`, `release-windows`, `review-invariants`. |
+| `../.github/workflows/windows-release.yml`, `windows-app.yml` | Reusable workflows (`workflow_call`) an app's own short workflows call at the release it pins: the Store release (both packages, the bundle as the artifact, the optional push, the tag) and the WinUI build check (the traps, the tests, both packages, every window). Below, *Windows apps*. |
 
 Tests: `python3 tools/tests/run.py` (over `tools/tests/fixture-app`, a minimal app; `tools.yml` runs them), and for
 the landing package `npx vp test run` in `tools/landing`.
@@ -111,14 +113,15 @@ An app without a phrase bank or a character (a reminder app, say) leaves `charac
 5. **Skills.** Symlink the generic ones next to the app's own:
 
    ```sh
-   for s in localization add-phrase add-setting conformance voice windows-port release-mac review-invariants; do
+   for s in localization add-phrase add-setting conformance voice windows-port release-mac release-windows review-invariants; do
      ln -s "../../laching/tools/skills/$s" ".agents/skills/$s"
    done
    ```
 
    They read the app's prose from its `DESIGN.md` (the character's voice, the glossary, the palette) and from
    `.agents/notes/<skill>.md` when present (voices chosen, the team ID, who reviews which language);
-   `review-invariants` adds the app's `.agents/review-appendix.md` to its checklist.
+   `review-invariants` adds the app's `.agents/review-appendix.md` to its checklist. A skill of Laching's is never
+   copied into the app: `companion.py conform` fails on a copy (below).
 
 6. **The app's own files** the tools read: `l10n.rulesFile` (transcreation rules for this app), the voice config and
    direction (`voice.config`, `voice.direction`), the sounds recipes (`sounds.recipes`), the store captions, the
@@ -200,6 +203,29 @@ python3 laching/tools/companion.py unlink   # before committing
   change comes out. The record of the link is in the repository's git folder (`.git/laching-link`, one per worktree).
 - The tools stay the submodule's: `link` switches the packages, not `laching/tools`.
 
+## Staying on Laching's tools
+
+`verify.sh` runs `companion.py conform` on every run, so an app's `verify.sh`, pre-commit hook and the agents' Stop hook
+fail when the app drifts from the tools (each rule: `conform.py`'s docstring):
+
+- **No copies.** A file named like one of the tools (by name without its extension: `smoke-package.ps1`,
+  `check-winui.py`, `push.py` and `import.py` under the store listing, `store-screenshots.*`, `verify.sh`,
+  `setup-linux.sh`, ..., and `store-packages.ps1`, which `store-release.ps1` replaced) is a thin wrapper: at most 12 lines
+  of code that name `laching/tools/`. One that is the app's own on purpose (a conformance script writing the app's own
+  vectors) goes in `conform.allow`, with why.
+- **The reusable workflows**, at the release the app pins: an app with `windows.app` calls both
+  `windows-release.yml` and `windows-app.yml`, and no workflow of its own publishes, smoke-tests or bundles Store
+  packages.
+- **Linked skills.** A skill in `.agents/skills` named like one of `tools/skills` is a link to
+  `../../laching/tools/skills/<name>`; the app's own words for it go in `.agents/notes/<name>.md`.
+- **`store.microsoft`** is the schema's shape: `shots` and `publisher`, and `storeId` for the submission API.
+
+The app's own checks, which a copied `verify.sh` used to hold, are `verify.checks` in `companion.json`: each a `name`, the
+`paths` that trigger it (an extended regular expression), the command to `run` (bash, from the root) and `slow` for one
+`--fast` skips. `companion.py apps` (or `bump-apps.sh --report`), in the Laching checkout, lists the apps next to it:
+the release each pins, how far behind the newest, and its conform problems; it exits 1 while they pin different
+releases.
+
 ## Windows apps
 
 A companion's WinUI 3 app (`windows.app`, on `Laching.Windows.Companion`) takes its build from the submodule, so every
@@ -250,6 +276,35 @@ app builds, packages and checks the same way. Its `.csproj` sets its own propert
   & "$PSScriptRoot/../../laching/tools/windows/screenshots.ps1" @args
   exit $LASTEXITCODE
   ```
+
+- **The Store release** is `store-release.ps1` on a PC, or the app's two short workflows in CI, each calling Laching's
+  reusable one at the release the app pins (the `@vX.Y.Z` must be `laching.tag`; `companion.py bump` doesn't move it,
+  `conform` says when it lags):
+
+  ```yaml
+  # .github/workflows/windows-release.yml: inputs hosted (boolean), tag (boolean), store (none, draft, submit)
+  permissions:
+    contents: write
+  jobs:
+    release:
+      uses: vmihalachi/laching/.github/workflows/windows-release.yml@vX.Y.Z
+      with:
+        hosted: ${{ inputs.hosted }}
+        tag: ${{ inputs.tag }}
+        store: ${{ inputs.store }}
+      secrets: inherit   # MS_STORE_TENANT_ID, MS_STORE_CLIENT_ID, MS_STORE_CLIENT_SECRET for a push
+  # .github/workflows/windows.yml
+  jobs:
+    app:
+      uses: vmihalachi/laching/.github/workflows/windows-app.yml@vX.Y.Z
+      with:
+        hosted: ${{ inputs.hosted }}
+        languages: en,de
+  ```
+
+  `tests/fixture-app/.github/workflows` has both in full. An app whose package needs another submodule (recorded voices)
+  passes `submodules: true`; the self-hosted runner's labels are `runner`. The skill is `release-windows`, the app's own
+  facts (the Store ID's history, past certification reports) in `.agents/notes/release-windows.md`.
 
 - **The traps** the kit and the lint know about: `App.xaml` sits next to the `.csproj` (elsewhere it isn't the
   application's XAML, and the app stops at the first custom type with a message-less `XamlParseException`); no element

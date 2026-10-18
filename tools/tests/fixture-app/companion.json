@@ -24,7 +24,8 @@
     "dir": "windows", "core": "Fixture.Core", "app": "Fixture.App", "sln": "Fixture.sln", "strings": "windows/Fixture.App/Strings",
     "appTests": "Fixture.App.Tests",
     "assets": { "source": "macos/Fixture/Resources/AppIcon.png", "devSource": "macos/Fixture/Resources/AppIcon-Dev.png", "out": "windows/Fixture.App/Assets" },
-    "screenshots": "screenshots/windows"
+    "screenshots": "screenshots/windows",
+    "release": { "platforms": ["x64", "ARM64"], "bundle": "Fixture" }
   },
   "languages": { "source": "en", "all": ["en", "it", "de"] },
   "l10n": {
@@ -81,7 +82,7 @@
       },
       "review": { "shots": "screenshots/macos", "size": [1440, 900], "background": "FFF8E7" }
     },
-    "microsoft": { "screenshotCount": 2, "publisher": "Fixture Studio" }
+    "microsoft": { "shots": ["panel-light", "settings-light"], "publisher": "Fixture Studio", "storeId": "9NFIXTURE001" }
   },
   "hooks": { "guardedExtra": ["^design/locked\\.txt$"], "macUI": "^macos/Fixture/Views/.*\\.swift$", "windowsUI": "^windows/Fixture\\.App/" }
 }

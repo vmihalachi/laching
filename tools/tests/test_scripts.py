@@ -388,7 +388,7 @@ elif command == "shell":
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(
             [line.split(None, 1)[1] for line in result.stdout.splitlines() if line.startswith("ok")],
-            ["Laching pins agree", "phrases.py check", "voice.py check"],
+            ["Laching pins agree", "Laching's tools, not copies (companion.py conform)", "phrases.py check", "voice.py check"],
         )
         strings = self.run_script("verify.sh", "--fast", "--", "macos/Fixture/Resources/Localizable.xcstrings")
         self.assertEqual(strings.returncode, 1, "the fixture's German has gaps")
@@ -396,7 +396,31 @@ elif command == "shell":
         self.assertIn("de: app 3", strings.stdout)
         quiet = self.run_script("verify.sh", "--", "notes.md")
         self.assertEqual(quiet.returncode, 0, quiet.stdout)
-        self.assertEqual(quiet.stdout.strip(), "ok    Laching pins agree")
+        self.assertEqual(quiet.stdout.strip().splitlines(),
+                         ["ok    Laching pins agree", "ok    Laching's tools, not copies (companion.py conform)"])
+
+    def test_verify_runs_the_apps_own_checks(self):
+        config = self.root / "companion.json"
+        data = json.loads(config.read_text("utf8"))
+        data["verify"] = {"checks": [
+            {"name": "notes are short", "paths": "^notes/", "run": "test $(wc -l < notes/a.md) -lt 3"},
+            {"name": "the slow one", "paths": "^notes/", "run": "echo ran > slow.txt", "slow": True},
+        ]}
+        config.write_text(json.dumps(data), "utf8")
+        (self.root / "notes").mkdir()
+        (self.root / "notes" / "a.md").write_text("one\n", "utf8")
+        fast = self.run_script("verify.sh", "--fast", "--", "notes/a.md")
+        self.assertEqual(fast.returncode, 0, fast.stdout + fast.stderr)
+        self.assertIn("ok    notes are short", fast.stdout)
+        self.assertNotIn("the slow one", fast.stdout)
+        other = self.run_script("verify.sh", "--fast", "--", "elsewhere.md")
+        self.assertNotIn("notes are short", other.stdout, "only when its paths change")
+        (self.root / "notes" / "a.md").write_text("1\n2\n3\n", "utf8")
+        slow = self.run_script("verify.sh", "--", "notes/a.md")
+        self.assertEqual(slow.returncode, 1)
+        self.assertIn("FAIL  notes are short", slow.stdout)
+        self.assertIn("ok    the slow one", slow.stdout)
+        self.assertEqual((self.root / "slow.txt").read_text().strip(), "ran", "run from the app's root")
 
     def test_verify_all_skips_what_the_app_lacks(self):
         for tool in ("xcrun", "xcodegen", "dotnet"):
@@ -487,7 +511,9 @@ case "$1" in status) echo "VM $2 exist running" ;; exec) [ "$3" = --current-user
         # What git exports to a pre-commit hook in a linked worktree: absolute paths into the app's repository.
         hook = {"GIT_DIR": str(self.root / ".git"), "GIT_INDEX_FILE": str(self.root / ".git" / "index")}
         result = self.run_script("verify.sh", "--fast", "--", "notes.md", env=hook)
-        self.assertEqual(result.stdout.strip(), "ok    Laching pins agree", result.stdout + result.stderr)
+        self.assertEqual(result.stdout.strip().splitlines(),
+                         ["ok    Laching pins agree", "ok    Laching's tools, not copies (companion.py conform)"],
+                         result.stdout + result.stderr)
 
     @unittest.skipUnless(sys.platform == "darwin", "verify.sh runs xcodegen on macOS only")
     def test_verify_names_a_group_named_after_the_checkout(self):
@@ -668,6 +694,26 @@ class MicrosoftStoreScreenshotTests(FixtureAppTestCase):
             # A shadow under the window.
             self.assertLess(sum(image.getpixel((x + window.width // 2, y + window.height + 20))), sum(backdrop))
 
+    def test_a_hard_shadow(self):
+        self.data["store"]["microsoft"]["shadow"] = {"offset": 16, "light": "#FF4D9D", "dark": "#D8709F"}
+        self.write_config()
+        result = self.run_tool()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        image = self.Image.open(self.out / "en" / "1-panel-light.png").convert("RGB")
+        window = self.Image.open(self.captures / "panel-light.png").convert("RGB")
+        # The window and its shadow centered together, the shadow a block of the theme's color 16 px right and down.
+        x, y = (3840 - window.width - 16) // 2, (2160 - window.height - 16) // 2
+        self.assertEqual(image.crop((x, y, x + window.width, y + window.height)).tobytes(), window.tobytes())
+        self.assertEqual(image.getpixel((x + window.width + 8, y + window.height + 8)), (0xFF, 0x4D, 0x9D))
+        self.assertEqual(image.getpixel((x + window.width + 20, y + window.height + 20)), (0x10, 0x20, 0x30), "hard: no blur")
+        dark = self.Image.open(self.out / "en" / "2-home-dark.png").convert("RGB")
+        self.assertEqual(dark.getpixel(((3840 + 601 + 16) // 2 - 4, (2160 + 451 + 16) // 2 - 4)), (0xD8, 0x70, 0x9F))
+        # The shadow counts against the canvas.
+        self.window(self.captures / "home-dark.png", (3830, 400))
+        large = self.run_tool()
+        self.assertEqual(large.returncode, 1)
+        self.assertIn("larger than the 3840×2160 canvas", large.stderr)
+
     def test_refuses_a_bad_capture_before_writing(self):
         first = self.run_tool()
         self.assertEqual(first.returncode, 0, first.stderr)
@@ -704,7 +750,7 @@ class MicrosoftStoreScreenshotTests(FixtureAppTestCase):
         moved = self.run_tool()
         self.assertEqual(moved.returncode, 0, moved.stderr)
         self.assertTrue((self.root / "store-listing" / "ms" / "shots" / "en" / "1-panel-light.png").exists())
-        # A language must be the app's, a folder is one language's, and the canvas needs its shots.
+        # A language must be the app's, a folder is one language's, and store.microsoft needs its shots.
         unknown = self.run_tool("--lang", "fr")
         self.assertEqual(unknown.returncode, 2)
         self.assertIn("fr isn't in languages.all (en, it, de)", unknown.stderr)
@@ -713,8 +759,8 @@ class MicrosoftStoreScreenshotTests(FixtureAppTestCase):
         del self.data["store"]["microsoft"]["shots"]
         self.write_config()
         unset = self.run_tool()
-        self.assertEqual(unset.returncode, 2)
-        self.assertIn("--canvas microsoft needs store.microsoft.shots", unset.stderr)
+        self.assertEqual(unset.returncode, 1)
+        self.assertIn("store.microsoft: missing shots", unset.stderr, "the schema wants them")
 
     def test_shots_are_checked_by_the_schema(self):
         self.assertEqual(companion.validate(self.data), [])
@@ -809,7 +855,7 @@ class SharedFilesTests(unittest.TestCase):
     def test_every_skill_has_frontmatter(self):
         skills = sorted(p.parent.name for p in (TOOLS / "skills").glob("*/SKILL.md"))
         self.assertEqual(skills, ["add-phrase", "add-setting", "conformance", "localization", "release-mac",
-                                  "review-invariants", "voice", "windows-port"])
+                                  "release-windows", "review-invariants", "voice", "windows-port"])
         for name in skills:
             text = (TOOLS / "skills" / name / "SKILL.md").read_text("utf8")
             header = text.split("---", 2)[1]
