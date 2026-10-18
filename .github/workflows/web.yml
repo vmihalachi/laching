@@ -30,6 +30,7 @@ env:
   DOTNET_NOLOGO: "1"
 
 jobs:
+  # No NuGet cache (measured in #150): restoring the 582 MB cache took 7 s and saved about 9 s of downloads.
   test:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
