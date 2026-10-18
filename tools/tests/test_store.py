@@ -179,7 +179,8 @@ class StoreTests(FixtureAppTestCase):
         problems = check.check(self.listing, self.listing.fields("de"), self.listing.fields("en"))
         self.assertIn("apple.subtitle: 34 > 30 characters", problems)
         self.assertIn("apple.keywords: no spaces around commas (they count toward the limit)", problems)
-        result = subprocess.run([sys.executable, str(TOOLS / "store" / "check.py"), "de"], capture_output=True, text=True,
+        result = subprocess.run([sys.executable, str(TOOLS / "store" / "check.py"), "de"],
+                                capture_output=True, encoding="utf8",
                                 env={**os.environ, "COMPANION_ROOT": str(self.root)})
         self.assertEqual(result.returncode, 1)
         self.assertIn("de: 2 problem(s)", result.stdout)
@@ -246,7 +247,8 @@ class StoreTests(FixtureAppTestCase):
         self.write_google_page(title="Fixture, the friend who lives at your desk")
         problems = check.check(self.listing, self.listing.fields("en"), self.listing.fields("en"))
         self.assertIn("google.title: 42 > 30 characters", problems)
-        result = subprocess.run([sys.executable, str(TOOLS / "store" / "check.py"), "en"], capture_output=True, text=True,
+        result = subprocess.run([sys.executable, str(TOOLS / "store" / "check.py"), "en"],
+                                capture_output=True, encoding="utf8",
                                 env={**os.environ, "COMPANION_ROOT": str(self.root)})
         self.assertIn("Play title 42/30, short 41/80", result.stdout)
 
@@ -368,7 +370,8 @@ class StoreTests(FixtureAppTestCase):
 
     def test_the_ios_parts_need_the_ios_config(self):
         result = subprocess.run([sys.executable, str(TOOLS / "store" / "push.py"), "--version", "1.0", "--only", "ios-text"],
-                                capture_output=True, text=True, env={**os.environ, "COMPANION_ROOT": str(self.root)})
+                                capture_output=True, encoding="utf8",
+                                env={**os.environ, "COMPANION_ROOT": str(self.root)})
         self.assertEqual(result.returncode, 2)
         self.assertIn("need store.apple.ios", result.stderr)
 
@@ -609,7 +612,8 @@ class StoreTests(FixtureAppTestCase):
             (art / name).write_bytes(PNG)
         out = self.root / "build" / "import"
         result = subprocess.run([sys.executable, str(TOOLS / "store" / "import.py"), "--out", str(out)],
-                                capture_output=True, text=True, env={**os.environ, "COMPANION_ROOT": str(self.root)})
+                                capture_output=True, encoding="utf8",
+                                env={**os.environ, "COMPANION_ROOT": str(self.root)})
         self.assertEqual(result.returncode, 0, result.stderr)
         with open(out / "listings.csv", encoding="utf-8-sig", newline="") as f:
             rows = list(csv.reader(f))
@@ -623,7 +627,8 @@ class StoreTests(FixtureAppTestCase):
 
     def test_import_refuses_a_language_without_its_screenshots(self):
         result = subprocess.run([sys.executable, str(TOOLS / "store" / "import.py"), "--out", str(self.root / "out")],
-                                capture_output=True, text=True, env={**os.environ, "COMPANION_ROOT": str(self.root)})
+                                capture_output=True, encoding="utf8",
+                                env={**os.environ, "COMPANION_ROOT": str(self.root)})
         self.assertEqual(result.returncode, 1)
         self.assertIn("en: 0 screenshots", result.stderr)
 
@@ -633,7 +638,8 @@ class StoreTests(FixtureAppTestCase):
         data["store"]["microsoft"] = {"publisher": "Fixture Studio", "shots": ["panel-light", "home-light", "panel-dark"]}
         path.write_text(json.dumps(data), "utf8")
         result = subprocess.run([sys.executable, str(TOOLS / "store" / "import.py"), "--out", str(self.root / "out")],
-                                capture_output=True, text=True, env={**os.environ, "COMPANION_ROOT": str(self.root)})
+                                capture_output=True, encoding="utf8",
+                                env={**os.environ, "COMPANION_ROOT": str(self.root)})
         self.assertEqual(result.returncode, 1)
         self.assertIn("en: 0 screenshots in", result.stderr)
         self.assertIn("want 3", result.stderr)

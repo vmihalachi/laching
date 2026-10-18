@@ -52,7 +52,8 @@ class CheckWinUITests(unittest.TestCase):
         self.temp.cleanup()
 
     def lint(self, *paths: Path) -> subprocess.CompletedProcess:
-        return subprocess.run([sys.executable, str(CHECK_WINUI), *map(str, paths)], capture_output=True, text=True)
+        return subprocess.run([sys.executable, str(CHECK_WINUI), *map(str, paths)],
+                              capture_output=True, encoding="utf8")
 
     def write(self, name: str, text: str) -> Path:
         path = self.root / name
@@ -119,7 +120,7 @@ class CheckWinUITests(unittest.TestCase):
             bad = app / "windows/Fixture.App/Views/Home.cs"
             bad.parent.mkdir(parents=True)
             bad.write_text("var s = (Style)Resources[\"x\"];\n", "utf8")
-            done = subprocess.run([sys.executable, str(CHECK_WINUI)], capture_output=True, text=True, cwd=app)
+            done = subprocess.run([sys.executable, str(CHECK_WINUI)], capture_output=True, encoding="utf8", cwd=app)
             self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
             self.assertIn("Home.cs:1", done.stdout)
 

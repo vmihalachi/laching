@@ -105,7 +105,7 @@ class ConformTests(FixtureAppTestCase):
                              ("voice", "../../elsewhere/voice")):
             self.write(f".agents/skills/{name}", target)
             blob = subprocess.run(["git", "-C", str(self.root), "hash-object", "-w", "--stdin"], input=target,
-                                  capture_output=True, text=True, check=True).stdout.strip()
+                                  capture_output=True, encoding="utf8", check=True).stdout.strip()
             git(self.root, "update-index", "--add", "--cacheinfo", f"120000,{blob},.agents/skills/{name}")
         git(self.root, "add", ".agents/skills/release-windows", ".agents/skills/add-exercise")
         found = sorted(p for p in self.problems() if p.startswith(".agents"))
@@ -122,7 +122,7 @@ class ConformTests(FixtureAppTestCase):
         self.assertIn("companion.json: store.microsoft: unknown key screenshotCount", found)
         # companion.py conform reports it with the rest, where every other command refuses the file.
         done = subprocess.run([sys.executable, str(TOOLS / "companion.py"), "conform"], cwd=self.root, capture_output=True,
-                              text=True)
+                              encoding="utf8")
         self.assertEqual(done.returncode, 1)
         self.assertIn("conform: companion.json: store.microsoft: missing shots", done.stdout)
 

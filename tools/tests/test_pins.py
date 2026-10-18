@@ -258,7 +258,8 @@ class BumpTests(PinsTestCase):
 
     def bump_apps(self, *args: str) -> subprocess.CompletedProcess:
         env = {key: value for key, value in os.environ.items() if key != "COMPANION_ROOT" and not key.startswith("GIT_")}
-        return subprocess.run(["bash", str(TOOLS / "bump-apps.sh"), *args], capture_output=True, text=True, env=env)
+        return subprocess.run(["bash", str(TOOLS / "bump-apps.sh"), *args],
+                              capture_output=True, encoding="utf8", env=env)
 
     def test_bump_apps_bumps_then_verifies_each_app(self):
         failing = self.bump_apps("0.7.0", str(self.root))
@@ -280,7 +281,7 @@ class BumpTests(PinsTestCase):
         worktree.mkdir()
         (worktree / "companion.json").write_text("{}", "utf8")
         (worktree / ".git").write_text("gitdir: elsewhere\n", "utf8")
-        result = subprocess.run(["bash", str(tools / "bump-apps.sh"), "0.7.0"], capture_output=True, text=True,
+        result = subprocess.run(["bash", str(tools / "bump-apps.sh"), "0.7.0"], capture_output=True, encoding="utf8",
                                 env={key: value for key, value in os.environ.items() if key != "COMPANION_ROOT"})
         self.assertIn("Skipping app-worktree: a git worktree", result.stdout)
         self.assertIn("bump failed    app", result.stdout)

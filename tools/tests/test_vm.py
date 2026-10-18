@@ -304,7 +304,7 @@ class UnavailableTests(FixtureAppTestCase):
 
     def run_vm(self, *args: str, path: str | None = None) -> subprocess.CompletedProcess:
         env = {**os.environ, "PATH": path or f"{self.bin}:{os.environ['PATH']}", "HOME": str(self.root)}
-        return subprocess.run([str(VM_SH), *args], cwd=self.root, env=env, capture_output=True, text=True)
+        return subprocess.run([str(VM_SH), *args], cwd=self.root, env=env, capture_output=True, encoding="utf8")
 
     def test_without_prlctl(self):
         python = Path(sys.executable).parent
@@ -341,7 +341,7 @@ class UnavailableTests(FixtureAppTestCase):
         self.prlctl('echo "VM $2 exist running"')
         done = self.run_vm("status")
         self.assertEqual((done.returncode, done.stdout.strip()), (0, "vm.sh: the VM 'Windows 11' is ready"))
-        done = subprocess.run([str(VM_SH), "status"], cwd=self.root, capture_output=True, text=True,
+        done = subprocess.run([str(VM_SH), "status"], cwd=self.root, capture_output=True, encoding="utf8",
                               env={**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}", "LACHING_VM": "Dev Box"})
         self.assertIn("'Dev Box' is ready", done.stdout)
 
@@ -542,7 +542,7 @@ class SyncTreeTests(unittest.TestCase):
                           stage / "files.tsv")
             done = subprocess.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-Command",
                                    f". {vm.ps(str(vm.GUEST_SCRIPT))}; Sync-Tree {vm.ps(str(root))} {vm.ps(str(stage))}"],
-                                  capture_output=True, text=True)
+                                  capture_output=True, encoding="utf8")
             self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
             self.assertIn(f"synced\t{root}\t1", done.stdout)
             self.assertEqual((root / "a/App.cs").read_text("utf8"), "new")

@@ -909,5 +909,6 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    companion.utf8_console()
     need_pillow()
     sys.exit(main(sys.argv[1:]))

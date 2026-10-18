@@ -70,14 +70,32 @@ class ScriptTests(FixtureAppTestCase):
         return subprocess.run(
             [*shell(TOOLS / script), *args] if script.endswith(".sh") else [sys.executable, str(TOOLS / script), *args],
             cwd=cwd or self.root,
-            env=environment, capture_output=True, text=True,
+            env=environment, capture_output=True, encoding="utf8",
         )
 
     def test_every_shell_script_parses(self):
         for script in TOOLS.glob("*.sh"):
-            result = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
+            result = subprocess.run(["bash", "-n", str(script)], capture_output=True, encoding="utf8")
             self.assertEqual(result.returncode, 0, f"{script.name}: {result.stderr}")
             self.assertTrue(os.access(script, os.X_OK), f"{script.name} isn't executable")
+
+    def test_every_python_tool_prints_utf8(self):
+        # A cp1252 Windows console can't encode the tools' arrows and ellipses: each sets UTF-8 before it prints.
+        for script in TOOLS.rglob("*.py"):
+            text = script.read_text("utf8")
+            if "tests" in script.parts or '__name__ == "__main__"' not in text:
+                continue
+            main = text.split('__name__ == "__main__":', 1)[1]
+            self.assertRegex("\n".join(main.split("\n")[1:3]), r"utf8_console\(\)|stream\.reconfigure\(",
+                             f"{script.relative_to(TOOLS)}: call companion.utf8_console() first under __main__")
+
+    def test_utf8_console_survives_a_cp1252_console(self):
+        result = subprocess.run(
+            [sys.executable, "-c", "import companion; companion.utf8_console(); print('a \\u2192 b \\u2026')"],
+            cwd=TOOLS, env={**os.environ, "PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"}, capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.decode("utf8").strip(), "a → b …")
 
     def test_conformance_runs_the_apps_generator(self):
         self.fake("swift", f'echo "$FIXTURE_WRITE_CONFORMANCE $*" > "{self.log}"\n')
@@ -616,21 +634,23 @@ class StoreScreenshotTests(unittest.TestCase):
                 {"en": [{"shot": "panel", "appearance": "dark", "headline": ["Fixy says hi"], "note": "A fixture."}],
                  "it": [{"shot": "panel", "appearance": "dark", "headline": ["Ciao da Fixy"], "note": "Una prova."}]}), "utf8")
             png(root / "screenshots" / "macos" / "panel-dark.png", 200)
-            result = subprocess.run([sys.executable, str(TOOLS / "store-screenshots.py")], cwd=root, capture_output=True, text=True)
+            result = subprocess.run([sys.executable, str(TOOLS / "store-screenshots.py")], cwd=root,
+                                    capture_output=True, encoding="utf8")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue((root / "store" / "en" / "1-panel-dark.png").exists())
 
             # Another language from captures given; a captures folder is one language's; a language needs captions.
             italian = subprocess.run([sys.executable, str(TOOLS / "store-screenshots.py"), "--lang", "it",
-                                      str(root / "screenshots" / "macos")], cwd=root, capture_output=True, text=True)
+                                      str(root / "screenshots" / "macos")], cwd=root,
+                                      capture_output=True, encoding="utf8")
             self.assertEqual(italian.returncode, 0, italian.stderr)
             self.assertEqual(italian.stdout.split(), ["store/it/1-panel-dark.png"])
             both = subprocess.run([sys.executable, str(TOOLS / "store-screenshots.py"), "--lang", "all",
-                                   str(root / "screenshots" / "macos")], cwd=root, capture_output=True, text=True)
+                                   str(root / "screenshots" / "macos")], cwd=root, capture_output=True, encoding="utf8")
             self.assertEqual(both.returncode, 2)
             self.assertIn("a captures folder is one language's", both.stderr)
             unknown = subprocess.run([sys.executable, str(TOOLS / "store-screenshots.py"), "--lang", "fr"], cwd=root,
-                                     capture_output=True, text=True)
+                                     capture_output=True, encoding="utf8")
             self.assertIn("no captions for fr in store.captions (it has en, it)", unknown.stderr)
 
             # The Android canvases from a phone's captures: the phone image is portrait, with Play's limits checked.
@@ -638,17 +658,18 @@ class StoreScreenshotTests(unittest.TestCase):
             png(root / "build" / "screens" / "droid" / "en" / "panel-dark.png", 200)
             captures = str(root / "build" / "screens" / "droid" / "en")
             phone = subprocess.run([sys.executable, str(TOOLS / "store-screenshots.py"), "--canvas", "android-phone", captures],
-                                   cwd=root, capture_output=True, text=True)
+                                   cwd=root, capture_output=True, encoding="utf8")
             self.assertEqual(phone.returncode, 0, phone.stderr)
             self.assertEqual(Image.open(root / "store" / "android-phone" / "en" / "1-panel-dark.png").size, (1080, 1920))
             tablet = subprocess.run([sys.executable, str(TOOLS / "store-screenshots.py"), "--canvas", "android-tablet",
-                                     "--out", str(root / "tablet"), captures], cwd=root, capture_output=True, text=True)
+                                     "--out", str(root / "tablet"), captures], cwd=root,
+                                     capture_output=True, encoding="utf8")
             self.assertEqual(tablet.returncode, 0, tablet.stderr)
             self.assertEqual(Image.open(root / "tablet" / "en" / "1-panel-dark.png").size, (2560, 1600))
             data["screenshots"]["store"]["canvases"] = {"android-phone": [1080, 2400]}
             (root / "companion.json").write_text(json.dumps(data), "utf8")
             tall = subprocess.run([sys.executable, str(TOOLS / "store-screenshots.py"), "--canvas", "android-phone", captures],
-                                  cwd=root, capture_output=True, text=True)
+                                  cwd=root, capture_output=True, encoding="utf8")
             self.assertEqual(tall.returncode, 1)
             self.assertIn("1080×2400: Google Play takes no side more than 2× the other", tall.stderr)
 
@@ -686,7 +707,7 @@ class MicrosoftStoreScreenshotTests(FixtureAppTestCase):
 
     def run_tool(self, *args: str):
         return subprocess.run([sys.executable, str(TOOLS / "store-screenshots.py"), "--canvas", "microsoft", *args],
-                              cwd=self.root, capture_output=True, text=True)
+                              cwd=self.root, capture_output=True, encoding="utf8")
 
     def test_centers_each_capture_unscaled_in_upload_order(self):
         stale = self.out / "en" / "9-gone-light.png"
@@ -845,7 +866,8 @@ class DevIconTests(unittest.TestCase):
                 png(catalog / "AppIcon.appiconset" / f"icon_{size}.png", size)
             (catalog / "AppIcon.appiconset" / "Contents.json").write_text('{"images": []}')
             result = subprocess.run(
-                ["swift", str(TOOLS / "dev-icon.swift"), str(catalog), "#123456", "#FFFFFF"], capture_output=True, text=True)
+                ["swift", str(TOOLS / "dev-icon.swift"), str(catalog), "#123456", "#FFFFFF"],
+                capture_output=True, encoding="utf8")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("Wrote 2 icons", result.stdout)
             for size in (32, 128):
