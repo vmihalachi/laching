@@ -65,10 +65,11 @@ iPad match what ships, and that purchase UI is only where the app's rules allow.
 2. **Screenshots: skip by default**, as for the Mac: render new ones only when a screen they show changed visibly. When
    unsure, ask the owner. Render the source language first (all three devices; the app's notes name the command), show
    them, and ask before every language (slow). The devices: iPhone 6.9" (1320×2868, `store.apple.ios.iphoneScreenshots`),
-   iPad 13" (2064×2752, `ios.ipadScreenshots`) and **iPhone Duo** (2007×2853, what a new `iPhone-Duo` simulator
-   captures, or 1398×2034; `ios.duoScreenshots`, `<store.dir>/apple/duo/<lang>/` by default). Smaller iPhones and iPads scale from
-   these; the Duo doesn't, so without its own set its tab stays empty. App Store Connect has no screenshot set for the
-   Duo: push.py places them in the App Asset Library, in file order, when the folder exists.
+   iPad 13" (2064×2752, `ios.ipadScreenshots`) and **iPhone Duo** (1398×2034 or 2007×2853; the `iPhone-Duo`
+   simulator captures at either scale; `ios.duoScreenshots`, `<store.dir>/apple/duo/<lang>/` by default). Smaller
+   iPhones and iPads scale from these; the Duo doesn't, so without its own set its tab stays empty. App Store Connect
+   has no screenshot set for the Duo: push.py places them in the App Asset Library, in file order, when the folder
+   exists.
 3. **Product page header and search results asset** (iOS 27; no text, so one image each serves every language; no
    alpha): regenerate only when the art changes (the app's notes say how). No prices, URLs, logos or other platforms.
    - **Header**: `store.apple.ios.header`, `<store.dir>/apple/header.png` by default, 3840×1646. Keep the subject inside
