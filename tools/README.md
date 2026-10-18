@@ -38,8 +38,10 @@ or `$COMPANION_ROOT`); the schema is [`companion.schema.json`](companion.schema.
 | `skills/` | `localization`, `add-phrase`, `add-setting`, `conformance`, `voice`, `windows-port`, `release-mac`, `release-ios` (a universal app's iPhone and iPad version), `release-windows`, `review-invariants`. |
 | `../.github/workflows/windows-release.yml`, `windows-app.yml` | Reusable workflows (`workflow_call`) an app's own short workflows call at the release it pins: the Store release (both packages, the bundle as the artifact, the optional push, the tag) and the WinUI build check (the traps, the tests, both packages, every window). Below, *Windows apps*. |
 
-Tests: `python3 tools/tests/run.py` (over `tools/tests/fixture-app`, a minimal app; `tools.yml` runs them), and for
-the landing package `npx vp test run` in `tools/landing`.
+Tests: `python3 tools/tests/run.py` (over `tools/tests/fixture-app`, a minimal app; `tools.yml` runs them; Python 3.10
+or later, which an older `python3` finds and re-runs under), and for the landing package `npx vp test run` in
+`tools/landing`. `scripts/verify.sh --fast` runs only the tests that cover the changed files, from the map in
+`tools/tests/covering.py`: a new tool or test file goes in it (`test_covering` says so).
 
 An app without a phrase bank or a character (a reminder app, say) leaves `character` and `conformance` out of
 `companion.json`: `l10n.py`, the store tools, `verify.sh` and the hook work as usual; `phrases.py`, `voice.py`,
