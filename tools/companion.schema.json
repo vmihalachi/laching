@@ -336,7 +336,9 @@
               "properties": {
                 "iphoneScreenshots": { "type": "string", "description": "<lang>/*.png per language, the iPhone 6.9\" set; apple/iphone by default." },
                 "ipadScreenshots": { "type": "string", "description": "<lang>/*.png per language, the iPad 13\" set; apple/ipad by default." },
-                "header": { "type": "string", "description": "The iOS 27 product page header, one PNG for every language (3840x1646, no alpha); apple/header.png by default. push.py's ios-header part places it when the file exists." }
+                "duoScreenshots": { "type": "string", "description": "<lang>/*.png per language, the iPhone Duo set (1398x2034 or 2007x2853); apple/duo by default. push.py's ios-screenshots part places them in the App Asset Library when the folder exists." },
+                "header": { "type": "string", "description": "The iOS 27 product page header, one PNG for every language (3840x1646, no alpha); apple/header.png by default. push.py's ios-header part places it when the file exists." },
+                "searchResults": { "type": "string", "description": "The iOS 27 search results asset, one PNG for every language (1920x1280 to 3840x2560, or 5244x2950, no alpha); apple/search-results.png by default. push.py's ios-search part places it when the file exists." }
               },
               "description": "A universal app's iPhone and iPad version page: the listing then has ios.promo, ios.keywords, ios.description and an optional ios.whatsnew (check.py), and push.py fills the iOS version too (--only ios-text,ios-screenshots)."
             },

@@ -21,10 +21,15 @@ What it syncs, per language (companion.json's `store.apple` names the app, its l
 With `store.apple.ios` (a universal app), the iPhone and iPad version page too (on by default then):
   ios-text         the iOS version's page from the listing's `ios.*` fields (App Information is shared with the Mac)
   ios-screenshots  the iPhone 6.9" and iPad 13" sets, from `store.apple.ios.iphoneScreenshots`/<lang>/*.png and
-                   `ios.ipadScreenshots`/<lang>/*.png
+                   `ios.ipadScreenshots`/<lang>/*.png, and the iPhone Duo's from `ios.duoScreenshots`/<lang>/*.png
+                   (apple/duo by default; 1398x2034 or 2007x2853) when that folder exists: App Store Connect has no
+                   screenshot set for the Duo, so they go through the App Asset Library, placed in file order
   ios-header       the iOS 27 product page header (`store.apple.ios.header`, apple/header.png by default: 3840x1646, no
                    alpha), one image placed on every language, in each placement group the App Asset Library's
                    reference data gives that size; on by default when the file exists
+  ios-search       the iOS 27 search results asset (`store.apple.ios.searchResults`, apple/search-results.png by
+                   default: 1920x1280 to 3840x2560, or 5244x2950, no alpha), placed like the header; on by default
+                   when the file exists (without one, App Store search shows the screenshots)
 The iOS version for --version is found or created (--create) like the Mac's, and --build is attached to it too; the
 `review` part sets its App Review notes as well, and --status reports it (screenshots per display type) after the Mac's.
 A field the listing doesn't have is left alone, and What's New is left out on a platform's first version (App Store
@@ -57,11 +62,18 @@ from listing import Listing, load  # noqa: E402
 API = "https://api.appstoreconnect.apple.com"
 EDITABLE = {"PREPARE_FOR_SUBMISSION", "DEVELOPER_REJECTED", "REJECTED", "METADATA_REJECTED",
             "INVALID_BINARY"}
-PARTS = ("text", "iap", "screenshots", "review", "previews", "ios-text", "ios-screenshots", "ios-header")
+PARTS = ("text", "iap", "screenshots", "review", "previews", "ios-text", "ios-screenshots", "ios-header", "ios-search")
 IPHONE_SCREENSHOTS = "APP_IPHONE_67"  # the 6.9" display (App Store Connect's name predates it)
 IPAD_SCREENSHOTS = "APP_IPAD_PRO_3GEN_129"  # the 13" display
 SCREENSHOT_NAMES = {IPHONE_SCREENSHOTS: 'iPhone 6.9"', IPAD_SCREENSHOTS: 'iPad 13"'}
-HEADER = "PRODUCT_PAGE_HEADER_ASSET"  # the App Asset Library's placement type for the product page header
+# The App Asset Library's placement types: the product page header, the search results asset, and screenshots (the
+# iPhone Duo's are only there, in its placement group).
+HEADER = "PRODUCT_PAGE_HEADER_ASSET"
+SEARCH = "APP_STORE_SEARCH_RESULTS_ASSET"
+SCREENSHOT = "APP_SCREENSHOT"
+DUO = "IPHONE_DUO_PROFILE"
+# The sizes App Store Connect takes for each, for the problem a file of another size reports.
+SIZES = {HEADER: "3840x1646", SEARCH: "1920x1280 to 3840x2560, or 5244x2950", DUO: "1398x2034 or 2007x2853"}
 
 
 class Page(NamedTuple):
@@ -529,19 +541,24 @@ class Sync:
             self.media(localization, locale, [f], "appPreviewSets", "previewType", self.listing.preview_type,
                        "appPreviews")
 
-    def header_groups(self, width, height):
-        """The placement groups whose header specification takes a width x height image (DEFAULT_PROFILE, platform ANY,
-        in October 2026), from the App Asset Library's reference data: its identifiers aren't an enumeration, so they're
-        read, never hard-coded. A Mac group, should one appear, is left out: the header is the iOS page's."""
-        ref = self.api.request("GET", f"/v1/appAssetLibraryRefData?filter[placementTypes]={HEADER}")["data"][0]["attributes"]
-        specs = {s["specId"] for s in ref.get("imageSpecs", []) if HEADER in s.get("compatiblePlacementTypes", [])
+    def placement_groups(self, placement_type, width, height):
+        """The placement groups of `placement_type` whose specification takes a width x height image, from the App
+        Asset Library's reference data (DEFAULT_PROFILE, platform ANY, for the header and the search results asset in
+        October 2026): its identifiers aren't an enumeration, so they're read, never hard-coded. A Mac group, should
+        one appear, is left out: these are the iOS page's."""
+        refs = self.__dict__.setdefault("_refs", {})
+        if placement_type not in refs:
+            refs[placement_type] = self.api.request(
+                "GET", f"/v1/appAssetLibraryRefData?filter[placementTypes]={placement_type}")["data"][0]["attributes"]
+        ref = refs[placement_type]
+        specs = {s["specId"] for s in ref.get("imageSpecs", []) if placement_type in s.get("compatiblePlacementTypes", [])
                  and s["dimensions"]["minWidth"] <= width <= s["dimensions"]["maxWidth"]
                  and s["dimensions"]["minHeight"] <= height <= s["dimensions"]["maxHeight"]}
         allowed = {g for f in ref.get("features", []) if f.get("featureId") == "APP_STORE_VERSIONS"
-                   for p in f.get("placementPolicies", []) if p.get("placementType") == HEADER
+                   for p in f.get("placementPolicies", []) if p.get("placementType") == placement_type
                    for limit in p.get("groupLimits", []) for g in limit.get("groupIds", [])}
         platforms = {g["placementProfileGroupId"]: g.get("platform", "") for g in ref.get("placementProfileGroups", [])}
-        return sorted(m["placementGroupId"] for t in ref.get("placementTypes", []) if t.get("placementTypeId") == HEADER
+        return sorted(m["placementGroupId"] for t in ref.get("placementTypes", []) if t.get("placementTypeId") == placement_type
                       for m in t.get("specMappings", []) if specs & set(m.get("specs", []))
                       and m["placementGroupId"] in allowed
                       and not platforms.get(m["placementGroupId"], "MAC").startswith("MAC"))
@@ -553,56 +570,100 @@ class Sync:
         if not f.exists():
             self.problems.append(f"no header {f} (3840x1646, no alpha)")
             return
-        width, height, alpha = png_info(f)
-        if alpha:
-            self.problems.append(f"{f.name} has an alpha channel; App Store Connect refuses it for a header")
-            return
-        groups = self.header_groups(width, height)
-        if not groups:
-            self.problems.append(f"no header placement takes {width}x{height} (3840x1646)")
-            return
-        name = f"header-{md5(f)[:12]}{f.suffix}"
-        image = {}  # uploaded once, the first time a language needs it
+        self.place(localizations, HEADER, lambda lang: [f], "header", "Product page header")
 
-        def upload():
+    def search_results(self, localizations):
+        """Places the search results asset on every language's iOS version page, like the header."""
+        f = self.listing.ios_search
+        if not f.exists():
+            self.problems.append(f"no search results asset {f} ({SIZES[SEARCH]}, no alpha)")
+            return
+        self.place(localizations, SEARCH, lambda lang: [f], "search", "Search results")
+
+    def duo_screenshots(self, localizations):
+        """Places each language's iPhone Duo screenshots, in file order, in the Duo's placement group."""
+        def files(lang):
+            found = sorted((self.listing.duo_screenshots / lang).glob("*.png"))
+            if not found:
+                self.problems.append(f"{lang}: no screenshots in {self.listing.duo_screenshots / lang}")
+            return found
+        self.place(localizations, SCREENSHOT, files, "duo", "iPhone Duo screenshot", group=DUO)
+
+    def place(self, localizations, placement_type, files_for, prefix, reference, group=None):
+        """Syncs one placement type on each language's iOS version page: `files_for(lang)` gives the PNGs, placed in
+        that order in every placement group that takes their size (or in `group` alone, which must take it). A group
+        whose images all match (the uploaded file's name carries its MD5) is left alone; otherwise its placements are
+        replaced. Each file is uploaded to the app's Asset Library once, however many languages use it."""
+        images = {}  # uploaded file name -> image id ("" in a dry run)
+        groups_for = {}  # (width, height) -> groups
+        label = reference[0].lower() + reference[1:]
+
+        def upload(f, name):
             library = self.api.request("GET", f"/v1/apps/{self.listing.app_id}/assetLibrary")["data"]["id"]
             data = f.read_bytes()
             item = self.api.create("appAssetLibraryImages", {"fileName": name, "fileSize": len(data),
-                                                             "category": "CREATIVE_ASSETS",
-                                                             "referenceName": "Product page header"},
+                                                             "category": "CREATIVE_ASSETS", "referenceName": reference},
                                    {"assetLibrary": ("appAssetLibraries", library)})
             self.api.upload(item["attributes"]["uploadOperations"], data)
             self.api.update("appAssetLibraryImages", item["id"], {"uploaded": True})
             return item
 
-        for locale, (_, localization) in localizations.items():
-            placed = {}
+        for locale, (lang, localization) in localizations.items():
+            files = files_for(lang)
+            if not files:
+                continue
+            groups = None
+            for f in files:
+                width, height, alpha = png_info(f)
+                if alpha:
+                    self.problems.append(f"{f.name} has an alpha channel; App Store Connect refuses it for a {label}")
+                    groups = []
+                    break
+                if (width, height) not in groups_for:
+                    groups_for[width, height] = self.placement_groups(placement_type, width, height)
+                fits = [g for g in groups_for[width, height] if group in (None, g)]
+                if not fits:
+                    self.problems.append(f"{f.name}: no {label} placement takes {width}x{height} "
+                                         f"({SIZES.get(group or placement_type, 'see App Store Connect')})")
+                    groups = []
+                    break
+                groups = fits if groups is None else [g for g in groups if g in fits]
+            if not groups:
+                continue
+            names = [f"{prefix}-{md5(f)[:12]}{f.suffix}" for f in files]
+            placed = {}  # group -> [(placement id, file name)]
             if localization:
                 page = self.api.request("GET", f"/v1/appStoreVersionLocalizations/{localization['id']}/placements"
-                                               f"?filter[placementType]={HEADER}&include=image&limit=50") or {}
-                files = {i["id"]: i["attributes"].get("fileName") for i in page.get("included", [])}
+                                               f"?filter[placementType]={placement_type}&include=image&limit=50") or {}
+                file_names = {i["id"]: i["attributes"].get("fileName") for i in page.get("included", [])}
                 for p in page.get("data") or []:
+                    if p["attributes"].get("placementType", placement_type) != placement_type:
+                        continue
                     image_id = ((p.get("relationships", {}).get("image") or {}).get("data") or {}).get("id")
-                    placed[p["attributes"]["placementGroup"]] = (p["id"], files.get(image_id))
-            for group in groups:
-                have = placed.get(group)
-                if have and have[1] == name:
+                    placed.setdefault(p["attributes"]["placementGroup"], []).append((p["id"], file_names.get(image_id)))
+            for g in groups:
+                have = placed.get(g, [])
+                if sorted(n for _, n in have) == sorted(names):
                     continue
-                if not image:
-                    item = self.step(f"upload the header {f.name} ({width}x{height}) to the asset library", upload)
-                    if self.apply and item is None:
-                        return
-                    image.update(item or {"id": None})
-                self.log(f"  {locale}: header ({group}): {'replace ' + str(have[1]) if have else 'place'} {f.name}")
+                for f, name in zip(files, names):
+                    if name not in images:
+                        item = self.step(f"upload {f.name} ({prefix}) to the asset library",
+                                         lambda f=f, name=name: upload(f, name))
+                        if self.apply and item is None:
+                            return
+                        images[name] = (item or {}).get("id", "")
+                what = ", ".join(f.name for f in files)
+                self.log(f"  {locale}: {label} ({g}): " + (f"replace {len(have)} with {what}" if have else f"place {what}"))
                 if not self.apply or not localization:
                     continue
-                if have:
-                    self.step(f"{locale}: remove the header {have[1]}",
-                              lambda have=have: self.api.delete("appAssetLibraryPlacements", have[0]))
-                self.step(f"{locale}: place the header", lambda group=group: self.api.create(
-                    "appAssetLibraryPlacements", {"placementType": HEADER, "placementGroup": group},
-                    {"appStoreVersionLocalization": ("appStoreVersionLocalizations", localization["id"]),
-                     "image": ("appAssetLibraryImages", image["id"])}))
+                for placement_id, old in have:
+                    self.step(f"{locale}: remove the {label} {old}",
+                              lambda placement_id=placement_id: self.api.delete("appAssetLibraryPlacements", placement_id))
+                for name in names:
+                    self.step(f"{locale}: place {name}", lambda g=g, name=name: self.api.create(
+                        "appAssetLibraryPlacements", {"placementType": placement_type, "placementGroup": g},
+                        {"appStoreVersionLocalization": ("appStoreVersionLocalizations", localization["id"]),
+                         "image": ("appAssetLibraryImages", images[name])}))
 
 
 def status(listing: Listing, api, version_string):
@@ -673,9 +734,16 @@ def status_version(listing: Listing, api, version_string, page, missing):
         counts = [(SCREENSHOT_NAMES.get(t, ""), shots.get(t, 0)) for _, t in page.screenshots]
         header = ""
         if page.platform == "IOS":
-            placed = (api.request("GET", f"/v1/appStoreVersionLocalizations/{loc['id']}/placements"
-                                         f"?filter[placementType]={HEADER}") or {}).get("data") or []
-            header = f", {len(placed)} header placement{'' if len(placed) == 1 else 's'}"
+            def placements(placement_type, group=None):
+                found = (api.request("GET", f"/v1/appStoreVersionLocalizations/{loc['id']}/placements"
+                                            f"?filter[placementType]={placement_type}") or {}).get("data") or []
+                return [p for p in found if p["attributes"].get("placementType", placement_type) == placement_type
+                        and group in (None, p["attributes"].get("placementGroup"))]
+            duo, placed, search = len(placements(SCREENSHOT, DUO)), len(placements(HEADER)), len(placements(SEARCH))
+            if listing.duo_screenshots.exists():
+                counts.append(("iPhone Duo", duo))
+            header = (f", {placed} header placement{'' if placed == 1 else 's'}"
+                      f", {search} search results placement{'' if search == 1 else 's'}")
         print(f"  {tag}{a['locale']}: " + ", ".join(f"{n} {name + ' ' if name else ''}screenshots" for name, n in counts)
               + header + (f", empty: {', '.join(empty)}" if empty else ""))
         missing += [f"{tag}{a['locale']} {name + ' ' if name else ''}screenshots" for name, n in counts if not n]
@@ -690,7 +758,8 @@ def main():
     parser.add_argument("--build", help="attach this build number (CFBundleVersion) to the version")
     listing = load()
     default = "text,iap,screenshots,review" + (",ios-text,ios-screenshots" if listing.ios is not None else "") + (
-        ",ios-header" if listing.ios is not None and listing.ios_header.exists() else "")
+        ",ios-header" if listing.ios is not None and listing.ios_header.exists() else "") + (
+        ",ios-search" if listing.ios is not None and listing.ios_search.exists() else "")
     parser.add_argument("--only", default=default,
                         help=f"comma-separated parts: {', '.join(PARTS)} (default: {default}; the ios- parts need "
                              "store.apple.ios)")
@@ -719,7 +788,7 @@ def main():
     # Each platform's version only when one of its parts asks for it: the Mac and iOS apps have their own version
     # numbers, so a push for one must not create the other's version of that number. `review` goes with the platform
     # whose parts are asked for, or with both when it's alone.
-    mac_parts, ios_parts = parts & {"text", "screenshots", "previews"}, parts & {"ios-text", "ios-screenshots", "ios-header"}
+    mac_parts, ios_parts = parts & {"text", "screenshots", "previews"}, parts & {"ios-text", "ios-screenshots", "ios-header", "ios-search"}
     mac = bool(mac_parts) or ("review" in parts and not ios_parts)
     ios = sync.ios is not None and (bool(ios_parts) or ("review" in parts and not mac_parts))
     if mac:
@@ -754,9 +823,14 @@ def main():
         if "ios-screenshots" in parts:
             print("iOS screenshots")
             sync.screenshots(ios_localizations, sync.ios)
+            if listing.duo_screenshots.exists():
+                sync.duo_screenshots(ios_localizations)
         if "ios-header" in parts:
             print("iOS header")
             sync.header(ios_localizations)
+        if "ios-search" in parts:
+            print("iOS search results")
+            sync.search_results(ios_localizations)
     if sync.problems:
         print("\nProblems:\n" + "\n".join(f"  {p}" for p in sync.problems))
         sys.exit(1)
