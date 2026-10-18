@@ -80,7 +80,9 @@ public static class AppNotifier
 /// Windows app notifications with buttons that route back as <typeparamref name="TAction"/>, also when Windows
 /// launched the app to handle the click. One notification at a time: posting replaces the one still in
 /// Notification Center, and <see cref="IsShowingAsync"/> tells whether it is. Titles and bodies arrive already localized. One per process, since it owns
-/// <c>AppNotificationManager.Default</c>.
+/// <c>AppNotificationManager.Default</c>. Made for a packaged app, whose identity comes from its MSIX: an unpackaged
+/// build (Debug) registers, posts and reads the setting, but Windows 11 may never show its notifications (no banner, no
+/// Notification Center entry, though <c>History</c> lists them), and after Quit a click on one left behind starts nothing.
 /// </summary>
 /// <typeparam name="TAction">The app's notion of what a click means (an enum, say).</typeparam>
 public sealed class AppNotifier<TAction> : IDisposable
