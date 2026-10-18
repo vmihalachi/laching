@@ -37,7 +37,7 @@ Everything in `LachingSystem` reads state and never prompts. None of it talks to
 **Swift** (macOS 14+), in `Package.swift` or Xcode's package list, pinned to a tag:
 
 ```swift
-.package(url: "https://github.com/vmihalachi/laching", exact: "0.17.1")
+.package(url: "https://github.com/vmihalachi/laching", exact: "0.18.0")
 ```
 
 **.NET** (10), from NuGet.org. `Laching.Windows` and `Laching.Windows.Companion` need **Windows 11**: they target
@@ -201,7 +201,7 @@ nuget.org for repository `vmihalachi/laching` and workflow `release.yml`, plus t
 holding the nuget.org username; without them it says so and attaches the packages to the release instead). It
 publishes `@laching/landing` to npm when it changed, through trusted publishing as well
 ([`tools/landing/README.md`](tools/landing/README.md)), and makes the GitHub release, its notes generated from the
-merged pull requests' titles. The latest release is `v0.17.1`.
+merged pull requests' titles. The latest release is `v0.18.0`.
 
 ## License
 
