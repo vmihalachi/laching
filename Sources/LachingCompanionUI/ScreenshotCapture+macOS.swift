@@ -7,10 +7,12 @@
         // MARK: Capture
 
         /// Draws the whole window (title bar included) once it is key (unless `isHidden`), so it looks as it does in use,
-        /// then checks that its content fits (`LayoutCheck`).
+        /// then checks that its content fits (`LayoutCheck`). A hidden window waits as long as a key one does after
+        /// coming forward, so its first tasks (a scroll to a row) land before it is drawn.
         public static func capture(_ window: NSWindow, to url: URL) async {
             let shot = url.lastPathComponent
             await makeKey(window, for: shot)
+            if isHidden { try? await Task.sleep(for: .seconds(0.5)) }
             guard let view = window.contentView?.superview ?? window.contentView,
                 let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)
             else { return report("\(shot): the window couldn't be drawn") }

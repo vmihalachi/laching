@@ -41,7 +41,9 @@ public sealed class ScreenshotScript<TWindow, TSettings>(
 
         /// <summary>
         /// The Support window bought while open (<paramref name="Thanks"/>: only the thank-you), then opened again
-        /// (<paramref name="Supporter"/>: the tips); ownership is back to none afterwards.
+        /// (<paramref name="Supporter"/>: the tips); ownership is back to what it was afterwards. A run that already owns
+        /// <paramref name="Product"/> (it wears a skin the product unlocks) can't buy it again, so it shoots only
+        /// <paramref name="Supporter"/>.
         /// </summary>
         public sealed record SupporterSequence(TWindow Id, string Product, string Thanks, string Supporter) : Shot;
 
@@ -103,13 +105,15 @@ public sealed class ScreenshotScript<TWindow, TSettings>(
                     await ScreenshotCapture.CaptureFitting(fitting.Make(), theme, Path(fitting.Name));
                 break;
             case Shot.SupporterSequence sequence:
-                if (!ScreenshotCapture.Wants(sequence.Thanks) && !ScreenshotCapture.Wants(sequence.Supporter))
+                var owned = backend.Owned.ToHashSet();
+                string[] names = owned.Contains(sequence.Product) ? [sequence.Supporter] : [sequence.Thanks, sequence.Supporter];
+                if (!names.Any(name => ScreenshotCapture.Wants(name)))
                     return;
                 host.Windows.Show(sequence.Id);
                 await Drawn(sequence.Id, TimeSpan.FromSeconds(0.6));
-                backend.Owned = [sequence.Product];
+                backend.Owned = [.. owned, sequence.Product];
                 await model.Purchases.RefreshEntitlementsAsync();
-                foreach (var shotName in new[] { sequence.Thanks, sequence.Supporter })
+                foreach (var shotName in names)
                 {
                     await Drawn(sequence.Id, ScreenshotCapture.Settle);
                     if (ScreenshotCapture.Wants(shotName) && host.Windows.Find(sequence.Id) is { } window)
@@ -118,8 +122,11 @@ public sealed class ScreenshotScript<TWindow, TSettings>(
                     host.Windows.Show(sequence.Id);
                 }
                 host.Windows.Close(sequence.Id);
-                backend.Owned = [];
-                await model.Purchases.RefreshEntitlementsAsync();
+                if (!backend.Owned.SetEquals(owned))
+                {
+                    backend.Owned = owned;
+                    await model.Purchases.RefreshEntitlementsAsync();
+                }
                 break;
             case Shot.Custom custom:
                 if (ScreenshotCapture.Wants(custom.Name))

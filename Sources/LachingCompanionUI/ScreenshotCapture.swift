@@ -1,4 +1,5 @@
 #if os(macOS) || os(iOS)
+    import LachingCompanion
     import LachingCore
     import LachingStore
     import SwiftUI
@@ -32,9 +33,20 @@
         /// and the layout check.
         public static let hiddenVariable = "LACHING_SCREENSHOT_HIDDEN"
 
+        /// The skin the run wears (a `SkinID` raw value: `auguste`), so each costume gets its own set of shots; unset, the
+        /// app's default skin. The app wears it before its shots, owning in the sample store whatever unlocks it.
+        /// `tools/screenshots.sh --skin` sets it.
+        public static let skinVariable = "LACHING_SCREENSHOT_SKIN"
+
         public static var isEnabled: Bool { ProcessInfo.processInfo.environment[modeVariable] != nil }
 
         public static var isHidden: Bool { ProcessInfo.processInfo.environment[hiddenVariable] == "1" }
+
+        /// The skin asked for (`skinVariable`), else nil.
+        public static var skin: SkinID? {
+            guard isEnabled, let raw = ProcessInfo.processInfo.environment[skinVariable], !raw.isEmpty else { return nil }
+            return SkinID(rawValue: raw)
+        }
 
         /// The shot name prefixes asked for; empty means all.
         public static var wanted: [String] {
