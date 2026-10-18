@@ -595,17 +595,22 @@ class Sync:
         """Syncs one placement type on each language's iOS version page: `files_for(lang)` gives the PNGs, placed in
         that order in every placement group that takes their size (or in `group` alone, which must take it). A group
         whose images all match (the uploaded file's name carries its MD5) is left alone; otherwise its placements are
-        replaced. Each file is uploaded to the app's Asset Library once, however many languages use it."""
-        images = {}  # uploaded file name -> image id ("" in a dry run)
+        replaced. Each file is uploaded to the app's Asset Library once, however many languages and runs use it: an
+        image already there under that file name is reused, and each upload's reference name (unique in a library) is
+        the label plus the file name."""
+        images = None  # uploaded file name -> image id ("" in a dry run), read from the library on first use
         groups_for = {}  # (width, height) -> groups
         label = reference[0].lower() + reference[1:]
 
+        def library():
+            return self.api.request("GET", f"/v1/apps/{self.listing.app_id}/assetLibrary")["data"]["id"]
+
         def upload(f, name):
-            library = self.api.request("GET", f"/v1/apps/{self.listing.app_id}/assetLibrary")["data"]["id"]
             data = f.read_bytes()
             item = self.api.create("appAssetLibraryImages", {"fileName": name, "fileSize": len(data),
-                                                             "category": "CREATIVE_ASSETS", "referenceName": reference},
-                                   {"assetLibrary": ("appAssetLibraries", library)})
+                                                             "category": "CREATIVE_ASSETS",
+                                                             "referenceName": f"{reference} {name}"},
+                                   {"assetLibrary": ("appAssetLibraries", library())})
             self.api.upload(item["attributes"]["uploadOperations"], data)
             self.api.update("appAssetLibraryImages", item["id"], {"uploaded": True})
             return item
@@ -647,6 +652,9 @@ class Sync:
                 have = placed.get(g, [])
                 if sorted(n for _, n in have) == sorted(names):
                     continue
+                if images is None:
+                    images = {i["attributes"].get("fileName"): i["id"]
+                              for i in self.api.get_all(f"/v1/appAssetLibraries/{library()}/images")}
                 for f, name in zip(files, names):
                     if name not in images:
                         item = self.step(f"upload {f.name} ({prefix}) to the asset library",

@@ -39,6 +39,18 @@ class ManifestTests(FixtureAppTestCase):
         super().setUp()
         self.screens = manifest(self.root)
         self.mac, self.windows, self.phone = self.screens.platforms
+        devices = mock.patch.object(sim, "DEVICES", self.root / "devices")
+        devices.start()
+        self.addCleanup(devices.stop)
+
+    def written(self, *udids):
+        """The simulators `udids` with screens.py's defaults in their preference files, as a first run leaves them."""
+        for udid in udids:
+            preferences = sim.DEVICES / udid / "data" / "Library" / "Preferences"
+            preferences.mkdir(parents=True)
+            for domain in {domain for domain, _, _ in screens.SIMULATOR_DEFAULTS}:
+                values = {key: value for d, key, value in screens.SIMULATOR_DEFAULTS if d == domain}
+                (preferences / f"{domain}.plist").write_bytes(screens.plistlib.dumps({"Other": 1, **values}))
 
     def test_each_platform_gets_its_shot_by_name_or_by_capture_kind(self):
         self.assertEqual(self.screens.shot("home", self.phone), screens.Shot("today"))
@@ -85,8 +97,13 @@ class ManifestTests(FixtureAppTestCase):
 
         with mock.patch.object(screens.subprocess, "run", run):
             self.assertEqual(screens.simulator("app screens duo", "iPhone Duo"), "DUO", "already made")
+            calls.clear()
             self.assertEqual(screens.simulator("app screens iphone", "iPhone 17 Pro"), "NEW")
-            self.assertEqual(calls[-1], ["xcrun", "simctl", "create", "app screens iphone", "iPhone 17 Pro", "ios-27-0"])
+            self.assertEqual(calls[2], ["xcrun", "simctl", "create", "app screens iphone", "iPhone 17 Pro", "ios-27-0"])
+            # Made with its defaults written, once: a later run boots it once.
+            self.assertEqual([c[2] for c in calls[3:]], ["boot", "bootstatus", "spawn", "spawn", "spawn", "spawn",
+                                                          "shutdown"])
+            self.assertEqual(calls[-2][-4:], ["com.apple.springboard", "SBMedusaMultitaskingEnabled", "-bool", "false"])
             with self.assertRaisesRegex(RuntimeError, "supports iPad Pro"):
                 screens.simulator("app screens ipad", "iPad Pro")
 
@@ -94,9 +111,11 @@ class ManifestTests(FixtureAppTestCase):
         capture = screens.Capture(self.screens, [self.phone], ["en"], ["home", "settings"], ["light"], 1, False)
         drawn = self.root / "container"
         launches = []
+        simctl = []
 
         def run(command, env=None, **_):
-            if command[2] != "launch":  # boot, defaults, install…
+            if command[2] != "launch":  # boot, install…
+                simctl.append(command[2:])
                 return subprocess.CompletedProcess(command, 0, "", "")
             mode = env["SIMCTL_CHILD_LACHING_SCREENSHOT_MODE"]
             launches.append((mode, env.get("SIMCTL_CHILD_FIXTURE_TWO"), command[-4:]))
@@ -108,6 +127,7 @@ class ManifestTests(FixtureAppTestCase):
                 (folder / "problems.txt").write_text("settings-light.png: a label ends in …\n", "utf8")
             return subprocess.CompletedProcess(command, 0, f"app.fixture: 42\r\nReady\r\n{folder}\r\n", "")
 
+        self.written("UDID")
         with mock.patch.object(screens, "simulator", return_value="UDID"), \
                 mock.patch.object(screens.sim.subprocess, "run", run), redirect_stdout(io.StringIO()):
             capture.device(self.phone, self.root / "Fixture.app", "app.fixture")
@@ -118,6 +138,74 @@ class ManifestTests(FixtureAppTestCase):
         self.assertEqual(capture.problems, [(2, "en", "settings-light.png: a label ends in …")])
         self.assertEqual(capture.ran, {"phone"})
         self.assertFalse((drawn / "1").exists(), "moved out of the app's container")
+        self.assertEqual([c[0] for c in simctl].count("boot"), 1, "the defaults are set: no second boot")
+        self.assertNotIn("spawn", [c[0] for c in simctl], "read from the preference files, not the simulator")
+        log = (self.screens.out / "logs" / "phone.log").read_text("utf8")
+        self.assertRegex(log, r"\$ xcrun simctl boot UDID \(\d+\.\d s\)", "each command with its seconds")
+        self.assertRegex(log, r"\n\(\d+\.\d s\)\n", "a launch's seconds after its output")
+
+    def test_ios_writes_the_missing_defaults_and_boots_again(self):
+        simctl = []
+
+        def run(command, **_):
+            simctl.append(command[2:])
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        self.written("SET")
+        preferences = sim.DEVICES / "SET" / "data" / "Library" / "Preferences" / "com.apple.springboard.plist"
+        self.assertTrue(sim.Simulator("SET").defaults_set(screens.SIMULATOR_DEFAULTS))
+        preferences.write_bytes(screens.plistlib.dumps({"SBChamoisWindowingEnabled": True}))
+        self.assertFalse(sim.Simulator("SET").defaults_set(screens.SIMULATOR_DEFAULTS), "turned back on")
+        with mock.patch.object(sim.subprocess, "run", run):
+            self.assertTrue(sim.Simulator("NEW").boot_with(screens.SIMULATOR_DEFAULTS), "no preference files yet")
+        self.assertEqual([c[0] for c in simctl], ["boot", "bootstatus", *["spawn"] * 4, "shutdown", "boot", "bootstatus"])
+        self.assertEqual([c[3:] for c in simctl if c[0] == "spawn"][2:],
+                         [["write", "com.apple.springboard", key, "-bool", "false"]
+                          for key in ("SBChamoisWindowingEnabled", "SBMedusaMultitaskingEnabled")])
+
+    def test_ios_runs_the_languages_side_by_side_on_clones_of_each_devices_simulator(self):
+        capture = screens.Capture(self.screens, [self.phone], ["en", "it", "de"], ["home"], ["light"], 2, False)
+        app = self.root / "macos" / "build" / "ios-simulator.noindex" / "Build" / "Products" / "Debug-iphonesimulator"
+        (app / "Fixture.app").mkdir(parents=True)
+        (app / "Fixture.app" / "Info.plist").write_bytes(screens.plistlib.dumps({"CFBundleIdentifier": "app.fixture"}))
+        drawn = self.root / "container"
+        lock = screens.threading.Lock()
+        devices = [{"name": "fixture screens phone", "udid": "PHONE", "isAvailable": True, "state": "Booted"},
+                   {"name": "fixture screens phone clone #1 (999999999)", "udid": "STALE", "isAvailable": True}]
+        calls, launches = [], []
+
+        def run(command, env=None, **_):
+            with lock:
+                calls.append(command[2:])
+                if command[2:4] == ["list", "devices"]:
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"devices": {"ios": devices}}), "")
+                if command[2] == "clone":  # its data with the kept simulator's defaults
+                    self.written(made := f"CLONE{command[-1].split('#')[1][0]}")
+                    return subprocess.CompletedProcess(command, 0, f"{made}\n", "")
+                if command[2] != "launch":
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                launches.append((command[5], command[-3].strip("()")))
+                folder = drawn / str(len(launches))
+            folder.mkdir(parents=True)
+            (folder / "today-light.png").write_bytes(b"png")
+            return subprocess.CompletedProcess(command, 0, f"{folder}\r\n", "")
+
+        with mock.patch.object(sim.subprocess, "run", run), mock.patch.object(sim.os, "kill",
+                                                                              side_effect=ProcessLookupError), \
+                redirect_stdout(io.StringIO()):
+            capture.ios([self.phone])
+        self.assertIn(["delete", "STALE"], calls, "a killed run's clone")
+        self.assertLess(calls.index(["shutdown", "PHONE"]), calls.index(["clone", "PHONE", screens.sim.clone_name(
+            "fixture screens phone", 1)]), "the kept simulator clones only when shut down")
+        self.assertEqual(sorted(language for _, language in launches), ["de", "en", "it"])
+        self.assertEqual({udid for udid, _ in launches}, {"CLONE1", "CLONE2"}, "two clones side by side")
+        self.assertEqual(sorted(c for c in calls if c[0] == "boot"), [["boot", "CLONE1"], ["boot", "CLONE2"]],
+                         "one boot each: the defaults come with the clone")
+        self.assertEqual(sorted(c[1] for c in calls if c[0] == "delete"), ["CLONE1", "CLONE2", "STALE"])
+        for language in ("en", "it", "de"):
+            self.assertTrue((self.screens.out / "phone" / language / "home-light.png").is_file())
+        self.assertEqual(capture.problems, [])
+        self.assertTrue((self.screens.out / "logs" / "phone-1.log").is_file(), "a log per clone")
 
     def test_android_boots_one_emulator_per_platform_and_runs_each_language_on_it(self):
         path = self.root / "companion.json"
@@ -298,6 +386,88 @@ class SimulatorTests(FixtureAppTestCase):
         self.assertEqual(sim.newest_runtime("t.SE", runtimes)["version"], "26.10", "by number, not by text")
         self.assertEqual(sim.newest_runtime("iPhone Duo", runtimes)["version"], "27.0", "by name too")
         self.assertIsNone(sim.newest_runtime("iPad", runtimes))
+
+    def test_the_simulator_budget_is_shared_in_proportion_to_the_runs(self):
+        self.assertEqual(sim.shares(4, {"se": 10, "ipad": 30}), {"se": 1, "ipad": 3})
+        self.assertEqual(sim.shares(1, {"se": 10, "ipad": 30}), {"se": 1, "ipad": 1}, "at least one each")
+        self.assertEqual(sim.shares(8, {"phone": 2}), {"phone": 2}, "never more than its runs")
+        self.assertEqual(sim.shares(3, {"a": 5, "b": 5, "c": 5}), {"a": 1, "b": 1, "c": 1})
+
+    def clones(self, starts):
+        """on_clones over one group of two clones, `starts(number)` raising for a clone that doesn't start."""
+        calls, done, failed, notes = [], [], [], []
+        lock = sim.threading.Lock()
+
+        def run(command, **_):
+            with lock:
+                calls.append(command[2:])
+            made = f"CLONE{command[-1].split('#')[1][0]}\n" if command[2] == "clone" else ""
+            return subprocess.CompletedProcess(command, 0, made, "")
+
+        def prepare(clone):
+            starts(int(clone.udid[-1]))
+
+        def work(clone, task):
+            with lock:
+                done.append((clone.udid, task))
+
+        group = sim.Clones("TEMPLATE", "app screens phone", ["en", "it", "de"], 2, self.root / "phone.log")
+        with mock.patch.object(sim.subprocess, "run", run):
+            sim.on_clones([group], prepare, work, lambda task, error: failed.append((task, str(error))), notes.append)
+        return calls, done, failed, notes
+
+    def test_clones_share_a_groups_tasks_and_are_deleted(self):
+        calls, done, failed, notes = self.clones(lambda number: None)
+        self.assertEqual(sorted(task for _, task in done), ["de", "en", "it"])
+        self.assertEqual(sorted(c for c in calls if c[0] == "clone"),
+                         [["clone", "TEMPLATE", sim.clone_name("app screens phone", n)] for n in (1, 2)])
+        self.assertEqual(sorted(c for c in calls if c[0] == "delete"), [["delete", "CLONE1"], ["delete", "CLONE2"]])
+        self.assertTrue((self.root / "phone-2.log").is_file(), "each clone logs on its own")
+        self.assertEqual((failed, notes), ([], []))
+
+    def test_a_clone_that_doesnt_start_leaves_its_tasks_to_the_others(self):
+        def starts(number):
+            if number == 2:
+                raise RuntimeError("no boot")
+
+        calls, done, failed, notes = self.clones(starts)
+        self.assertEqual(sorted(done), [("CLONE1", "de"), ("CLONE1", "en"), ("CLONE1", "it")])
+        self.assertEqual(failed, [])
+        self.assertEqual(notes, [f"{sim.clone_name('app screens phone', 2)} didn't start (no boot)"])
+        self.assertIn(["delete", "CLONE2"], calls, "deleted all the same")
+
+    def test_when_no_clone_starts_every_task_fails(self):
+        def starts(number):
+            raise RuntimeError("no boot")
+
+        _, done, failed, notes = self.clones(starts)
+        self.assertEqual(done, [])
+        self.assertEqual(sorted(failed), [("de", "no boot"), ("en", "no boot"), ("it", "no boot")])
+        self.assertEqual(len(notes), 2)
+
+    def test_the_clones_of_a_run_that_was_killed_are_deleted(self):
+        listed = [{"name": "app screens phone clone #1 (1)", "udid": "LIVE"},
+                  {"name": "app screens phone clone #2 (999999999)", "udid": "DEAD"},
+                  {"name": "app layout clone iPhone-SE #1 (999999999)", "udid": "OLD"},
+                  {"name": "other screens phone clone #1 (999999999)", "udid": "OTHER"},
+                  {"name": "app screens phone", "udid": "KEPT"}]
+        deleted = []
+
+        def kill(pid, _):
+            if pid != 1:
+                raise ProcessLookupError
+
+        with mock.patch.object(sim, "devices", return_value=listed), mock.patch.object(sim.os, "kill", kill), \
+                mock.patch.object(sim.Simulator, "delete", lambda self: deleted.append(self.udid)):
+            sim.clean_stale_clones("app")
+        self.assertEqual(deleted, ["DEAD", "OLD"], "the old naming too; never another app's, a live run's, a kept one")
+
+    def test_the_emulator_logs_each_command_with_its_seconds(self):
+        with mock.patch.object(avd, "sdk_tool", return_value="adb"), mock.patch.object(
+                avd.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "ok", "")):
+            avd.Emulator("Pixel", 0, self.root / "droid.log").shell("getprop")
+        self.assertRegex((self.root / "droid.log").read_text("utf8"),
+                         r"^\$ adb -s emulator-5554 shell getprop\nok\n\(\d+\.\d s\)\n$")
 
 
 class SdkToolTests(unittest.TestCase):

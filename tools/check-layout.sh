@@ -21,22 +21,15 @@ JOBS="${LAYOUT_JOBS:-4}"
 LOGS=$(mktemp -d)
 trap 'rm -rf "$LOGS"' EXIT
 
-shoot() {
-  if [ -n "$ONLY" ]; then
-    "$TOOLS/screenshots.sh" --only "$ONLY" --hidden --no-build "$OUT/$1" "$1"
-  else
-    "$TOOLS/screenshots.sh" --hidden --no-build "$OUT/$1" "$1"
-  fi
-}
-
 "$TOOLS/screenshots.sh" --build-only || exit 1
-STARTED=0
-for lang in "$@"; do
-  (shoot "$lang" > /dev/null 2> "$LOGS/$lang.err"; echo $? > "$LOGS/$lang.status") &
-  STARTED=$((STARTED + 1))
-  [ $((STARTED % JOBS)) -ne 0 ] || wait
-done
-wait
+# A pool rather than batches: the next language starts as soon as any one ends (sh has no `wait -n`, xargs -P does it).
+export TOOLS OUT ONLY LOGS
+# shellcheck disable=SC2016
+printf '%s\n' "$@" | xargs -P "$JOBS" -I {} sh -c '
+  lang=$1
+  if [ -n "$ONLY" ]; then set -- --only "$ONLY"; else set --; fi
+  "$TOOLS/screenshots.sh" "$@" --hidden --no-build "$OUT/$lang" "$lang" > /dev/null 2> "$LOGS/$lang.err"
+  echo $? > "$LOGS/$lang.status"' _ {}
 FAILED=""
 for lang in "$@"; do
   echo "== $lang"

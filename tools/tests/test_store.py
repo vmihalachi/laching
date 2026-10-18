@@ -99,6 +99,8 @@ class FakeApi:
                             {"filter[version]": "version", "filter[preReleaseVersion.platform]": "platform"})
         kind = path.rsplit("/", 1)[1]
         parent_id = path.rsplit("/", 2)[1]
+        if path.startswith("/v1/appAssetLibraries/") and kind == "images":
+            kind = "appAssetLibraryImages"
         return self.children(kind, parent_id)
 
     def request(self, method, path, body=None):
@@ -127,6 +129,9 @@ class FakeApi:
         if "locale" in attributes and any(o["attributes"].get("locale") == attributes["locale"]
                                           for o in self.children(kind, parent)):
             raise push.ApiError(f"409 Entity with locale: {attributes['locale']} already exists.")
+        if kind == "appAssetLibraryImages" and any(o["attributes"].get("referenceName") == attributes["referenceName"]
+                                                   for o in self.children(kind, parent)):
+            raise push.ApiError(f"409 Reference name '{attributes['referenceName']}' is already in use")
         obj = self.add(kind, attributes, parent)
         obj["relationships"] = relationships
         if kind == "appInfoLocalizations":  # like App Store Connect: the editable version gets the language too
@@ -678,6 +683,14 @@ class StoreTests(FixtureAppTestCase):
         api.calls.clear()
         sync.duo_screenshots(localizations)
         self.assertEqual([c for c in api.calls if c[0] != "GET"], [], "a second run changes nothing")
+
+        for p in [k for k in api.objects if k[0] == "appAssetLibraryPlacements"]:
+            del api.objects[p]
+        api.calls.clear()
+        sync.duo_screenshots(localizations)
+        self.assertEqual([c for c in api.calls if c[:2] == ("POST", "appAssetLibraryImages")], [],
+                         "a later run places the images already in the library instead of uploading them again")
+        self.assertEqual(len(self.placed(api, ios, push.SCREENSHOT)), 3)
 
         (self.listing.duo_screenshots / "en" / "2-shot.png").write_bytes(png(1320, 2868))
         sync.duo_screenshots(localizations)
