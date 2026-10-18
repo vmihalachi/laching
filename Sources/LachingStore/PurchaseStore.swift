@@ -1,6 +1,7 @@
 #if os(macOS) || os(iOS)
     import Foundation
     import LachingCore
+    import Observation
     import os
 
     /// Why a purchase or restore didn't go through. The app maps these to its own localized text.
@@ -15,25 +16,27 @@
     /// cached in `settings` under `cacheKey` (as strings) so the UI doesn't flash locked at launch before StoreKit
     /// answers.
     /// Needs `start()` once; it then follows transaction updates (Ask to Buy approvals, refunds, purchases on
-    /// another device). Never shows UI of its own and never charges without `buy` or `tip`.
+    /// another device). Never shows UI of its own and never charges without `buy` or `tip`. `@Observable`: a view that
+    /// reads it redraws when what it read changes; the app holds it in `@State` (or a model), not `@StateObject`.
     @MainActor
-    public final class PurchaseStore: ObservableObject {
+    @Observable
+    public final class PurchaseStore {
         /// The unlockables the user owns, verified and unrevoked. Tips never appear here.
-        @Published public private(set) var owned: Set<String> {
+        public private(set) var owned: Set<String> {
             didSet { settings.set(strings: owned.sorted(), forKey: cacheKey) }
         }
-        @Published public private(set) var products: [String: StoreProduct] = [:]
+        public private(set) var products: [String: StoreProduct] = [:]
         /// Product being bought, to disable the buttons meanwhile.
-        @Published public private(set) var purchasing: String?
-        @Published public private(set) var isRestoring = false
+        public private(set) var purchasing: String?
+        public private(set) var isRestoring = false
         /// A purchase is waiting for approval (Ask to Buy).
-        @Published public private(set) var isPending = false
+        public private(set) var isPending = false
         /// Set after a tip goes through. The view shows its thank-you note, then calls `acknowledgeTip()`.
-        @Published public private(set) var justTipped = false
+        public private(set) var justTipped = false
         /// The last failure; cleared when the next purchase or restore starts, or by the app.
-        @Published public var error: PurchaseError?
+        public var error: PurchaseError?
         /// Where the price lookup stands, so a buy button can say "getting price" or offer a retry.
-        @Published public private(set) var loadState: LoadState = .idle
+        public private(set) var loadState: LoadState = .idle
 
         public enum LoadState: Equatable, Sendable {
             case idle, loading, loaded
@@ -46,7 +49,7 @@
         private let settings: any SettingsStore
         private let cacheKey: String
         private let logger: Logger
-        private var started = false
+        @ObservationIgnored private var started = false
 
         /// `backend` nil means StoreKit 2 logging through the same `logger` (a default argument can't read another
         /// parameter, which is why the default isn't written inline).

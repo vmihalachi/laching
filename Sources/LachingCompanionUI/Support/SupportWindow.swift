@@ -7,7 +7,7 @@
     /// a tip leaves only a thank-you until the window is opened again (each open builds a fresh view). Restore brings
     /// the supporter back. The app opens it only on the user's request; every word and the look are the app's.
     public struct SupportWindow<Primary: ButtonStyle, Outline: ButtonStyle>: View {
-        @ObservedObject var purchases: PurchaseStore
+        let purchases: PurchaseStore
         let products: SupportProducts
         let copy: SupportCopy
         let look: SupportLook<Primary, Outline>
