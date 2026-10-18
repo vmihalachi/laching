@@ -30,6 +30,11 @@ mirrors `LachingCore` (the scheduler, the random source, plurals, settings, the 
 `laching.android` is the phone-side plumbing (Play Billing, alarms, notifications, reduce motion, the screenshot run)
 and `laching.testing` the fakes. No companion in Kotlin yet.
 
+Web, for small ASP.NET Core and Blazor sites on Azure Container Apps behind Cloudflare (`web/`, six `Laching.Web.*`
+NuGet packages, formerly Webling): a PostgreSQL job table, the Cloudflare origin check, security and caching headers,
+Turnstile and cache purges, Aspire ingress and deployment steps, Tailwind in `dotnet build` and image uploads. They
+share nothing with the rest and no app here uses them; Adjudeca does. See [`web/README.md`](web/README.md).
+
 Everything in `LachingSystem` reads state and never prompts. None of it talks to the network.
 
 ## Install
@@ -182,6 +187,7 @@ cd dotnet && dotnet test Laching.Windows.Companion.Tests # Windows: the shell's 
 dotnet run --project dotnet/Fixture.App         # Windows: the fixture app, a companion on the fixture bank
 scripts/fixture-screenshots.ps1                 # Windows: its windows to PNGs, light and dark (-Only home: hidden, a few seconds)
 python3 tools/tests/run.py                      # the tools' tests
+dotnet test web/Laching.Web.sln                 # the web packages (the Jobs tests need PostgreSQL: web/README.md)
 scripts/verify.sh                               # the checks that apply to what you changed
 ```
 
@@ -198,7 +204,8 @@ when their code changed since their last one. When the .NET packages changed sin
 (`dotnet/Directory.Build.props`), the run packs all six at X.Y.Z and pushes them to NuGet.org through
 [Trusted Publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing) (no stored key: a policy on
 nuget.org for repository `vmihalachi/laching` and workflow `release.yml`, plus the `NUGET_USER` repository variable
-holding the nuget.org username; without them it says so and attaches the packages to the release instead). It
+holding the nuget.org username; without them it says so and attaches the packages to the release instead). The six
+`Laching.Web.*` packages work the same way on their own version, `LachingWebVersion` (`web/Directory.Build.props`). It
 publishes `@laching/landing` to npm when it changed, through trusted publishing as well
 ([`tools/landing/README.md`](tools/landing/README.md)), and makes the GitHub release, its notes generated from the
 merged pull requests' titles. The latest release is `v0.19.0`.

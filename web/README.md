@@ -1,14 +1,14 @@
-# Webling
+# Laching.Web
 
 Building blocks for small ASP.NET Core and Blazor sites on Azure Container Apps behind Cloudflare: the parts every
-such site needs and nobody wants to write twice. The web sibling of [Deskling](https://github.com/vmihalachi/deskling).
-.NET 10, MIT.
+such site needs and nobody wants to write twice. The web side of [Laching](https://github.com/vmihalachi/laching),
+in its `web/` folder. .NET 10, MIT.
 
-Webling grew out of Adjudeca, a Blazor site in three languages, which runs on it. It is `0.x`, so any minor version
-may change public types.
+It grew out of Adjudeca, a Blazor site in three languages, which runs on it, and was published as `Webling.*` until it
+moved into Laching. It is `0.x`, so any minor version may change public types.
 
-**No support.** Built for my own projects and shared as is: issues and pull requests aren't monitored, and any
-release may change or break things.
+**No support.** Built for my own projects and shared as is: issues and pull requests from others aren't monitored,
+and any release may change or break things.
 
 ## What's inside
 
@@ -35,7 +35,8 @@ dotnet add package Laching.Web.Tailwind      # build only; nothing ships with th
 dotnet add package Laching.Web.Images
 ```
 
-One tag versions every package, so keep them on the same version.
+One version for all six (`LachingWebVersion`), so keep them on the same one. It moves only in a Laching release
+that changed them, so it can trail Laching's tag.
 
 ## Using it
 
@@ -69,29 +70,22 @@ One tag versions every package, so keep them on the same version.
 
 ## Develop
 
+From the repository's root:
+
 ```sh
-dotnet build
-dotnet test                      # Jobs tests need PostgreSQL: LACHING_WEB_TEST_POSTGRES, or localhost:5432 postgres/postgres
-dotnet format --verify-no-changes
-scripts/tailwind-sample.sh       # packs Laching.Web.Tailwind and builds the sample with it
-scripts/verify.sh                # all of the above that applies
+dotnet test web/Laching.Web.sln     # Jobs tests need PostgreSQL: LACHING_WEB_TEST_POSTGRES, or localhost:5432 postgres/postgres
+dotnet format web/Laching.Web.sln --verify-no-changes
+web/scripts/tailwind-sample.sh      # packs Laching.Web.Tailwind and builds the sample with it
+scripts/verify.sh                   # what applies to your changes, web/ included
 ```
 
 A throwaway server for the Jobs tests:
 `docker run -d -p 55432:5432 -e POSTGRES_PASSWORD=postgres postgres:16` and
 `LACHING_WEB_TEST_POSTGRES="Host=localhost;Port=55432;Username=postgres;Password=postgres"`.
 
-Coding agents: read `AGENTS.md`.
-
-## Releases
-
-One tag versions every package. `git tag v0.1.0 && git push --tags` (or Actions → Release → Run workflow with the
-version, which creates the tag on main) runs `release.yml`: it tests, packs the six packages, pushes them to NuGet.org
-through [Trusted Publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing) (no stored key: a policy
-on nuget.org for repository `vmihalachi/webling` and workflow `release.yml`, plus the `NUGET_USER` repository variable
-holding the nuget.org username; without them it says so and attaches the packages to the release instead) and creates
-a GitHub release from `CHANGELOG.md`.
+Releases are Laching's (`release.yml`): the web packages ship in a release when `web/src` or `web/`'s build files
+changed since `LachingWebVersion`.
 
 ## License
 
-[MIT](LICENSE). © 2026 Vlad Mihalachi.
+[MIT](https://github.com/vmihalachi/laching/blob/master/LICENSE). © 2026 Vlad Mihalachi.
