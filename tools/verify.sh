@@ -16,6 +16,8 @@
 #   mac.core sources and Conformance/      laching/tools/conformance.sh (fails if the vectors were stale)
 #   strings (app Swift, .xcstrings, landing i18n)   l10n.py check, phrases.py check, the .resw and Android strings exports are current
 #   voices, voice config, catalog, phrases.json     voice.py check, the voices pointer is pushed
+#   characters.design, its outputs         character.py --check (the art and character vectors match the drawings)
+#   sounds.recipes, sounds.out/*.wav       synth.py --check (the sounds match their recipes)
 #   windows/**/*.cs                        dotnet format whitespace, dotnet test (windows.coreTests)
 #   windows.app, windows.appTests          check-winui.py; dotnet test (windows.appTests, any OS); the app builds on
 #                                          Windows, or on a Mac in the Parallels VM (windows/vm.sh build)
@@ -41,7 +43,7 @@ while [ $# -gt 0 ]; do
     --staged) mode=staged ;;
     --base) mode=base; base="$2"; shift ;;
     --) shift; mode=paths; paths=("$@"); break ;;
-    -h|--help) sed -n '2,26p' "$TOOLS/verify.sh" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,28p' "$TOOLS/verify.sh" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1 (see --help)" >&2; exit 2 ;;
   esac
   shift
@@ -219,6 +221,13 @@ if [ -n "$VOICE_DIR" ]; then
   if touched "$RE_VOICE"; then
     check "voice.py check" python3 "$TOOLS/voice.py" check
   fi
+fi
+# The generators' --check: their inputs, their outputs or the generator (a pin bump) changed.
+if touched "$RE_CHARACTERS"; then
+  check "character.py --check" python3 "$TOOLS/character.py" --check
+fi
+if touched "$RE_SOUNDS"; then
+  check "synth.py --check" python3 "$TOOLS/synth.py" --check
 fi
 if [ -n "$WINDOWS_STRINGS" ] && [ -d "$WINDOWS_STRINGS" ] && touched "\.xcstrings$|^$WINDOWS_STRINGS/"; then
   check ".resw files match the catalog" export_current windows "$WINDOWS_STRINGS"

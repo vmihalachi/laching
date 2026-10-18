@@ -133,6 +133,31 @@ class LookupTests(unittest.TestCase):
                          "windows/Fixture.App/Assets/StoreLogo.scale-100.png"):
                 self.assertRegex(path, names["RE_WINDOWS_ASSETS"])
             self.assertNotRegex("macos/Fixture/Resources/AppIcon.png.bak", names["RE_WINDOWS_ASSETS"])
+            for path in ("macos/scripts/sounds.py", "macos/Fixture/Resources/Sounds/blip.wav", "laching"):
+                self.assertRegex(path, names["RE_SOUNDS"])
+            self.assertNotRegex("macos/Fixture/Resources/Sounds/README.md", names["RE_SOUNDS"])
+            self.assertEqual(names["RE_CHARACTERS"], "^$a", "no characters section")
+
+    def test_character_paths_and_patterns(self):
+        with fixture_app() as root:
+            manifest = root / "companion.json"
+            data = json.loads(manifest.read_text("utf8"))
+            data["characters"] = {"design": "design/characters", "swiftOut": "macos/FixtureCore/Sources/FixtureCore/Art",
+                                  "assets": "macos/Fixture/Characters", "paletteFile": "design/palette.json"}
+            manifest.write_text(json.dumps(data), "utf8")
+            names = companion.derived(companion.load())
+            self.assertEqual(names["CHARACTERS_ASSETS"], "", "a vector app's assets aren't character.py's")
+            for path in ("design/characters/tiny/body.svg", "design/palette.json", "conformance/characters/tiny.json",
+                         "macos/FixtureCore/Sources/FixtureCore/Art/TinyArt.swift", "laching"):
+                self.assertRegex(path, names["RE_CHARACTERS"])
+            for path in ("macos/FixtureCore/Sources/FixtureCore/Art/Pose.swift", "conformance/phrases.json",
+                         "macos/Fixture/Characters/tiny.face.imageset/Contents.json"):
+                self.assertNotRegex(path, names["RE_CHARACTERS"])
+            data["characters"]["mode"] = "raster"
+            manifest.write_text(json.dumps(data), "utf8")
+            names = companion.derived(companion.load())
+            self.assertEqual(names["CHARACTERS_ASSETS"], "macos/Fixture/Characters")
+            self.assertRegex("macos/Fixture/Characters/tiny.face.imageset/Contents.json", names["RE_CHARACTERS"])
 
     def test_android_names_and_patterns(self):
         with fixture_app() as root:

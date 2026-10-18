@@ -246,6 +246,14 @@ def derived(config: Config) -> dict[str, str]:
         "CONFORMANCE_FLAG": config.get("conformance.writeFlag", ""),
         "CORE_PACKAGE": config.get("conformance.corePackagePath", ""),
         "VOICE_DIR": rel("voice.dir"),
+        # character.py's input and outputs; the raster ones only for raster skins.
+        "CHARACTERS_DESIGN": rel("characters.design"),
+        "CHARACTERS_SWIFT": rel("characters.swiftOut"),
+        "CHARACTERS_PALETTE": rel("characters.paletteFile"),
+        "CHARACTERS_ASSETS": rel("characters.assets") if config.get("characters.mode") == "raster" else "",
+        "CHARACTERS_WINDOWS": rel("characters.windowsAssets") if config.get("characters.mode") == "raster" else "",
+        "SOUNDS_OUT": rel("sounds.out"),
+        "SOUNDS_RECIPES": rel("sounds.recipes"),
         "LACHING_PATH": rel("laching.path"),
         "LACHING_TAG": config.get("laching.tag", ""),
         "GIT_LOCAL_ENV": " ".join(GIT_LOCAL_ENV),  # verify.sh unsets them for git in a submodule
@@ -292,6 +300,24 @@ def derived(config: Config) -> dict[str, str]:
         f"Localizable\\.xcstrings$|^{ere(values['VOICE_DIR'])}($|/)|^{ere(conformance)}/phrases\\.json$"
         + (f"|^{ere(rel('voice.config'))}$" if config.get("voice.config") else "")
         if values["VOICE_DIR"] else never
+    )
+    # The generators' inputs and outputs: an edit to either side reruns the --check. A pin bump can change the
+    # generator itself, so the submodule counts too.
+    pin = [f"^{ere(values['LACHING_PATH'])}$"] if values["LACHING_PATH"] else []
+    character_paths = [
+        f"^{ere(values['CHARACTERS_DESIGN'])}/",
+        f"^{ere(conformance)}/characters/" if conformance else "",
+        f"^{ere(values['CHARACTERS_SWIFT'])}/[^/]+Art\\.swift$" if values["CHARACTERS_SWIFT"] else "",
+        f"^{ere(values['CHARACTERS_PALETTE'])}$" if values["CHARACTERS_PALETTE"] else "",
+        f"^{ere(values['CHARACTERS_ASSETS'])}/" if values["CHARACTERS_ASSETS"] else "",
+        f"^{ere(values['CHARACTERS_WINDOWS'])}/" if values["CHARACTERS_WINDOWS"] else "",
+    ]
+    values["RE_CHARACTERS"] = (
+        "|".join([path for path in character_paths if path] + pin) if values["CHARACTERS_DESIGN"] else never
+    )
+    values["RE_SOUNDS"] = (
+        "|".join([f"^{ere(values['SOUNDS_OUT'])}/[^/]+\\.wav$", f"^{ere(values['SOUNDS_RECIPES'])}$"] + pin)
+        if values["SOUNDS_OUT"] and values["SOUNDS_RECIPES"] else never
     )
     return values
 

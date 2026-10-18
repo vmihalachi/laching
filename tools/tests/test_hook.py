@@ -170,6 +170,49 @@ class PreToolUse(HookTestCase):
         self.assertTrue(self.blocked("Edit", file_path=str(self.root / "data/small.json")))
         self.assertFalse(self.blocked("Edit", file_path=str(self.root / "data/index.json")))
 
+    def refusal(self, path):
+        """The hook's answer to an Edit of `path`, "" when it allows it."""
+        done = self.run_hook("pre", {"session_id": "t", "tool_name": "Edit", "tool_input": {"file_path": str(self.root / path)}})
+        self.assertIn(done.returncode, (0, 2), done.stderr)
+        return done.stderr if done.returncode == 2 else ""
+
+    def test_the_generators_outputs_name_their_command(self):
+        path = self.root / "companion.json"
+        data = json.loads(path.read_text("utf8"))
+        data["characters"] = {"design": "design/characters", "swiftOut": "macos/FixtureCore/Sources/FixtureCore/Art"}
+        path.write_text(json.dumps(data), "utf8")
+        art = self.refusal("macos/FixtureCore/Sources/FixtureCore/Art/BigCatArt.swift")
+        self.assertIn("laching/tools/character.py` from design/characters/", art)
+        self.assertIn("laching/tools/character.py", self.refusal("conformance/characters/big-cat.json"),
+                      "the character vectors name character.py, not conformance.sh")
+        self.assertIn("laching/tools/conformance.sh", self.refusal("conformance/phrases.json"))
+        self.assertIn("laching/tools/synth.py` from the recipes in macos/scripts/sounds.py",
+                      self.refusal("macos/Fixture/Resources/Sounds/blip.wav"))
+        dev = self.refusal("macos/Fixture/Resources/Assets.xcassets/AppIcon-Dev.appiconset/icon_16x16.png")
+        self.assertIn("swift laching/tools/dev-icon.swift", dev)
+        for allowed in (
+            "design/characters/big-cat/big-cat.rig.json",  # the drawing is the source
+            "macos/FixtureCore/Sources/FixtureCore/Art/Pose.swift",  # hand-written code next to the art
+            "macos/scripts/sounds.py",
+            "macos/Fixture/Resources/Sounds/README.md",
+            "macos/Fixture/Resources/Assets.xcassets/AppIcon.appiconset/icon_16x16.png",  # the app's own renderer
+            "macos/Fixture/Resources/Assets.xcassets/AppIcon-Dev.appiconset/Contents.json",
+        ):
+            self.assertEqual(self.refusal(allowed), "", allowed)
+        # A raster skin's assets are character.py's too; a vector app's assets folder is the app's.
+        catalog = "macos/Fixture/Resources/Characters"
+        self.assertEqual(self.refusal(f"{catalog}/big-cat-body.imageset/Contents.json"), "")
+        data["characters"].update(mode="raster", assets=catalog, windowsAssets="windows/Fixture.App/Assets/Characters")
+        path.write_text(json.dumps(data), "utf8")
+        self.assertIn("character.py", self.refusal(f"{catalog}/big-cat-body.imageset/Contents.json"))
+        self.assertIn("character.py", self.refusal("windows/Fixture.App/Assets/Characters/big-cat-body.scale-200.png"))
+        self.assertEqual(self.refusal("windows/Fixture.App/Assets/Characters/README.md"), "")
+        # Without the sections, nothing is guarded.
+        del data["characters"], data["sounds"]
+        path.write_text(json.dumps(data), "utf8")
+        self.assertEqual(self.refusal("macos/FixtureCore/Sources/FixtureCore/Art/BigCatArt.swift"), "")
+        self.assertEqual(self.refusal("macos/Fixture/Resources/Sounds/blip.wav"), "")
+
     def test_codex_argv_commands(self):
         xcstrings = "macos/Fixture/Resources/Localizable.xcstrings"
         self.assertTrue(self.blocked("Bash", command=["cat", xcstrings]))
