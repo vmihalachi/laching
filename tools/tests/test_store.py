@@ -14,6 +14,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from support import TOOLS, FixtureAppTestCase
 
@@ -23,6 +24,30 @@ import listing as listing_module  # noqa: E402
 import push  # noqa: E402
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 16
+
+
+def png(width, height, alpha=False, salt=b""):
+    """A PNG's signature and IHDR chunk, enough for push.png_info."""
+    ihdr = width.to_bytes(4, "big") + height.to_bytes(4, "big") + bytes([8, 6 if alpha else 2, 0, 0, 0])
+    return b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + ihdr + salt
+
+
+# The App Asset Library's reference data, trimmed: a header spec for 3840x1646 on App Store Connect's one group
+# (DEFAULT_PROFILE, platform ANY), an iPhone and a Mac group, and one for another size.
+HEADER_REF = {
+    "features": [{"featureId": "APP_STORE_VERSIONS", "placementPolicies": [{"placementType": push.HEADER, "groupLimits": [
+        {"groupIds": ["DEFAULT_PROFILE", "IPHONE_PROFILE", "MAC_PROFILE", "IPHONE_OTHER"], "maxCount": 1}]}]}],
+    "placementProfileGroups": [{"placementProfileGroupId": g, "platform": p} for g, p in (
+        ("DEFAULT_PROFILE", "ANY"), ("IPHONE_PROFILE", "IPHONE_APP_STORE"), ("MAC_PROFILE", "MAC_APP_STORE"),
+        ("IPHONE_OTHER", "IPHONE_APP_STORE"))],
+    "imageSpecs": [{"specId": "wide", "compatiblePlacementTypes": [push.HEADER], "dimensions": {
+                        "minWidth": 3840, "maxWidth": 3840, "minHeight": 1646, "maxHeight": 1646}},
+                   {"specId": "other", "compatiblePlacementTypes": [push.HEADER], "dimensions": {
+                        "minWidth": 1920, "maxWidth": 1920, "minHeight": 1080, "maxHeight": 1080}}],
+    "placementTypes": [{"placementTypeId": push.HEADER, "specMappings": [
+        {"placementGroupId": "DEFAULT_PROFILE", "specs": ["wide"]}, {"placementGroupId": "IPHONE_PROFILE", "specs": ["wide"]},
+        {"placementGroupId": "MAC_PROFILE", "specs": ["wide"]}, {"placementGroupId": "IPHONE_OTHER", "specs": ["other"]}]}],
+}
 
 
 class FakeApi:
@@ -66,6 +91,17 @@ class FakeApi:
 
     def request(self, method, path, body=None):
         self.calls.append((method, path))
+        if method == "GET" and path.startswith("/v1/appAssetLibraryRefData"):
+            return {"data": [{"type": "appAssetLibraryRefData", "id": "1", "attributes": HEADER_REF}]}
+        if method == "GET" and path.endswith("/assetLibrary"):
+            return {"data": {"type": "appAssetLibraries", "id": "library"}}
+        if method == "GET" and "/placements" in path:
+            placements = self.children("appAssetLibraryPlacements", path.split("/")[3])
+            images = {p["relationships"]["image"][1] for p in placements}
+            return {"data": [{**p, "relationships": {"image": {"data": {"type": "appAssetLibraryImages",
+                                                                         "id": p["relationships"]["image"][1]}}}}
+                             for p in placements],
+                    "included": [self.objects[("appAssetLibraryImages", i)] for i in images]}
         if method == "GET" and path.endswith("/appStoreReviewDetail"):
             details = self.children("appStoreReviewDetails", path.rsplit("/", 2)[1])
             return {"data": details[0] if details else None}
@@ -80,10 +116,11 @@ class FakeApi:
                                           for o in self.children(kind, parent)):
             raise push.ApiError(f"409 Entity with locale: {attributes['locale']} already exists.")
         obj = self.add(kind, attributes, parent)
+        obj["relationships"] = relationships
         if kind == "appInfoLocalizations":  # like App Store Connect: the editable version gets the language too
             for version in self.children("appStoreVersions", self.app_id):
                 self.add("appStoreVersionLocalizations", {"locale": attributes["locale"]}, version["id"])
-        if kind in ("appScreenshots", "appPreviews"):
+        if kind in ("appScreenshots", "appPreviews", "appAssetLibraryImages"):
             obj["attributes"]["uploadOperations"] = []
         return obj
 
@@ -335,6 +372,27 @@ class StoreTests(FixtureAppTestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("need store.apple.ios", result.stderr)
 
+    def test_a_push_for_one_platform_leaves_the_other_platforms_versions_alone(self):
+        self.enable_ios()
+        self.write_ios_page()
+        api, _ = self.setup_app()
+
+        def push_(*args):
+            argv = ["push.py", "--create", "--apply", *args, "en"]
+            with mock.patch.object(push, "load", return_value=self.listing), \
+                    mock.patch.object(check, "run", return_value=True), mock.patch.object(push, "Client", return_value=api), \
+                    mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
+                push.main()
+            return {(v["attributes"]["platform"], v["attributes"]["versionString"])
+                    for (k, _), v in api.objects.items() if k == "appStoreVersions"}
+
+        created = push_("--version", "1.0.0", "--only", "ios-text,review")
+        self.assertIn(("IOS", "1.0.0"), created)
+        self.assertNotIn(("MAC_OS", "1.0.0"), created, "the iPhone's version number isn't the Mac's")
+        created = push_("--version", "1.0.3", "--only", "text,review")
+        self.assertIn(("MAC_OS", "1.0.3"), created)
+        self.assertNotIn(("IOS", "1.0.3"), created, "the Mac's review notes don't make an iOS version")
+
     def test_dry_run_writes_nothing(self):
         api, _ = self.setup_app()
         sync = push.Sync(self.listing, api, apply=False, log=discard)
@@ -444,7 +502,8 @@ class StoreTests(FixtureAppTestCase):
         api.add("appScreenshots", {"fileName": "1.png"}, phone["id"])
         out = self.status(api)
         self.assertIn("iOS Version 1.0.2: PREPARE_FOR_SUBMISSION", out)
-        self.assertIn('iOS en-US: 1 iPhone 6.9" screenshots, 0 iPad 13" screenshots, empty: supportUrl', out)
+        self.assertIn('iOS en-US: 1 iPhone 6.9" screenshots, 0 iPad 13" screenshots, 0 header placements, '
+                      'empty: supportUrl', out)
         needed = out.split("Still needed: ")[1]
         self.assertIn("a build on the iOS version page", needed)
         self.assertIn('iOS en-US iPad 13" screenshots', needed)
@@ -453,6 +512,87 @@ class StoreTests(FixtureAppTestCase):
         self.assertNotIn("iOS App Review contact", needed)
         self.assertIn("the App Review contact", needed, "the Mac's has no details")
         self.assertIn("en-US: 0 screenshots", out, "the Mac's lines read as before")
+
+    def configure(self, **apple):
+        path = self.root / "companion.json"
+        config = json.loads(path.read_text("utf8"))
+        for key, value in apple.items():
+            config["store"]["apple"][key] = value
+        path.write_text(json.dumps(config), "utf8")
+        self.listing = listing_module.load(self.root)
+
+    def test_the_release_type_follows_the_config_on_an_editable_version(self):
+        api, version = self.setup_app()
+        push.Sync(self.listing, api, apply=True, log=discard).version("1.0.2", False, None)
+        self.assertEqual(version["attributes"]["releaseType"], "MANUAL", "without the config it's left alone")
+
+        self.configure(releaseType="AFTER_APPROVAL")
+        sync = push.Sync(self.listing, api, apply=True, log=discard)
+        sync.version("1.0.2", False, None)
+        self.assertEqual(version["attributes"]["releaseType"], "AFTER_APPROVAL")
+        created = sync.version("1.0.3", True, None)
+        self.assertEqual(created["attributes"]["releaseType"], "AFTER_APPROVAL")
+
+        live = api.objects[("appStoreVersions", "1")]  # 1.0.1, READY_FOR_SALE
+        live["attributes"]["releaseType"] = "MANUAL"
+        api.calls.clear()
+        sync.version("1.0.1", False, None)
+        self.assertEqual(live["attributes"]["releaseType"], "MANUAL", "a locked version isn't touched")
+
+    def header_app(self):
+        self.enable_ios()
+        api, _ = self.setup_app()
+        ios = self.add_ios_version(api)
+        for locale in ("en-US", "de-DE"):
+            api.add("appStoreVersionLocalizations", {"locale": locale}, ios["id"])
+        sync = push.Sync(self.listing, api, apply=True, log=discard)
+        return api, sync, ios
+
+    def placed(self, api, ios):
+        return sorted((loc["attributes"]["locale"], p["attributes"]["placementGroup"],
+                       api.objects[("appAssetLibraryImages", p["relationships"]["image"][1])]["attributes"]["fileName"])
+                      for loc in api.children("appStoreVersionLocalizations", ios["id"])
+                      for p in api.children("appAssetLibraryPlacements", loc["id"]))
+
+    def test_the_header_is_uploaded_once_and_placed_on_every_ios_language(self):
+        api, sync, ios = self.header_app()
+        header = self.listing.ios_header
+        header.parent.mkdir(parents=True, exist_ok=True)
+        header.write_bytes(png(3840, 1646))
+        sync.header(sync.text(["en", "de"], ios, extra=False, write=False, page=sync.ios))
+        self.assertEqual(sync.problems, [])
+        images = [o for (k, _), o in api.objects.items() if k == "appAssetLibraryImages"]
+        self.assertEqual(len(images), 1)
+        self.assertEqual(images[0]["attributes"]["category"], "CREATIVE_ASSETS")
+        self.assertTrue(images[0]["attributes"]["uploaded"])
+        name = images[0]["attributes"]["fileName"]
+        self.assertEqual(self.placed(api, ios), [(locale, group, name) for locale in ("de-DE", "en-US")
+                                                 for group in ("DEFAULT_PROFILE", "IPHONE_PROFILE")],
+                         "the groups that take the size, not the Mac's or another size's")
+
+        api.calls.clear()
+        sync.header(sync.text(["en", "de"], ios, extra=False, write=False, page=sync.ios))
+        self.assertEqual([c for c in api.calls if c[0] != "GET"], [], "a second run changes nothing")
+
+        header.write_bytes(png(3840, 1646, salt=b"new"))
+        sync.header(sync.text(["en", "de"], ios, extra=False, write=False, page=sync.ios))
+        self.assertEqual(sync.problems, [])
+        self.assertEqual(len([k for k, _ in api.objects if k == "appAssetLibraryImages"]), 2, "one more upload")
+        placed = self.placed(api, ios)
+        self.assertEqual(len(placed), 4)
+        self.assertNotIn(name, {f for _, _, f in placed}, "the old header is replaced everywhere")
+
+    def test_a_header_with_alpha_or_the_wrong_size_is_refused(self):
+        api, sync, ios = self.header_app()
+        header = self.listing.ios_header
+        header.parent.mkdir(parents=True, exist_ok=True)
+        for data, problem in ((png(3840, 1646, alpha=True), "alpha"), (png(3000, 1200), "3000x1200")):
+            header.write_bytes(data)
+            sync.problems.clear()
+            sync.header(sync.text(["en"], ios, extra=False, write=False, page=sync.ios))
+            self.assertEqual(len(sync.problems), 1)
+            self.assertIn(problem, sync.problems[0])
+        self.assertEqual([k for k, _ in api.objects if k.startswith("appAssetLibrary")], [])
 
     # MARK: import.py
 

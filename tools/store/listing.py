@@ -100,6 +100,7 @@ class Listing:
         self.app_id = apple.get("appId")
         self.platform = apple.get("platform", "MAC_OS")
         self.copyright = apple.get("copyright")
+        self.release_type = apple.get("releaseType")
         self.locale = dict(apple.get("locales", {}))
         self.extra_locales = dict(apple.get("extraLocales", {}))
         self.base_territory = apple.get("baseTerritory", "USA")
@@ -121,6 +122,7 @@ class Listing:
         ios = self.ios or {}
         self.iphone_screenshots = self.dir / ios.get("iphoneScreenshots", "apple/iphone")
         self.ipad_screenshots = self.dir / ios.get("ipadScreenshots", "apple/ipad")
+        self.ios_header = self.dir / ios.get("header", "apple/header.png")
         self.microsoft = config.get("store.microsoft")
         self.google = config.get("store.google")
 
