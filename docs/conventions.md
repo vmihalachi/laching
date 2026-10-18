@@ -8,6 +8,13 @@ The complete rules (moved from `AGENTS.md`, which keeps the short form).
 - **Swift 6 language mode** (strict concurrency; public value types are `Sendable`), macOS 14+, iOS 17+ (Swift), Windows 10+ (.NET), Android 8+ (Kotlin), no dependencies. `LachingCore` stays Foundation-only and `LachingCompanion`
   Foundation and Observation only (both build on Linux); anything that imports AppKit, SwiftUI, CoreAudio, AVFoundation,
   IOKit or Carbon goes in `LachingSystem`, `LachingShell` or `LachingCompanionUI`.
+- **Classes an app drives are `@MainActor`; the protocols injected into them aren't `Sendable`.**
+  `ReminderScheduler`, `CompanionCoordinator` and `CompanionSettings` (and so an app's subclass of it), like the UI's
+  models and watchers, are isolated to the main actor, so a call from a background queue is a compile error rather
+  than a data race. `Clock`, `IdleTimeProvider`, `BusyStateProvider`, `RandomSource` and
+  `PowerStateProvider` stay non-`Sendable`: the class that holds one calls it from its own actor, so a mock or an
+  app's provider needs no lock. The conformance generators that run those classes, and the test classes that call them, are
+  `@MainActor` too, with `async` test methods: Linux's XCTest can't run a synchronous main-actor test.
 - **Package code never names an app.** No app's skins, phrase bank, product ids, palette or voices, and no app name in
   a doc comment or a fixture: apps inject their bank, defaults, skins, palette and voices. The same goes for `tools/`,
   which reads everything app-specific from the app's `companion.json`.

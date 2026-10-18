@@ -3,8 +3,9 @@ import LachingCore
 import LachingTesting
 import XCTest
 
+@MainActor
 final class CompanionSettingsTests: XCTestCase {
-    func testDefaultsOnAFreshStore() {
+    func testDefaultsOnAFreshStore() async {
         let store = InMemorySettingsStore()
         let settings = CompanionSettings(store: store, defaults: .fixture)
         XCTAssertEqual(settings.channels, [.voice])
@@ -25,7 +26,7 @@ final class CompanionSettingsTests: XCTestCase {
         XCTAssertTrue(store.keys.isEmpty)
     }
 
-    func testChangesWriteThroughUnderStableKeys() {
+    func testChangesWriteThroughUnderStableKeys() async {
         let store = InMemorySettingsStore()
         let settings = CompanionSettings(store: store, defaults: .fixture)
         settings.channels = [.chime, .notification]
@@ -51,7 +52,7 @@ final class CompanionSettingsTests: XCTestCase {
         XCTAssertTrue(reloaded.hasCompletedOnboarding)
     }
 
-    func testFlavorsAndMutedLinesRoundTripAndReset() {
+    func testFlavorsAndMutedLinesRoundTripAndReset() async {
         let store = InMemorySettingsStore()
         let settings = CompanionSettings(store: store, defaults: .fixture)
         XCTAssertEqual(settings.phraseFlavors, FixtureIDs.flavors)
@@ -68,7 +69,7 @@ final class CompanionSettingsTests: XCTestCase {
         XCTAssertEqual(reloaded.mutedPhraseIDs, [])
     }
 
-    func testTheRetiredShortcutKeyIsIgnored() {
+    func testTheRetiredShortcutKeyIsIgnored() async {
         // 0.8 stored the global shortcut under "sayShortcut"; a value left from then reads as nothing and stays put.
         let store = InMemorySettingsStore()
         store.set(string: #"{"keyCode":3,"modifiers":6400,"key":"F"}"#, forKey: "sayShortcut")
@@ -77,7 +78,7 @@ final class CompanionSettingsTests: XCTestCase {
         XCTAssertEqual(settings.defaults, .fixture)
     }
 
-    func testUnknownStoredValuesFallBackToDefaults() {
+    func testUnknownStoredValuesFallBackToDefaults() async {
         let store = InMemorySettingsStore()
         store.set(string: "sometimes-ish", forKey: SettingsKeys.frequency)
         store.set(strings: ["voice", "drums"], forKey: SettingsKeys.channels)
@@ -90,7 +91,7 @@ final class CompanionSettingsTests: XCTestCase {
         XCTAssertEqual(settings.appearance, .system)
     }
 
-    func testSkinsAndFlavorsAreTheAppsIDs() {
+    func testSkinsAndFlavorsAreTheAppsIDs() async {
         let store = InMemorySettingsStore()
         let settings = CompanionSettings(store: store, defaults: .fixture)
         settings.skin = FixtureIDs.rasterSkin
@@ -103,7 +104,7 @@ final class CompanionSettingsTests: XCTestCase {
         XCTAssertEqual(reloaded.phraseFlavors, ["a", "retired"])
     }
 
-    func testDefaultsComeFromTheApp() {
+    func testDefaultsComeFromTheApp() async {
         var defaults = CompanionDefaults(skin: "one", phraseFlavors: ["x"])
         defaults.frequency = .chatty
         defaults.channels = [.voice, .chime]
@@ -115,7 +116,7 @@ final class CompanionSettingsTests: XCTestCase {
         XCTAssertEqual(settings.defaults, defaults)
     }
 
-    func testResetKeepsOnboardingDone() {
+    func testResetKeepsOnboardingDone() async {
         let store = InMemorySettingsStore()
         let settings = CompanionSettings(store: store, defaults: .fixture)
         settings.frequency = .every2Hours
@@ -129,7 +130,7 @@ final class CompanionSettingsTests: XCTestCase {
         XCTAssertFalse(SettingsKeys.resettable.contains(SettingsKeys.hasCompletedOnboarding))
     }
 
-    func testResetRemovesTheStoredValuesSoLaterDefaultsApply() {
+    func testResetRemovesTheStoredValuesSoLaterDefaultsApply() async {
         let store = InMemorySettingsStore()
         let settings = CompanionSettings(store: store, defaults: .fixture)
         settings.frequency = .every2Hours
@@ -153,7 +154,7 @@ final class CompanionSettingsTests: XCTestCase {
         XCTAssertTrue(reloaded.hasCompletedOnboarding)
     }
 
-    func testDesktopSettingsRoundTripAndReset() {
+    func testDesktopSettingsRoundTripAndReset() async {
         let store = InMemorySettingsStore()
         let settings = CompanionSettings(store: store, defaults: .fixture)
         XCTAssertFalse(settings.showOnDesktop)
@@ -178,7 +179,7 @@ final class CompanionSettingsTests: XCTestCase {
         XCTAssertNil(store.integers(forKey: SettingsKeys.desktopPosition))
     }
 
-    func testAnUnreadableDesktopPositionMeansTheCorner() {
+    func testAnUnreadableDesktopPositionMeansTheCorner() async {
         let store = InMemorySettingsStore()
         store.set(integers: [12], forKey: SettingsKeys.desktopPosition)
         store.set(string: "huge", forKey: SettingsKeys.desktopSize)
@@ -187,7 +188,7 @@ final class CompanionSettingsTests: XCTestCase {
         XCTAssertEqual(settings.desktopSize, .medium)
     }
 
-    func testMannersMirrorTheSettings() {
+    func testMannersMirrorTheSettings() async {
         let settings = CompanionSettings(store: InMemorySettingsStore(), defaults: .fixture)
         settings.commentOnPower = false
         XCTAssertEqual(settings.manners, Manners(channels: [.voice], greetOnReturn: true, commentOnPower: false, commentOnAppearance: true))

@@ -9,6 +9,7 @@ public enum SettingsVector {
     public static let file = "settings.json"
 
     /// The tree for `defaults`, read back through a fresh `CompanionSettings` the way an app's first launch sees it.
+    @MainActor
     public static func base(defaults: CompanionDefaults) -> JSONValue {
         let s = CompanionSettings(store: InMemorySettingsStore(), defaults: defaults)
         func ints(_ values: [Int]) -> JSONValue { .array(values.map(JSONValue.int)) }

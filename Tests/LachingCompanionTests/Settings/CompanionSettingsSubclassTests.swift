@@ -28,8 +28,9 @@ private final class Count: @unchecked Sendable {
     var value = 0
 }
 
+@MainActor
 final class CompanionSettingsSubclassTests: XCTestCase {
-    func testAnAppsOwnKeyWritesThroughAndResets() {
+    func testAnAppsOwnKeyWritesThroughAndResets() async {
         let store = InMemorySettingsStore()
         let settings = AppSettings(store: store, defaults: .fixture)
         XCTAssertNil(settings.voice)
@@ -44,7 +45,7 @@ final class CompanionSettingsSubclassTests: XCTestCase {
         XCTAssertTrue(store.keys.isEmpty)
     }
 
-    func testBothTheBasesAndTheSubclasssPropertiesNotify() {
+    func testBothTheBasesAndTheSubclasssPropertiesNotify() async {
         let settings = AppSettings(store: InMemorySettingsStore(), defaults: .fixture)
         let base = Count()
         withObservationTracking {
@@ -67,7 +68,7 @@ final class CompanionSettingsSubclassTests: XCTestCase {
         XCTAssertEqual(own.value, 1)
     }
 
-    func testTheCoordinatorTakesTheSubclass() {
+    func testTheCoordinatorTakesTheSubclass() async {
         let settings = AppSettings(store: InMemorySettingsStore(), defaults: .fixture)
         let coordinator = CompanionCoordinator(
             settings: settings, bank: .fixture, language: "en", clock: MockClock(Date(timeIntervalSince1970: 0)), idle: MockIdle(),

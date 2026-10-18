@@ -6,7 +6,9 @@ import Foundation
 /// break that restarts the interval, holds a due reminder while the user is busy (a call, a full-screen app)
 /// and releases it after a grace period, and supports snooze, "after my next call" and pause. Time comes from
 /// the injected `Clock`, user state from the injected providers and any randomness (interval jitter) from the
-/// injected `RandomSource`, so every decision is reproducible: `conformance/scheduler` pins it.
+/// injected `RandomSource`, so every decision is reproducible: `conformance/scheduler` pins it. Isolated to the main
+/// actor: create and drive it there (the providers it holds are called from it, so they need not be thread-safe).
+@MainActor
 public final class ReminderScheduler {
     public private(set) var config: SchedulerConfig
     private let clock: Clock

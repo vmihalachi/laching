@@ -5,13 +5,14 @@ import LachingCore
 /// rules, picks a line and hands the shell a `Delivery`. Time comes from the clock, system state from the
 /// shell's `Snapshot`, randomness from a seeded source, so a whole day of the companion replays exactly
 /// (`conformance/companion/quiet`). The app injects its bank and its language; purchases are not its business (the
-/// app keeps `settings.skin` to a skin the user may use). Never sleeps, never touches the system. Not thread-safe:
-/// the shell calls it from one actor.
+/// app keeps `settings.skin` to a skin the user may use). Never sleeps, never touches the system. Isolated to the main
+/// actor, like the scheduler and the settings it holds: the shell creates and calls it there.
+@MainActor
 public final class CompanionCoordinator {
     /// Welcome-back lines are at most this far apart.
-    public static let welcomeBackCooldown: TimeInterval = 30 * 60
+    nonisolated public static let welcomeBackCooldown: TimeInterval = 30 * 60
     /// How many recent ids are remembered (the picker skips the last `PhrasePicker.recentWindow`).
-    public static let recentCapacity = 24
+    nonisolated public static let recentCapacity = 24
 
     public let settings: CompanionSettings
     public let bank: PhraseBank

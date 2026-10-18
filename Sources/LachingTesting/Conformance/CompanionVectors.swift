@@ -3,7 +3,9 @@ import LachingCompanion
 
 /// A companion app's pinned content, for `ConformanceSuite.companion`: the bank and its flavors, the defaults, the
 /// characters, `settings.json`'s tree and the case lists (usually `PickerVector.standardCases` and
-/// `QuietTimeline.standardCases` plus the app's own).
+/// `QuietTimeline.standardCases` plus the app's own). Main-actor isolated, so a conforming type is too and builds
+/// `settings` through `SettingsVector.base(defaults:)`.
+@MainActor
 public protocol CompanionVectors {
     static var bank: PhraseBank { get }
     /// The flavors in display order.
@@ -20,6 +22,7 @@ extension ConformanceSuite {
     /// A companion app's whole suite over `vectors`: `phrases.json`, `settings.json`, `picker/`, `quiet/` and the
     /// characters' poses, generated and replayed. `picker/` and `quiet/` are the generator's own folders (a file no case
     /// writes is stale); `characters/` also holds the compiled art, so it isn't.
+    @MainActor
     public static func companion<Vectors: CompanionVectors>(
         _ vectors: Vectors.Type, root: URL, regenerateHint: String
     ) -> ConformanceSuite {
