@@ -13,7 +13,7 @@ or `$COMPANION_ROOT`); the schema is [`companion.schema.json`](companion.schema.
 | `phrases.py` | Keeps the catalog's `phrase.<id>` (and `.n` for jokes) keys in step with `phrases.json`; `check` also reports a phrase whose weight is under 1. |
 | `voice.py`, `voice-review.html` | Records, reviews and publishes the character's voices with ElevenLabs; a clip per joke part. |
 | `character.py` | Compiles the app's skins (vector or raster; `characters` in `companion.json`) to the JSON and Swift both cores draw from; `--check`. |
-| `synth.py` | The sound engine; the app's recipes module defines `sounds(engine)`. |
+| `synth.py` | The sound engine; the app's recipes module defines `sounds(engine)`; `--check`. |
 | `fonts.py` | Builds the display faces from pinned variable fonts (`fonts`, plus `fonts.faces` for an upright beside an italic; needs fontTools). |
 | `screenshots.sh`, `store-screenshots.py` | Window captures in light and dark (failing on the problems `ScreenshotCapture` reports: content taller than its window, a shot not drawn or written; `--only` runs hidden, so the Mac stays usable, with `--front` for key windows); App Store images (`--lang LANG|all`: another language's windows are captured in it first), and Google Play's from the Android captures (`--canvas android-phone` 1080 × 1920 with the caption above the screen, `android-tablet` 2560 × 1600; Play's size limits checked) (needs Pillow). |
 | `check-layout.sh` | `screenshots.sh` in every language (or the ones named), side by side and hidden, naming the languages whose windows don't fit. |
@@ -97,7 +97,12 @@ An app without a phrase bank or a character (a reminder app, say) leaves `charac
    `.github/hooks/<app>.json`: `PreToolUse` and `PostToolUse` running `python3 laching/tools/hooks/hook.py pre|post`,
    and for Copilot's cloud coding agent `agentStop` running `hook.py cloud-stop` (the app's `verify.sh` on the branch,
    inside GitHub Actions only). The hook reads the guards, the slow-check table and the parity patterns (`hooks.*`) from `companion.json`, and
-   fails open when the file is missing or invalid. It also refuses to load any text file over `hooks.bigFileLines`
+   fails open when the file is missing or invalid. It guards what Laching's generators write without being told, each
+   refusal naming the command that rewrites the file: `character.py`'s character vectors, `<Skin>Art.swift` files and,
+   for raster skins, its asset folders (from `characters`); `synth.py`'s `.wav` files (from `sounds`); and
+   `dev-icon.swift`'s `AppIcon-Dev.appiconset` PNGs under `mac.dir`. A file only the app's own script makes (its
+   `AppIcon.appiconset` from its icon renderer) is a `hooks.guards` entry. `verify.sh` runs `character.py --check` and
+   `synth.py --check` when their inputs, their outputs or the `laching/` pin change. It also refuses to load any text file over `hooks.bigFileLines`
    lines (600) whole: a `Read` without `offset`/`limit`, `cat`, or `sed` without a range; the refusal names the outline
    command (`grep -n '^\(func\|class\|...\)'`) to run first. On `Stop` it tells the user, once per compaction cycle,
    when Claude's context is past `hooks.longSessionTokens` (130000; 0 disables), so the next task goes to a fresh

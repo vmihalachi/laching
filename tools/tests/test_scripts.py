@@ -409,6 +409,34 @@ elif command == "shell":
         self.assertIn("ok    Laching pins agree", result.stdout, result.stderr)
         self.assertEqual(store_line(result), [], "no store section: --all has no store check to run")
 
+    def test_verify_checks_the_generators_outputs(self):
+        from test_character import write_skin
+
+        ran = lambda result: [line for line in result.stdout.splitlines() if "--check" in line]
+        recipes = self.run_script("verify.sh", "--fast", "--", "macos/scripts/sounds.py")
+        self.assertEqual(ran(recipes), ["FAIL  synth.py --check"], "the fixture's sounds aren't written yet")
+        self.assertEqual(self.run_script("synth.py").returncode, 0)
+        wav = "macos/Fixture/Resources/Sounds/blip.wav"
+        self.assertEqual(ran(self.run_script("verify.sh", "--fast", "--", wav)), ["ok    synth.py --check"])
+        (self.root / wav).write_bytes(b"RIFF")
+        self.assertEqual(ran(self.run_script("verify.sh", "--fast", "--", wav)), ["FAIL  synth.py --check"])
+        self.assertEqual(ran(self.run_script("verify.sh", "--fast", "--", "laching")), ["FAIL  synth.py --check"],
+                         "a pin bump can change the generator")
+
+        config = self.root / "companion.json"
+        data = json.loads(config.read_text("utf8"))
+        data["characters"] = {"design": "design/characters", "swiftOut": "macos/FixtureCore/Sources/FixtureCore/Art"}
+        config.write_text(json.dumps(data), "utf8")
+        write_skin(self.root / "design" / "characters", "tiny")
+        self.assertEqual(self.run_script("character.py").returncode, 0)
+        rig = "design/characters/tiny/tiny.rig.json"
+        self.assertEqual(ran(self.run_script("verify.sh", "--fast", "--", rig)), ["ok    character.py --check"])
+        art = "macos/FixtureCore/Sources/FixtureCore/Art/TinyArt.swift"
+        (self.root / art).write_text("// edited by hand\n", "utf8")
+        for path in (art, "conformance/characters/tiny.json", rig):
+            self.assertEqual(ran(self.run_script("verify.sh", "--fast", "--", path)), ["FAIL  character.py --check"], path)
+        self.assertEqual(ran(self.run_script("verify.sh", "--fast", "--", "notes.md")), [])
+
     def commit_app(self) -> None:
         """The fixture app as a repository, with laching/ a checkout of its own on the pinned tag."""
         laching = self.root / "laching"
