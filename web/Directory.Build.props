@@ -1,0 +1,27 @@
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <RepoRoot>$(MSBuildThisFileDirectory)</RepoRoot>
+    <!-- One version for every package, set by the release workflow from the tag (vX.Y.Z). -->
+    <WeblingVersion Condition="'$(WeblingVersion)' == ''">0.1.0</WeblingVersion>
+    <Version>$(WeblingVersion)</Version>
+    <Authors>Vlad Mihalachi</Authors>
+    <Copyright>© 2026 Vlad Mihalachi</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://vmihalachi.github.io/webling/</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/vmihalachi/webling</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>webling;aspnetcore;blazor;aspire;cloudflare</PackageTags>
+    <IsPackable>false</IsPackable>
+    <!-- Appended to every package description, so it shows on nuget.org. -->
+    <WeblingNotice>No support: built for my own projects and shared as is; issues and pull requests aren't monitored, and any release may change or break things.</WeblingNotice>
+  </PropertyGroup>
+
+</Project>

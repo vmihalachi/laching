@@ -1,0 +1,89 @@
+<Project>
+
+  <!--
+    Tailwind CSS v4 standalone CLI. No Node or npm anywhere.
+
+    Before each build, TailwindInstall downloads the pinned CLI for the build machine's OS and architecture into
+    $(WeblingToolsDirectory)tailwindcss/<version>/ if it is missing, and checks its SHA-256. TailwindBuild then
+    compiles $(TailwindInput) into $(TailwindOutput) whenever the stylesheet or a component changes. Keep the output
+    out of source control.
+
+    The version and the checksums are part of the package: a Tailwind upgrade is a Webling release. To upgrade,
+    change TailwindVersion and replace every Sha256 below with the values from the release's sha256sums.txt:
+    https://github.com/tailwindlabs/tailwindcss/releases
+  -->
+  <PropertyGroup>
+    <TailwindVersion>4.3.3</TailwindVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Keyed by the .NET runtime identifier of the build machine. -->
+    <TailwindCli Include="osx-arm64" Asset="tailwindcss-macos-arm64" Sha256="cdf646702987a743464dff4d9c60fd4480d1c1e73dd819a9a67f1078815dce9d" />
+    <TailwindCli Include="osx-x64" Asset="tailwindcss-macos-x64" Sha256="7922e0953f2110c05976e3bf58f14e643d90427575e766b7d433f5f80cbee7e1" />
+    <TailwindCli Include="linux-x64" Asset="tailwindcss-linux-x64" Sha256="dc61b3ac6b8c9ca874c0cc4c57b2409791a64c5540404ca5f5367360babc313a" />
+    <TailwindCli Include="linux-arm64" Asset="tailwindcss-linux-arm64" Sha256="55fd0b241214eff3de1e8ee4f22796662f2d2e7a49bcfca7477cfd0bac398195" />
+    <TailwindCli Include="linux-musl-x64" Asset="tailwindcss-linux-x64-musl" Sha256="a04d34ceacc8f52cbe8920ad846cdeb61d3d0021dba32db0d1f77c9d9fad7a6c" />
+    <TailwindCli Include="linux-musl-arm64" Asset="tailwindcss-linux-arm64-musl" Sha256="71ea4be79c9de9827545682df3e040053fb535d37c71ed2cfdedf9385a0868e0" />
+    <TailwindCli Include="win-x64" Asset="tailwindcss-windows-x64.exe" Sha256="e0e260ce048014e9268f6237ff18f8ccf02cef521cbd0ae04e82c2cdf7aa3955" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'@(TailwindSource)' == ''">
+    <TailwindSource Include="Styles/**/*.css;Components/**/*.razor;Components/**/*.cs" />
+  </ItemGroup>
+
+  <Target Name="TailwindInstall" Condition="'$(DesignTimeBuild)' != 'true'">
+    <ItemGroup>
+      <_TailwindCli Include="@(TailwindCli)" Condition="'%(Identity)' == '$(NETCoreSdkRuntimeIdentifier)'" />
+    </ItemGroup>
+
+    <PropertyGroup>
+      <_TailwindAsset>@(_TailwindCli->'%(Asset)')</_TailwindAsset>
+      <_TailwindSha256>@(_TailwindCli->'%(Sha256)')</_TailwindSha256>
+      <_TailwindDirectory>$([MSBuild]::EnsureTrailingSlash('$(WeblingToolsDirectory)'))tailwindcss/$(TailwindVersion)/</_TailwindDirectory>
+      <TailwindExecutable>$(_TailwindDirectory)$(_TailwindAsset)</TailwindExecutable>
+      <!-- A name of its own, so two builds downloading at once never write the same file. -->
+      <_TailwindDownloadName>$(_TailwindAsset).$([System.Guid]::NewGuid().ToString('N')).download</_TailwindDownloadName>
+      <_TailwindDownload>$(_TailwindDirectory)$(_TailwindDownloadName)</_TailwindDownload>
+    </PropertyGroup>
+
+    <Error Condition="'$(_TailwindAsset)' == ''" Text="Tailwind CSS $(TailwindVersion) has no standalone CLI for '$(NETCoreSdkRuntimeIdentifier)'." />
+
+    <DownloadFile Condition="!Exists('$(TailwindExecutable)')"
+                  SourceUrl="https://github.com/tailwindlabs/tailwindcss/releases/download/v$(TailwindVersion)/$(_TailwindAsset)"
+                  DestinationFolder="$(_TailwindDirectory)"
+                  DestinationFileName="$(_TailwindDownloadName)"
+                  Retries="3" />
+
+    <GetFileHash Condition="!Exists('$(TailwindExecutable)')" Files="$(_TailwindDownload)" Algorithm="SHA256">
+      <Output TaskParameter="Hash" PropertyName="_TailwindDownloadSha256" />
+    </GetFileHash>
+
+    <Delete Condition="!Exists('$(TailwindExecutable)') and '$(_TailwindDownloadSha256)' != '$(_TailwindSha256)'" Files="$(_TailwindDownload)" />
+    <Error Condition="!Exists('$(TailwindExecutable)') and '$(_TailwindDownloadSha256)' != '$(_TailwindSha256)'"
+           Text="The downloaded $(_TailwindAsset) has SHA-256 $(_TailwindDownloadSha256); expected $(_TailwindSha256)." />
+
+    <Move Condition="!Exists('$(TailwindExecutable)')" SourceFiles="$(_TailwindDownload)" DestinationFiles="$(TailwindExecutable)" />
+    <!-- Another build finished its download first. -->
+    <Delete Condition="Exists('$(_TailwindDownload)')" Files="$(_TailwindDownload)" />
+    <Exec Condition="!$([MSBuild]::IsOSPlatform('Windows'))" Command="chmod +x &quot;$(TailwindExecutable)&quot;" />
+  </Target>
+
+  <Target Name="TailwindBuild"
+          BeforeTargets="BeforeBuild"
+          DependsOnTargets="TailwindInstall"
+          Condition="'$(DesignTimeBuild)' != 'true'"
+          Inputs="@(TailwindSource);$(TailwindInput);$(MSBuildProjectFullPath)"
+          Outputs="$(TailwindOutput)">
+    <Exec Command="&quot;$(TailwindExecutable)&quot; --input &quot;$(TailwindInput)&quot; --output &quot;$(TailwindOutput)&quot; --minify"
+          WorkingDirectory="$(MSBuildProjectDirectory)" />
+    <!-- Tailwind leaves an unchanged output untouched; update its time so the target stays incremental. -->
+    <Touch Files="$(TailwindOutput)" />
+
+    <!-- On a clean checkout the output did not exist when wwwroot was globbed, so add it now. -->
+    <ItemGroup>
+      <Content Remove="$(TailwindOutput)" />
+      <Content Include="$(TailwindOutput)" />
+    </ItemGroup>
+  </Target>
+
+</Project>

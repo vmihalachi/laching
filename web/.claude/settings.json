@@ -1,0 +1,35 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Bash",
+        "hooks": [
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard.py\"", "timeout": 10 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "python3 -I \"$CLAUDE_PROJECT_DIR/.claude/hooks/validate.py\" record", "timeout": 5 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 -I \"$CLAUDE_PROJECT_DIR/.claude/hooks/validate.py\" check", "timeout": 600, "statusMessage": "Running the checks on the files this session edited" }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact|resume",
+        "hooks": [
+          { "type": "command", "command": "python3 -I \"$CLAUDE_PROJECT_DIR/.claude/hooks/validate.py\" resume", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>Webling.Images</PackageId>
+    <Description>Image uploads with SkiaSharp: format detection by magic bytes (PNG, JPEG, WebP; HEIC recognized and refused; PDF), a stream that stops at a size limit, and re-encoding to upright, metadata-free sRGB WebP in several sizes or to JPEG on white.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SkiaSharp" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" />
+  </ItemGroup>
+
+</Project>

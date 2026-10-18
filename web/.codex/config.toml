@@ -1,0 +1,32 @@
+# Model preferences and machine connections stay in ~/.codex/config.toml.
+[features]
+hooks = true
+
+# Microsoft's documentation, first-party and read-only.
+[mcp_servers.microsoft-learn]
+url = "https://learn.microsoft.com/api/mcp"
+
+# The read guard Claude Code runs too (.claude/hooks/guard.py).
+[[hooks.PreToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 'python3 "$(git rev-parse --show-toplevel)/.claude/hooks/guard.py"'
+timeout = 10
+
+# The edit record and Stop check Claude Code runs too (.claude/hooks/validate.py, validate.json).
+[[hooks.PostToolUse]]
+matcher = "^apply_patch$"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = 'python3 -I "$(git rev-parse --show-toplevel)/.claude/hooks/validate.py" record'
+timeout = 5
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = 'python3 -I "$(git rev-parse --show-toplevel)/.claude/hooks/validate.py" check'
+statusMessage = "Running the checks on the files this session edited"
+timeout = 600

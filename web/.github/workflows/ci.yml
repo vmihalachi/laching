@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  pull_request:
+    paths-ignore:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  schedule:
+    # Mondays: catches a change in Cloudflare's IP ranges before an app's deployment does.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  test:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      WEBLING_TEST_POSTGRES: Host=localhost;Port=5432;Username=postgres;Password=postgres
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Check formatting
+        run: dotnet format --verify-no-changes
+
+      - name: Build
+        run: dotnet build -c Release
+
+      - name: Test
+        run: dotnet test -c Release --no-build
+
+  # Webling.Tailwind downloads a different CLI on each OS.
+  tailwind:
+    if: github.event_name != 'schedule'
+    name: Tailwind sample on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Build the sample with the packed package
+        shell: bash
+        run: scripts/tailwind-sample.sh
+
+  cloudflare-ranges:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compare the bundled list with cloudflare.com/ips-v4
+        run: |
+          curl --fail --silent --show-error https://www.cloudflare.com/ips-v4 --output "$RUNNER_TEMP/ips-v4.txt"
+          if ! diff <(tr -d '\r' < "$RUNNER_TEMP/ips-v4.txt" | sed '/^$/d' | sort) \
+                    <(sed '/^$/d' src/Webling.Aspire/cloudflare-ips-v4.txt | sort); then
+            echo "::error::Cloudflare's IPv4 ranges changed. Update src/Webling.Aspire/cloudflare-ips-v4.txt and release."
+            exit 1
+          fi

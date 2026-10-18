@@ -1,0 +1,12 @@
+<Project>
+
+  <!-- After the project file, where IsPackable and Description are set. -->
+  <PropertyGroup Condition="'$(IsPackable)' == 'true'">
+    <PackageDescription>$(Description) $(WeblingNotice)</PackageDescription>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <None Include="$(RepoRoot)README.md" Pack="true" PackagePath="/" Visible="false" />
+  </ItemGroup>
+
+</Project>

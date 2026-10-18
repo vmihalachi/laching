@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!--
+    Built by scripts/tailwind-sample.sh against the packed Webling.Tailwind, never by the solution. CI builds it on
+    Linux, Windows and macOS.
+  -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Webling.Tailwind" Version="$(WeblingTailwindVersion)" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

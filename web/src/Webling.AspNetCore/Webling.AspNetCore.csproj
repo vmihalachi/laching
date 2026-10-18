@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>Webling.AspNetCore</PackageId>
+    <Description>ASP.NET Core pieces for a site behind Cloudflare: an origin check with a shared secret that hides health endpoints and trusts CF-Connecting-IP only after it, security headers with a per-request CSP nonce, and shared-cache headers for public pages that stay private for signed-in visitors.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+</Project>

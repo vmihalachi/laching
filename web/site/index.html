@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Webling: building blocks for small sites behind Cloudflare</title>
+<meta name="description" content="Webling is a set of MIT NuGet packages for small ASP.NET Core and Blazor sites on Azure Container Apps behind Cloudflare: a PostgreSQL job queue, origin protection and security headers, Turnstile and cache purges, Aspire ingress, Tailwind without Node, and image uploads.">
+<meta name="color-scheme" content="light dark">
+<meta property="og:title" content="Webling">
+<meta property="og:description" content="Building blocks for small ASP.NET Core and Blazor sites behind Cloudflare. The web sibling of Deskling. MIT.">
+<meta property="og:type" content="website">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="./" aria-label="Webling home">
+      <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="2" y="2" width="28" height="28" rx="8" fill="currentColor"/><rect x="8" y="8" width="7" height="7" rx="1.8" fill="var(--bg)"/><rect x="17" y="8" width="7" height="7" rx="1.8" fill="var(--bg)"/><rect x="8" y="17" width="7" height="7" rx="1.8" fill="var(--bg)"/><rect x="17" y="17" width="7" height="7" rx="1.8" fill="var(--accent-on-mark)"/></svg>
+      <span>Webling</span>
+    </a>
+    <nav aria-label="Primary">
+      <ul>
+        <li><a href="#packages">Packages</a></li>
+        <li><a href="#jobs">Jobs</a></li>
+        <li><a href="#cloudflare">Cloudflare</a></li>
+        <li><a href="#install">Install</a></li>
+        <li><a class="gh" href="https://github.com/vmihalachi/webling"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <p class="version"><a href="https://github.com/vmihalachi/webling/blob/main/CHANGELOG.md">v0.1.0</a><span>.NET 10 · six packages · MIT</span></p>
+      <h1>Building blocks for small sites behind Cloudflare</h1>
+      <p class="lede">The parts every ASP.NET Core and Blazor site on Azure Container Apps needs and nobody wants to write twice: a job queue in PostgreSQL, origin protection, cache headers, Turnstile, Tailwind without Node, image uploads. The web sibling of <a href="https://vmihalachi.github.io/deskling/">Deskling</a>.</p>
+
+      <div class="install" data-tabs>
+        <div class="tablist" role="tablist" aria-label="Install with">
+          <button role="tab" id="i-cli" aria-selected="true" aria-controls="ip-cli">.NET CLI</button>
+          <button role="tab" id="i-proj" aria-selected="false" aria-controls="ip-proj" tabindex="-1">.csproj</button>
+        </div>
+        <div class="install-line" role="tabpanel" id="ip-cli" aria-labelledby="i-cli">
+          <code>dotnet add package Webling.Jobs</code>
+          <button class="copy" type="button" aria-label="Copy the dotnet command">Copy</button>
+        </div>
+        <div class="install-line" role="tabpanel" id="ip-proj" aria-labelledby="i-proj" hidden>
+          <code>&lt;PackageReference Include="Webling.Jobs" Version="0.1.0" /&gt;</code>
+          <button class="copy" type="button" aria-label="Copy the PackageReference line">Copy</button>
+        </div>
+      </div>
+
+      <div class="actions">
+        <a class="btn primary" href="https://github.com/vmihalachi/webling">View on GitHub</a>
+        <a class="btn" href="#packages">What's inside</a>
+      </div>
+    </div>
+
+    <div class="hero-code" data-tabs>
+      <div class="code-head">
+        <div class="tablist" role="tablist" aria-label="Project">
+          <button role="tab" id="c-web" aria-selected="true" aria-controls="cp-web">Web</button>
+          <button role="tab" id="c-worker" aria-selected="false" aria-controls="cp-worker" tabindex="-1">Worker</button>
+          <button role="tab" id="c-host" aria-selected="false" aria-controls="cp-host" tabindex="-1">AppHost</button>
+        </div>
+        <span class="code-file">Program.cs</span>
+      </div>
+<pre role="tabpanel" id="cp-web" aria-labelledby="c-web" tabindex="0"><code><span class="k">using</span> Webling.AspNetCore;
+<span class="k">using</span> Webling.Cloudflare;
+
+builder.AddCloudflareOrigin();
+builder.Services.AddTurnstile(config.GetSection(<span class="s">"Turnstile"</span>));
+builder.Services.AddPublicCaching(<span class="s">"__Host-session"</span>);
+
+<span class="k">var</span> app = builder.Build();
+<span class="c">// 403 unless the request came through your zone.</span>
+app.UseCloudflareOrigin();
+app.UseSecurityHeaders(nonce =&gt;
+    <span class="s">$"script-src 'self' 'nonce-{nonce}'"</span>);
+app.UseAuthentication();
+<span class="c">// [PublicPage] components: cached at the edge,</span>
+<span class="c">// private for signed-in visitors.</span>
+app.UsePublicPageCaching();</code></pre>
+<pre role="tabpanel" id="cp-worker" aria-labelledby="c-worker" tabindex="0" hidden><code><span class="k">using</span> Webling.Cloudflare;
+<span class="k">using</span> Webling.Jobs;
+
+builder.Services.AddDbContext&lt;<span class="t">AppDbContext</span>&gt;(...);
+builder.Services.AddJobDispatcher&lt;<span class="t">AppDbContext</span>&gt;(
+    config.GetSection(<span class="s">"Jobs"</span>));
+builder.Services.AddJobHandler&lt;<span class="t">ResizePhoto</span>, <span class="t">ResizePhotoHandler</span>&gt;();
+builder.Services.AddCloudflareCache(config.GetSection(<span class="s">"Cloudflare"</span>));
+
+<span class="c">// Anywhere, in the same SaveChanges as the upload:</span>
+db.EnqueueJob(<span class="k">new</span> <span class="t">ResizePhoto</span>(photo.Id), now);
+<span class="k">await</span> db.SaveChangesAsync();</code></pre>
+<pre role="tabpanel" id="cp-host" aria-labelledby="c-host" tabindex="0" hidden><code><span class="k">using</span> Webling.Aspire;
+
+web.PublishAsAzureContainerApp((_, app) =&gt;
+    app.UseCloudflareIngress(<span class="s">"www.example.com"</span>,
+        certificateName: <span class="s">"origin-ca"</span>));
+
+<span class="k">if</span> (builder.ExecutionContext.IsPublishMode)
+{
+    <span class="c">// Fails the deploy if Cloudflare changed its ranges.</span>
+    <span class="k">await</span> <span class="t">CloudflareIngress</span>.EnsureRangesCurrentAsync();
+    builder.RunJobBeforeApps(<span class="s">"migrations"</span>,
+        subscription, resourceGroup, <span class="s">"web"</span>, <span class="s">"worker"</span>);
+}</code></pre>
+    </div>
+  </div>
+</section>
+
+<section class="promises" aria-label="Principles">
+  <div class="wrap promise-grid">
+    <div>
+      <h2>Safe when misconfigured</h2>
+      <p>No origin secret outside Development: the app won't start. Turnstile unreachable: the check fails. No purge token: nothing is sent. A missing setting never turns into an open door.</p>
+    </div>
+    <div>
+      <h2>Your names, your strings</h2>
+      <p>Cookies, paths, job names and secrets come from your app and its configuration. The packages ship no text, and the job table uses explicit names whatever your EF naming convention is.</p>
+    </div>
+    <div>
+      <h2>Tested against the real thing</h2>
+      <p>The job queue runs against PostgreSQL, the middleware on TestServer, the Tailwind build on Linux, Windows and macOS. Cloudflare's IP list is checked every week.</p>
+    </div>
+  </div>
+</section>
+
+<section id="packages" class="section">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>What's inside</h2>
+      <p>Six packages, one version. Take the job queue alone, or the whole stack from AppHost to stylesheet.</p>
+    </div>
+
+    <div class="parts" role="table" aria-label="Packages">
+      <div class="parts-row pkgs parts-th" role="row">
+        <span role="columnheader">Package</span>
+        <span role="columnheader">Depends on</span>
+        <span role="columnheader">What it does</span>
+      </div>
+
+      <div class="parts-row pkgs" role="row">
+        <div role="cell" class="pkg"><code>Webling.Jobs</code></div>
+        <div role="cell" class="dep">EF Core</div>
+        <div role="cell">
+          <h3>Background jobs in PostgreSQL</h3>
+          <p>Enqueue in the same transaction as the change that caused the job. Replicas claim jobs with <code>FOR UPDATE SKIP LOCKED</code>, hold a 5-minute lease, retry with backoff and give the attempt back on shutdown. Old finished jobs are cleaned up.</p>
+          <p class="types"><code>EnqueueJob</code> <code>IJob</code> <code>IJobHandler&lt;T&gt;</code> <code>AddJobDispatcher&lt;TContext&gt;</code> <code>ApplyWeblingJobs</code></p>
+        </div>
+      </div>
+
+      <div class="parts-row pkgs" role="row">
+        <div role="cell" class="pkg"><code>Webling.AspNetCore</code></div>
+        <div role="cell" class="dep">ASP.NET Core</div>
+        <div role="cell">
+          <h3>Origin, headers and caching</h3>
+          <p>An origin check with a shared secret, health endpoints hidden from the edge, the client IP trusted only after the check. Security headers with a nonce per request. Edge caching for public pages that turns private when a personal cookie is present.</p>
+          <p class="types"><code>UseCloudflareOrigin</code> <code>UseSecurityHeaders</code> <code>GetCspNonce</code> <code>[PublicPage]</code> <code>PublicCaching</code></p>
+        </div>
+      </div>
+
+      <div class="parts-row pkgs" role="row">
+        <div role="cell" class="pkg"><code>Webling.Cloudflare</code></div>
+        <div role="cell" class="dep">HttpClient</div>
+        <div role="cell">
+          <h3>Turnstile and cache purges</h3>
+          <p>Verify a Turnstile token behind an interface your use cases can depend on. Purge changed pages from Cloudflare's cache by address, 30 to a request as the Free plan allows. No ASP.NET Core, so a worker can use it.</p>
+          <p class="types"><code>IHumanCheck</code> <code>TurnstileCheck</code> <code>CloudflareCache</code> <code>AddTurnstile</code></p>
+        </div>
+      </div>
+
+      <div class="parts-row pkgs" role="row">
+        <div role="cell" class="pkg"><code>Webling.Aspire</code></div>
+        <div role="cell" class="dep">Aspire 13.6</div>
+        <div role="cell">
+          <h3>Container Apps behind Cloudflare</h3>
+          <p>Ingress that admits only Cloudflare's IPv4 ranges, probes that pass <code>AllowedHosts</code>, an uploaded Origin CA certificate, and a deployment step that runs your migrations job before any app rolls out.</p>
+          <p class="types"><code>UseCloudflareIngress</code> <code>EnsureRangesCurrentAsync</code> <code>RunJobBeforeApps</code></p>
+        </div>
+      </div>
+
+      <div class="parts-row pkgs" role="row">
+        <div role="cell" class="pkg"><code>Webling.Tailwind</code></div>
+        <div role="cell" class="dep">Build only</div>
+        <div role="cell">
+          <h3>Tailwind without Node</h3>
+          <p>The pinned Tailwind v4 standalone CLI, downloaded once per user and checked against its SHA-256, compiles your stylesheet before each build that changed a style or a component. Nothing ships with your app.</p>
+          <p class="types"><code>TailwindInput</code> <code>TailwindOutput</code> <code>TailwindSource</code></p>
+        </div>
+      </div>
+
+      <div class="parts-row pkgs" role="row">
+        <div role="cell" class="pkg"><code>Webling.Images</code></div>
+        <div role="cell" class="dep">SkiaSharp</div>
+        <div role="cell">
+          <h3>Image uploads</h3>
+          <p>Formats recognized by their first bytes, HEIC refused with a reason, uploads cut off at a size limit, and photos re-encoded upright, in sRGB and without metadata, as WebP in several sizes or JPEG on white.</p>
+          <p class="types"><code>ImageSignature</code> <code>UploadStream</code> <code>ImageEncoder</code></p>
+        </div>
+      </div>
+    </div>
+
+    <p class="footnote">Every package grew out of Adjudeca and is used by it. Nothing here is a framework: each piece is a few hundred lines you could read in one sitting.</p>
+  </div>
+</section>
+
+<section id="jobs" class="section alt">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>A job that keeps failing</h2>
+      <p>Delivery is at least once, so handlers are idempotent. A failure goes back to <code>pending</code> with a growing delay and jitter, so jobs that failed together don't retry together. After the fifth attempt the job stays <code>failed</code> with its last error, for 30 days.</p>
+    </div>
+
+    <ol class="ladder" aria-label="Attempts of a failing job, with the defaults">
+      <li><span class="n">attempt 1</span><span class="chip err">fails</span><span class="wait">30 s <span>+ ≤20%</span></span><p>Back to pending.</p></li>
+      <li><span class="n">attempt 2</span><span class="chip err">fails</span><span class="wait">1 min <span>+ ≤20%</span></span><p>Doubles each time.</p></li>
+      <li><span class="n">attempt 3</span><span class="chip err">fails</span><span class="wait">2 min <span>+ ≤20%</span></span><p>Capped at 1 hour.</p></li>
+      <li><span class="n">attempt 4</span><span class="chip err">fails</span><span class="wait">4 min <span>+ ≤20%</span></span><p>Any replica may take it.</p></li>
+      <li><span class="n">attempt 5</span><span class="chip err">fails</span><span class="wait">failed</span><p>Kept with its error.</p></li>
+    </ol>
+
+    <p class="states" aria-label="Job states">
+      <span class="state">pending</span><span class="arrow">→</span><span class="state">running</span><span class="arrow">→</span><span class="state ok">done</span>
+      <span class="arrow">·</span> lease expired <span class="arrow">→</span> claimed again
+      <span class="arrow">·</span> host stopping <span class="arrow">→</span> <span class="state">pending</span>, attempt given back
+      <span class="arrow">·</span> last attempt <span class="arrow">→</span> <span class="state bad">failed</span>
+    </p>
+  </div>
+</section>
+
+<section id="cloudflare" class="section">
+  <div class="wrap split">
+    <div class="split-copy">
+      <h2>Only Cloudflare gets in. Only your zone gets past.</h2>
+      <p>Allowing Cloudflare's IP ranges at the ingress keeps the internet out, but any Cloudflare customer's zone can still reach your origin. A secret that only your zone's Transform Rule sends closes that gap, and the checks run before anything else in the pipeline.</p>
+      <p>Health probes from inside the environment still get through; the same paths requested through Cloudflare answer 404.</p>
+    </div>
+    <dl class="sources">
+      <div>
+        <dt><span class="os">ingress</span> Cloudflare's IPv4 ranges only</dt>
+        <dd>Bundled with the package and checked against cloudflare.com every week, and again when you deploy.</dd>
+      </div>
+      <div>
+        <dt><span class="os">app</span> <code>X-Origin-Secret</code> or 403</dt>
+        <dd>Compared in constant time, then removed from the request so nothing logs it. Outside Development the app refuses to start without a secret of at least 32 characters.</dd>
+      </div>
+      <div>
+        <dt><span class="os">app</span> Client IP after the check</dt>
+        <dd><code>CF-Connecting-IP</code> becomes the remote address only on requests that passed it, so rate limits see the visitor, never a spoofed header.</dd>
+      </div>
+      <div>
+        <dt><span class="os">edge</span> Cached, then purged</dt>
+        <dd>Public pages are cached for five minutes and served stale for ten more; the worker purges a page when its content changes. A visitor with a personal cookie always gets a private answer.</dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<section id="install" class="section alt">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Install</h2>
+      <p>One tag versions all six packages, so keep them on the same version. Webling is <code>0.x</code>: any minor version may change public types.</p>
+    </div>
+    <div class="install-grid">
+      <div class="install-card">
+        <h3>NuGet</h3>
+        <p class="req">.NET 10</p>
+<pre tabindex="0"><code>dotnet add package Webling.Jobs
+dotnet add package Webling.AspNetCore
+dotnet add package Webling.Cloudflare
+dotnet add package Webling.Aspire     <span class="c"># AppHost</span>
+dotnet add package Webling.Images
+
+<span class="c">&lt;!-- build only --&gt;</span>
+&lt;<span class="k">PackageReference</span> <span class="t">Include</span>=<span class="s">"Webling.Tailwind"</span> <span class="t">Version</span>=<span class="s">"0.1.0"</span>
+                  <span class="t">PrivateAssets</span>=<span class="s">"all"</span> /&gt;</code></pre>
+      </div>
+      <div class="install-card">
+        <h3>What it assumes</h3>
+        <p class="req">The stack it was built for; parts work alone</p>
+        <ul>
+          <li>PostgreSQL through EF Core for the job table (the claim is PostgreSQL SQL).</li>
+          <li>Cloudflare in front, with a Transform Rule that sends the origin secret.</li>
+          <li>Azure Container Apps, published by Aspire from CI, for the AppHost pieces.</li>
+          <li>Tailwind CSS v4; the standalone CLI exists for macOS, Linux (glibc and musl) and Windows x64.</li>
+        </ul>
+      </div>
+    </div>
+    <p class="notice"><strong>No support.</strong> Built for my own projects and shared as is: issues and pull requests aren't monitored, and any release may change or break things.</p>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <p>MIT licensed. © 2026 Vlad Mihalachi. The web sibling of <a href="https://vmihalachi.github.io/deskling/">Deskling</a>.</p>
+    <ul>
+      <li><a href="https://github.com/vmihalachi/webling">Source</a></li>
+      <li><a href="https://github.com/vmihalachi/webling/blob/main/CHANGELOG.md">Changelog</a></li>
+      <li><a href="https://www.nuget.org/packages?q=Webling">NuGet</a></li>
+      <li><a href="https://github.com/vmihalachi/webling/blob/main/LICENSE">License</a></li>
+    </ul>
+  </div>
+</footer>
+
+<script src="site.js" defer></script>
+</body>
+</html>

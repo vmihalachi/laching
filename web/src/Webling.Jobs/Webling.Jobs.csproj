@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>Webling.Jobs</PackageId>
+    <Description>A PostgreSQL job table for background work with EF Core: jobs enqueued in the same SaveChanges as the change that caused them, claimed with FOR UPDATE SKIP LOCKED, leased, retried with exponential backoff and cleaned up.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+    <PackageReference Include="OpenTelemetry" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Webling.Jobs.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,13 @@
+.DS_Store
+bin/
+obj/
+artifacts/
+*.nupkg
+*.user
+.vs/
+.idea/
+.vscode/
+.claude/settings.local.json
+.claude/worktrees/
+TestResults/
+tests/Webling.Tailwind.Sample/wwwroot/

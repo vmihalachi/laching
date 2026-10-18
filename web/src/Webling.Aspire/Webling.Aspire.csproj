@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>Webling.Aspire</PackageId>
+    <Description>Aspire AppHost pieces for Azure Container Apps: ingress that accepts only Cloudflare's IPv4 ranges with a Cloudflare Origin CA certificate, and a deployment step that runs a Container Apps job, such as database migrations, before the apps roll out.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.Azure.AppContainers" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- A copy of https://www.cloudflare.com/ips-v4; CI checks it every week. -->
+    <EmbeddedResource Include="cloudflare-ips-v4.txt" LogicalName="Webling.Aspire.cloudflare-ips-v4.txt" />
+  </ItemGroup>
+
+</Project>

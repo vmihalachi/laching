@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Build logic only: the package holds build/Webling.Tailwind.props and .targets, no assembly. -->
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>Webling.Tailwind</PackageId>
+    <Description>Tailwind CSS v4 in dotnet build, without Node: downloads the pinned standalone CLI for the build machine once per user, checks its SHA-256, and compiles the stylesheet before each build when a style or component changed.</Description>
+    <DevelopmentDependency>true</DevelopmentDependency>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <PackageTags>tailwind;tailwindcss;css;msbuild;blazor</PackageTags>
+    <!-- NU5128: no lib/ folder, on purpose. -->
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="build/Webling.Tailwind.props;build/Webling.Tailwind.targets" Pack="true" PackagePath="build/" />
+  </ItemGroup>
+
+</Project>

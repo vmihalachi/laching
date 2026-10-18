@@ -1,0 +1,25 @@
+{
+  "patterns": [
+    "^(src|tests)/.*\\.(cs|razor|resx|csproj|props|targets)$",
+    "^Directory\\.[A-Za-z]+\\.(props|targets)$"
+  ],
+  "exclude": [
+    "/(bin|obj)/"
+  ],
+  "checks": [
+    [
+      "scripts/verify.sh",
+      "--fast"
+    ]
+  ],
+  "format": [
+    "dotnet",
+    "format",
+    "Webling.sln",
+    "--verify-no-changes",
+    "--include"
+  ],
+  "format_patterns": [
+    "\\.cs$"
+  ]
+}

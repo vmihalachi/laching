@@ -1,0 +1,149 @@
+name: Release
+
+# A vX.Y.Z tag versions every package: this tests and packs the six packages, pushes them to NuGet.org through
+# Trusted Publishing (OIDC: no stored key; nuget.org → your account → Trusted Publishing → a policy for repository
+# vmihalachi/webling and workflow file release.yml, plus the NUGET_USER repository variable set to your nuget.org
+# username) and creates a GitHub release with the matching CHANGELOG section. Run it from Actions with a version to
+# have it create the tag on main (for sessions whose credentials can't push tags), or push the tag yourself.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to tag and release, without the v (must match a CHANGELOG.md section)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  # Decides the version and, for manual runs, puts the tag on this commit.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: v
+        name: Version from the tag or the input
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then v="${{ inputs.version }}"; else v="${GITHUB_REF_NAME#v}"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Releasing $v"
+
+      - name: Check CHANGELOG.md has the section and tag this commit (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          v="${{ steps.v.outputs.version }}"
+          grep -q "^## $v " CHANGELOG.md || { echo "CHANGELOG.md has no '## $v' section"; exit 1; }
+          existing=$(git ls-remote --tags origin "refs/tags/v$v^{}" | cut -f1)
+          [ -n "$existing" ] || existing=$(git ls-remote --tags origin "refs/tags/v$v" | cut -f1)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -z "$existing" ]; then
+            git tag -a "v$v" -m "Webling $v" && git push origin "v$v"
+          elif [ "$existing" = "$GITHUB_SHA" ]; then
+            echo "v$v already points here"
+          else
+            echo "v$v already exists at $existing (tags are protected and never move): release the next version"; exit 1
+          fi
+
+  pack:
+    needs: version
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      WEBLING_TEST_POSTGRES: Host=localhost;Port=5432;Username=postgres;Password=postgres
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Test
+        run: dotnet test -c Release
+
+      - name: Pack
+        run: dotnet pack -c Release -p:WeblingVersion=${{ needs.version.outputs.version }} -o artifacts
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nupkg
+          path: artifacts/*.nupkg
+
+  publish:
+    needs: [version, pack]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      WEBLING_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: nupkg
+          path: artifacts
+
+      # Trusted Publishing: GitHub's OIDC token is exchanged for a one-hour NuGet.org API key scoped to this run.
+      # Without the NUGET_USER variable the packages still land on the GitHub release below; set it (and the
+      # nuget.org policy) and re-run this workflow to publish them.
+      - name: Log in to NuGet.org (Trusted Publishing)
+        if: vars.NUGET_USER != ''
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USER }}
+
+      - name: Push to NuGet.org
+        env:
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+        run: |
+          ls -l artifacts
+          if [ -z "$NUGET_API_KEY" ]; then
+            echo "::warning::Not pushed to NuGet.org: set the NUGET_USER repository variable to your nuget.org username and add a Trusted Publishing policy there for vmihalachi/webling, workflow release.yml."
+            exit 0
+          fi
+          dotnet nuget push "artifacts/*.nupkg" --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          awk -v v="$WEBLING_VERSION" '
+            /^## / { on = ($2 == v || $2 == "[" v "]") ; next }
+            on { print }' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          [ -s "$RUNNER_TEMP/notes.md" ] || echo "See CHANGELOG.md." > "$RUNNER_TEMP/notes.md"
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v$WEBLING_VERSION" >/dev/null 2>&1; then
+            gh release upload "v$WEBLING_VERSION" artifacts/*.nupkg --clobber
+          else
+            gh release create "v$WEBLING_VERSION" artifacts/*.nupkg --title "v$WEBLING_VERSION" \
+              --notes-file "$RUNNER_TEMP/notes.md"
+          fi
