@@ -13,8 +13,8 @@ The complete rules (moved from `AGENTS.md`, which keeps the short form).
   models and watchers, are isolated to the main actor, so a call from a background queue is a compile error rather
   than a data race. `Clock`, `IdleTimeProvider`, `BusyStateProvider`, `RandomSource` and
   `PowerStateProvider` stay non-`Sendable`: the class that holds one calls it from its own actor, so a mock or an
-  app's provider needs no lock. The conformance generators that run those classes, and the tests that call them, are
-  `@MainActor` too.
+  app's provider needs no lock. The conformance generators that run those classes, and the test classes that call them, are
+  `@MainActor` too, with `async` test methods: Linux's XCTest can't run a synchronous main-actor test.
 - **Package code never names an app.** No app's skins, phrase bank, product ids, palette or voices, and no app name in
   a doc comment or a fixture: apps inject their bank, defaults, skins, palette and voices. The same goes for `tools/`,
   which reads everything app-specific from the app's `companion.json`.

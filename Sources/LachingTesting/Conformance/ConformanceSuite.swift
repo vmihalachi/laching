@@ -3,13 +3,13 @@ import Foundation
 /// A folder of generated vectors and the code that writes and replays them. Each check returns its problems (empty
 /// when all is well) for the test to assert on, so this library never links XCTest. The generator and the replayers
 /// run on the main actor, where the scheduler, the coordinator and the settings live, so the checks do too: mark the
-/// test class `@MainActor`.
+/// test class `@MainActor` and its test methods `async` (Linux's XCTest can't run a synchronous main-actor test).
 ///
 /// ```swift
 /// let suite = ConformanceSuite(root: url, generatedFolders: ["picker"], generate: { try PickerVector.files(...) },
 ///                              replayers: [.init(path: "picker") { data, file in try PickerVector.verify(...) }])
-/// func testVectorsAreUpToDate() throws { XCTAssertEqual(try suite.checkUpToDate(), []) }
-/// func testWriteVectors() throws {
+/// func testVectorsAreUpToDate() async throws { XCTAssertEqual(try suite.checkUpToDate(), []) }
+/// func testWriteVectors() async throws {
 ///     try XCTSkipUnless(try suite.writeIfAsked(flag: "MY_WRITE_CONFORMANCE"), "Set MY_WRITE_CONFORMANCE=1 to regenerate.")
 /// }
 /// ```

@@ -34,23 +34,23 @@ final class ConformanceTests: XCTestCase {
             regenerateHint: hint)
     }()
 
-    func testVectorsAreUpToDate() throws {
+    func testVectorsAreUpToDate() async throws {
         let problems = try Self.suite.checkUpToDate()
         XCTAssertEqual(problems, [], problems.joined(separator: "\n"))
     }
 
     /// Replays the committed vectors the way a port does: read the input, run the code, compare.
-    func testCommittedVectorsReplay() throws {
+    func testCommittedVectorsReplay() async throws {
         let problems = try Self.suite.replayCommitted()
         XCTAssertEqual(problems, [], problems.joined(separator: "\n"))
     }
 
-    func testGeneratorsAreDeterministic() throws {
+    func testGeneratorsAreDeterministic() async throws {
         XCTAssertEqual(try Self.suite.checkDeterministic(), [])
     }
 
     /// The new cases show what they were added for.
-    func testTheCompanionCasesPinTheirBehavior() throws {
+    func testTheCompanionCasesPinTheirBehavior() async throws {
         let files = try Self.suite.generate()
         func picker(_ name: String) throws -> PickerVector.Vector {
             try ConformanceSupport.decode(PickerVector.Vector.self, from: XCTUnwrap(files["picker/\(name).json"]))
@@ -75,7 +75,7 @@ final class ConformanceTests: XCTestCase {
     }
 
     /// Rewrites `conformance/companion` from the Swift reference.
-    func testWriteVectors() throws {
+    func testWriteVectors() async throws {
         try XCTSkipUnless(
             try Self.suite.writeIfAsked(flag: Self.writeFlag), "Set \(Self.writeFlag)=1 to regenerate the conformance vectors.")
         print("Wrote companion conformance vectors to \(Self.suite.root.path)")

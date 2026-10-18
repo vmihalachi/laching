@@ -29,7 +29,7 @@ final class ConformanceSuiteTests: XCTestCase {
         try Data(text.utf8).write(to: root.appendingPathComponent(path))
     }
 
-    func testUpToDateReportsMissingStaleAndOrphanedFiles() throws {
+    func testUpToDateReportsMissingStaleAndOrphanedFiles() async throws {
         let suite = suite(["cases/a.json": "ok", "cases/b.json": "ok"])
         try write("cases/a.json", "ok")
         try write("cases/c.json", "ok")
@@ -40,14 +40,14 @@ final class ConformanceSuiteTests: XCTestCase {
         XCTAssertTrue(try suite.checkUpToDate().contains("cases/b.json is stale. Run it."))
     }
 
-    func testReplayRunsEveryCommittedFile() throws {
+    func testReplayRunsEveryCommittedFile() async throws {
         try write("cases/a.json", "ok")
         try write("cases/b.json", "no")
         try write("cases/notes.txt", "no")
         XCTAssertEqual(try suite([:]).replayCommitted(), ["cases/b.json: not ok"])
     }
 
-    func testWriteOnlyWhenAsked() throws {
+    func testWriteOnlyWhenAsked() async throws {
         try write("cases/old.json", "ok")
         let suite = suite(["cases/new.json": "ok"])
         XCTAssertFalse(try suite.writeIfAsked(flag: "LACHING_TEST_FLAG_NEVER_SET"))
@@ -55,7 +55,7 @@ final class ConformanceSuiteTests: XCTestCase {
         XCTAssertEqual(try suite.checkDeterministic(), [])
     }
 
-    func testRootIsFoundByItsMarker() throws {
+    func testRootIsFoundByItsMarker() async throws {
         let found = try XCTUnwrap(ConformanceRoot.find(markerFile: "conformance/README.md", from: #filePath))
         XCTAssertEqual(found.lastPathComponent, "conformance")
         XCTAssertNil(ConformanceRoot.find(markerFile: "no/such/marker-\(UUID().uuidString)", from: #filePath))
