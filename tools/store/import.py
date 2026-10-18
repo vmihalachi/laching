@@ -45,7 +45,7 @@ def main():
     folder = listing.dir
     screenshots_dir = folder / microsoft.get("screenshots", "microsoft/screenshots")
     art_dir = folder / microsoft.get("art", "microsoft/art")
-    count = microsoft.get("screenshotCount", 8)
+    count = microsoft.get("screenshotCount", len(microsoft.get("shots", [])) or 8)
     name = listing.config.require("name")
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--out", default=str(listing.config.root / f"build/store-import/microsoft/{name}-listings"))

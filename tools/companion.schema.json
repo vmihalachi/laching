@@ -377,8 +377,23 @@
           "properties": {
             "screenshots": { "type": "string", "description": "<lang>/*.png per language; microsoft/screenshots by default." },
             "art": { "type": "string", "description": "poster-art.png, box-art.png, super-hero-art.png; microsoft/art by default." },
-            "screenshotCount": { "type": "integer", "description": "Screenshots (and captions) per language; 8 by default." },
-            "publisher": { "type": "string", "description": "DevStudio in the listing." }
+            "screenshotCount": { "type": "integer", "description": "Screenshots (and captions) per language; the number of shots by default, else 8." },
+            "publisher": { "type": "string", "description": "DevStudio in the listing." },
+            "shots": {
+              "type": "array",
+              "items": { "type": "string", "pattern": "-(light|dark)$" },
+              "minItems": 1,
+              "description": "store-screenshots.py --canvas microsoft: the Windows captures (file names without .png, e.g. panel-light) in upload order, one per line of ms.captions (Partner Center takes up to 10)."
+            },
+            "backdrop": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "The canvas behind a light and a dark capture (#RRGGBB); the paper of screenshots.store.palette by default.",
+              "properties": {
+                "light": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+                "dark": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" }
+              }
+            }
           }
         }
       }
