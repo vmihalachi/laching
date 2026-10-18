@@ -1,0 +1,11 @@
+{
+  "solution": {
+    "path": "Laching.sln",
+    "projects": [
+      "Laching.Core.Tests/Laching.Core.Tests.csproj",
+      "Laching.Companion.Tests/Laching.Companion.Tests.csproj",
+      "Laching.Companion.Shell.Tests/Laching.Companion.Shell.Tests.csproj",
+      "Laching.Testing.Tests/Laching.Testing.Tests.csproj"
+    ]
+  }
+}

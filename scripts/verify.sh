@@ -164,23 +164,22 @@ if [ "$fast" = 0 ]; then
   fi
   if touched "$dotnet"; then
     if has dotnet; then
-      check "dotnet build + test (Core)" dotnet test dotnet/Laching.Core.Tests/Laching.Core.Tests.csproj -v q --nologo
-      check "dotnet build + test (Companion)" dotnet test dotnet/Laching.Companion.Tests/Laching.Companion.Tests.csproj -v q --nologo
-      check "dotnet build + test (Companion.Shell)" dotnet test dotnet/Laching.Companion.Shell.Tests/Laching.Companion.Shell.Tests.csproj -v q --nologo
-      check "dotnet build + test (Testing)" dotnet test dotnet/Laching.Testing.Tests/Laching.Testing.Tests.csproj -v q --nologo
+      # One restore and build for the four, their test runs side by side: about 7 s instead of about 16 s.
+      check "dotnet build + test (Core, Companion, Companion.Shell, Testing)" \
+        dotnet test dotnet/Laching.Tests.slnf -v q --nologo
     else skip "dotnet test: needs the .NET SDK"; fi
   fi
   if touched "$web"; then
     if has dotnet; then
       check "dotnet format (web)" dotnet format web/Laching.Web.sln --verify-no-changes
-      for tests in web/tests/*.Tests; do
-        name="${tests##*/}"
-        if [ "$name" = Laching.Web.Jobs.Tests ] && ! web_postgres; then
-          skip "$name: needs PostgreSQL (LACHING_WEB_TEST_POSTGRES, or docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16)"
-          continue
-        fi
-        check "dotnet build + test ($name)" dotnet test "$tests/$name.csproj" -v q --nologo
-      done
+      # The whole solution in one run, the Jobs tests filtered out (still built) when PostgreSQL isn't there.
+      if web_postgres; then
+        check "dotnet build + test (web)" dotnet test web/Laching.Web.sln -v q --nologo
+      else
+        skip "Laching.Web.Jobs.Tests: needs PostgreSQL (LACHING_WEB_TEST_POSTGRES, or docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16)"
+        check "dotnet build + test (web, without Jobs)" \
+          dotnet test web/Laching.Web.sln -v q --nologo --filter 'FullyQualifiedName!~Laching.Web.Jobs.Tests'
+      fi
       if touched "$tailwind"; then check "Tailwind sample" web/scripts/tailwind-sample.sh; fi
     else skip "dotnet test (web): needs the .NET SDK"; fi
   fi
