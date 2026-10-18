@@ -5,15 +5,18 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import avd  # noqa: E402
 import companion  # noqa: E402
 import layoutcheck  # noqa: E402
 import screens  # noqa: E402
@@ -297,6 +300,25 @@ class SimulatorTests(FixtureAppTestCase):
         self.assertIsNone(sim.newest_runtime("iPad", runtimes))
 
 
+class SdkToolTests(unittest.TestCase):
+    def test_off_path_it_takes_the_sdk_tool_from_android_home_else_android_studios_folder(self):
+        name = "adb.exe" if avd.os.name == "nt" else "adb"  # the SDK's own file on this OS
+        with tempfile.TemporaryDirectory() as temp:
+            home, local = Path(temp) / "home", Path(temp) / "local"
+            for sdk in (Path(temp) / "sdk", local / "Android" / "Sdk"):
+                (sdk / "platform-tools").mkdir(parents=True)
+                (sdk / "platform-tools" / name).write_bytes(b"")
+            environ = {key: value for key, value in avd.os.environ.items()
+                       if key not in ("ANDROID_HOME", "ANDROID_SDK_ROOT", "LOCALAPPDATA")}
+            with mock.patch.object(avd.shutil, "which", return_value=None),                     mock.patch.object(avd.Path, "home", return_value=home),                     mock.patch.dict(avd.os.environ, environ, clear=True):
+                with mock.patch.dict(avd.os.environ, {"ANDROID_HOME": str(Path(temp) / "sdk")}):
+                    self.assertEqual(avd.sdk_tool("adb"), str(Path(temp) / "sdk" / "platform-tools" / name))
+                with mock.patch.dict(avd.os.environ, {"LOCALAPPDATA": str(local)}):
+                    self.assertEqual(avd.sdk_tool("adb"), str(local / "Android" / "Sdk" / "platform-tools" / name))
+                with self.assertRaisesRegex(RuntimeError, "no adb on PATH or under ANDROID_HOME"):
+                    avd.sdk_tool("adb")
+
+
 class LayoutReportTests(unittest.TestCase):
     def report(self, results):
         out, err = io.StringIO(), io.StringIO()
@@ -309,7 +331,8 @@ class LayoutReportTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(out.splitlines(), ["== ios-se en", "== ios-se de", "  home-light.png: cut short", "== ios-ipad en",
                                             "== ios-ipad de", "  not run"])
-        self.assertRegex(err, r"^Layout problems in: ios-se/de ios-ipad/de \(shots in /shots, [\d.]+ min\)$")
+        shots = re.escape(str(Path("/shots")))  # the path as this OS writes it
+        self.assertRegex(err, rf"^Layout problems in: ios-se/de ios-ipad/de \(shots in {shots}, [\d.]+ min\)$")
 
     def test_says_when_every_screen_fits(self):
         code, out, err = self.report({(d, lang): [] for d in ("se", "ipad") for lang in ("en", "de")})

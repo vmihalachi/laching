@@ -154,7 +154,7 @@ class Simulator:
         if self.log:
             _append(self.log, "\n".join(lines), done.stderr)
         # The app draws into its container's temp folder and prints that path last.
-        folders = [Path(line) for line in lines if line.startswith("/") and Path(line).is_dir()]
+        folders = [Path(line) for line in lines if Path(line).is_absolute() and Path(line).is_dir()]
         if not folders:
             tail = "\n".join(lines[-5:])
             raise RuntimeError(f"no shots were drawn (exit {done.returncode}){': ' + tail if tail else ''}")
