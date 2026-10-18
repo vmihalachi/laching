@@ -36,13 +36,20 @@ web_version() { sed -n 's/.*<LachingWebVersion[^>]*>\([^<]*\)<.*/\1/p' web/Direc
 tagged() { git rev-parse -q --verify "refs/tags/v$1" >/dev/null; }
 
 # The merged pull requests GitHub associates with commit $2 of repository $1, one per line: number, tab, labels.
+# GitHub now and then answers with an empty body ("unexpected end of JSON input"), so a lookup is tried three times,
+# 2 and then 4 seconds apart; an HTTP 4xx (Bad credentials, say) is GitHub's answer and isn't asked again.
 pulls() {
-  if ! gh api "repos/$1/commits/$2/pulls" --jq '.[] | select(.merged_at) | "\(.number)\t\([.labels[].name] | join(","))"' \
-    2>"$errors"; then
+  attempt=1
+  until lines=$(gh api "repos/$1/commits/$2/pulls" \
+    --jq '.[] | select(.merged_at) | "\(.number)\t\([.labels[].name] | join(","))"' 2>"$errors"); do
     grep -q 'No commit found' "$errors" && return 0  # not pushed yet (by hand): no pull request brought it
-    die "couldn't ask GitHub for $2's pull request: $(cat "$errors")
+    [ "$attempt" -lt 3 ] && ! grep -q 'HTTP 4[0-9][0-9]' "$errors" ||
+      die "couldn't ask GitHub for $2's pull request: $(cat "$errors")
 Give gh a token (GH_TOKEN, or gh auth login), or pass --bump patch|minor|major."
-  fi
+    sleep $((attempt * 2))
+    attempt=$((attempt + 1))
+  done
+  [ -z "$lines" ] || printf '%s\n' "$lines"
 }
 
 plan() {

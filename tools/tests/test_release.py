@@ -20,10 +20,16 @@ COPIED = ("scripts/release.sh", "scripts/verify.sh", "Sources/LachingCore/Lachin
           "README.md", "site/index.html", "dotnet/Directory.Build.props", "web/Directory.Build.props",
           "web/Directory.Build.targets", "web/Directory.Packages.props", "tools/landing/package.json")
 # gh api repos/…/commits/<sha>/pulls --jq …: the lines the --jq makes, from $FAKE_PULLS/<sha> ("number<tab>labels");
-# "Bad credentials" without that folder. `gh workflow run` is logged.
+# "Bad credentials" without that folder, and GitHub's empty answer as many times as $FAKE_PULLS/<sha>.empty says.
+# `gh workflow run` is logged, and so is `sleep` (which waits for nothing).
 GH = ('[ "$1" = workflow ] && { echo "$*" >> "$FAKE_PULLS.log"; exit "${FAKE_GH_WORKFLOW_STATUS:-0}"; }\n'
       '[ -d "$FAKE_PULLS" ] || { echo "HTTP 401: Bad credentials" >&2; exit 1; }\n'
-      'sha=$(echo "$2" | cut -d/ -f5); [ ! -f "$FAKE_PULLS/$sha" ] || cat "$FAKE_PULLS/$sha"\n')
+      'sha=$(echo "$2" | cut -d/ -f5); empty="$FAKE_PULLS/$sha.empty"\n'
+      'if [ "$(cat "$empty" 2>/dev/null || echo 0)" -gt 0 ]; then\n'
+      '  echo $(($(cat "$empty") - 1)) > "$empty"; echo "unexpected end of JSON input" >&2; exit 1\n'
+      'fi\n'
+      '[ ! -f "$FAKE_PULLS/$sha" ] || cat "$FAKE_PULLS/$sha"\n')
+SLEEP = 'echo "$*" >> "$FAKE_PULLS.sleep"\n'
 
 
 @unittest.skipIf(WINDOWS, NO_SHEBANG)
@@ -48,10 +54,12 @@ class ReleaseTests(unittest.TestCase):
                                                        self.read("web/Directory.Build.props")))
         self.bin = self.tmp / "bin"
         self.bin.mkdir()
-        for name, body in (("gh", GH), ("npm", '[ "$1 $2 $3" = "view @laching/landing version" ] && echo 0.13.0\n')):
+        for name, body in (("gh", GH), ("sleep", SLEEP),
+                           ("npm", '[ "$1 $2 $3" = "view @laching/landing version" ] && echo 0.13.0\n')):
             (self.bin / name).write_text("#!/bin/sh\n" + body, "utf8")
             (self.bin / name).chmod(0o755)
         self.pulls: dict[str, list[dict]] = {}
+        self.empty: dict[str, int] = {}  # how many times GitHub answers nothing for a commit
         self.git("init", "-q")
         self.git("remote", "add", "origin", "https://github.com/vmihalachi/laching.git")
         self.commit("0.13.0: release")
@@ -84,10 +92,13 @@ class ReleaseTests(unittest.TestCase):
         """The environment with the fakes; `pulls=False` makes gh fail, as it does without a token."""
         pulls_file = self.tmp / "pulls"
         shutil.rmtree(pulls_file, ignore_errors=True)
+        (self.tmp / "pulls.sleep").unlink(missing_ok=True)
         if pulls:
             pulls_file.mkdir()
             for sha, prs in self.pulls.items():
                 (pulls_file / sha).write_text("".join(f"{pr['number']}\t{','.join(pr['labels'])}\n" for pr in prs), "utf8")
+            for sha, times in self.empty.items():
+                (pulls_file / f"{sha}.empty").write_text(f"{times}\n", "utf8")
         env = {key: value for key, value in os.environ.items()
                if not key.startswith("GIT_") and key not in ("GITHUB_REPOSITORY", "GH_TOKEN")}
         return {**env, "PATH": f"{self.bin}{os.pathsep}{env.get('PATH', '')}", "FAKE_PULLS": str(pulls_file), **extra}
@@ -130,6 +141,25 @@ class ReleaseTests(unittest.TestCase):
         result = self.run_release("plan", "--bump", "patch")
         self.assertEqual(result.returncode, 1)
         self.assertIn("says 1.0.5, but the last release tag is v1.0.0", result.stderr)
+
+    def test_the_plan_asks_github_again_when_it_answers_nothing(self):
+        self.change("docs/a.md", pr=101, labels=("breaking",))
+        sha = self.git("rev-parse", "HEAD")
+        slept = self.tmp / "pulls.sleep"
+        self.empty[sha] = 2
+        self.assertEqual(self.out("plan"), "release 0.14.0 (minor: #101 labelled breaking (a minor while 0.x); "
+                                           "1 commit since v0.13.0)")
+        self.assertEqual(slept.read_text("utf8"), "2\n4\n")
+
+        self.empty[sha] = 3
+        result = self.run_release("plan")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(f"couldn't ask GitHub for {sha}'s pull request: unexpected end of JSON input", result.stderr)
+        self.assertEqual(slept.read_text("utf8"), "2\n4\n", "three attempts, then the error")
+
+        result = self.run_release("plan", pulls=False)
+        self.assertIn("Bad credentials", result.stderr)
+        self.assertFalse(slept.exists(), "an HTTP 4xx is GitHub's answer: not asked again")
 
     def test_nuget_ships_when_a_packages_folder_or_the_props_changed(self):
         for path in ("README.md", "dotnet/Laching.Core.Tests/A.cs", "dotnet/Fixture.App/A.cs", "Sources/LachingCore/A.swift"):
