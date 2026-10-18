@@ -279,11 +279,13 @@ elif command == "launch":
         state.mkdir()
         fake_adb = self.root / "fake_adb.py"
         # adb against a device that is up at once: the app writes its shots (plus problems.txt in German) into
-        # files/screens when started in screenshot mode; `emu kill` tells the fake emulator to exit.
-        fake_adb.write_text(f"""import shutil, sys
+        # files/screens when started in screenshot mode; `emu kill` tells the fake emulator to exit, `emu avd snapshot
+        # save` keeps the device's properties (ram.json) as the snapshot's, for the fake emulator to load.
+        fake_adb.write_text(f"""import json, shutil, sys, time
 from pathlib import Path
 state = Path({str(state)!r})
 screens = state / "files" / "screens"
+ram = state / "ram.json"
 args = sys.argv[1:]
 if args[:1] == ["-s"]:
     args = args[2:]
@@ -293,6 +295,11 @@ def log(line):
 command = args[0]
 if command == "install":
     log("install " + Path(args[-1]).name)
+elif command == "emu" and args[1:4] == ["avd", "snapshot", "save"]:
+    (state / "snapshots").mkdir(exist_ok=True)
+    shutil.copy(ram, state / "snapshots" / args[4])
+    log("save " + args[4])
+    print("OK")
 elif command == "emu":
     (state / "killed").touch()
     log("kill")
@@ -302,6 +309,12 @@ elif command == "shell":
     words = args[1:]
     if words[:2] == ["getprop", "sys.boot_completed"]:
         print("1")
+    elif words[:1] == ["date"]:
+        print(int(time.time()))
+    elif words[:1] == ["getprop"]:
+        print(json.loads(ram.read_text()).get(words[1], ""))
+    elif words[:1] == ["setprop"]:
+        ram.write_text(json.dumps({{**json.loads(ram.read_text()), words[1]: words[2]}}))
     elif words[:3] == ["settings", "put", "system"]:
         log(" ".join(words[3:]))
     elif words[:2] == ["cmd", "package"]:
@@ -329,11 +342,16 @@ elif command == "shell":
             print("\\n".join(sorted(p.name for p in screens.iterdir())))
 """, "utf8")
         fake_emulator = self.root / "fake_emulator.py"
-        fake_emulator.write_text(f"""import sys, time
+        # The emulator starts with the properties of the snapshot it loads, else none.
+        fake_emulator.write_text(f"""import shutil, sys, time
 from pathlib import Path
+state = Path({str(state)!r})
+args = sys.argv[1:]
 with open({str(self.log)!r}, "a") as out:
-    out.write("emulator " + " ".join(sys.argv[1:]) + "\\n")
-while not (Path({str(state)!r}) / "killed").exists():
+    out.write("emulator " + " ".join(args) + "\\n")
+saved = state / "snapshots" / (args[args.index("-snapshot") + 1] if "-snapshot" in args else "-")
+(state / "ram.json").write_bytes(saved.read_bytes() if saved.is_file() else b"{{}}")
+while not (state / "killed").exists():
     time.sleep(0.1)
 """, "utf8")
         self.fake_python("adb", fake_adb)
@@ -341,8 +359,12 @@ while not (Path({str(state)!r}) / "killed").exists():
         apk = self.root / "app-debug.apk"
         apk.write_bytes(b"apk")
 
+        avds = self.root / "avd"  # the AVD's folder, where the snapshot's marker goes
+        (avds / "Pixel_8.avd").mkdir(parents=True)
+        env = {"ANDROID_AVD_HOME": str(avds)}
+
         result = self.run_script("check-layout-android.py", "--apk", str(apk), "--devices", "Pixel_8", "--font-scale", "2.0",
-                                 "en", "de")
+                                 "en", "de", env=env)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertEqual([line for line in result.stdout.splitlines() if line.startswith("==")],
                          ["== android-Pixel_8 en", "== android-Pixel_8 de"])
@@ -357,19 +379,35 @@ while not (Path({str(state)!r}) / "killed").exists():
         self.assertTrue((checked / "emulator.log").exists())
         lines = self.log.read_text().splitlines()
         self.assertEqual([line for line in lines if line.startswith("emulator ")], [
-            "emulator -avd Pixel_8 -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect"])
-        self.assertEqual([line for line in lines if line.startswith(("start", "install", "font_scale", "kill"))], [
-            "install app-debug.apk", "font_scale 2.0",
+            "emulator -avd Pixel_8 -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot-load -no-snapshot-save "
+            "-gpu swiftshader_indirect"])
+        self.assertEqual([line for line in lines if line.startswith(("start", "install", "font_scale", "kill", "save"))], [
+            "save laching-screens", "install app-debug.apk", "font_scale 2.0",
             "start en US screens today", "start en US two settings", "start de DE screens today", "start de DE two settings",
             "font_scale 1.0", "kill",
         ])
 
         self.log.unlink()
         (state / "killed").unlink()
-        passing = self.run_script("check-layout-android.py", "--apk", str(apk), "--devices", "Pixel_8", "--only", "today", "en")
+        passing = self.run_script("check-layout-android.py", "--apk", str(apk), "--devices", "Pixel_8", "--only", "today", "en",
+                                  env=env)
         self.assertEqual(passing.returncode, 0, passing.stdout + passing.stderr)
         self.assertIn("Every screen fits on Pixel_8 in: en", passing.stdout)
-        self.assertIn("start en US screens today", self.log.read_text())
+        lines = self.log.read_text().splitlines()
+        self.assertEqual([line for line in lines if line.startswith(("emulator ", "save", "install", "start"))], [
+            "emulator -avd Pixel_8 -port 5554 -no-window -no-audio -no-boot-anim -snapshot laching-screens "
+            "-no-snapshot-save -gpu swiftshader_indirect",
+            "install app-debug.apk", "start en US screens today",
+        ], "the second run loads the snapshot, saves nothing, and installs the app again")
+
+        self.log.unlink()
+        (state / "killed").unlink()
+        cold = self.run_script("check-layout-android.py", "--apk", str(apk), "--devices", "Pixel_8", "--only", "today",
+                               "--cold", "en", env=env)
+        self.assertEqual(cold.returncode, 0, cold.stdout + cold.stderr)
+        lines = self.log.read_text().splitlines()
+        self.assertIn("-no-snapshot-load -no-snapshot-save", lines[0])
+        self.assertIn("save laching-screens", lines)
 
     def test_check_layout_android_needs_an_avd(self):
         self.android_config()
