@@ -1,28 +1,42 @@
 ---
 name: release-mac
-description: Ship a new build of a Laching companion's Mac app to App Store Connect (bump CFBundleVersion, verify, archive, upload, attach to the version, tag). Use when asked to publish, release, upload or submit a new macOS version or build, including a new build for a version already in review.
+description: Ship a new build of a Laching companion's Mac app to App Store Connect (bump CFBundleVersion, verify, archive, upload, What's New and the listing through push.py, the TestFlight check, submit, tag). Use when asked to publish, release, upload or submit a new macOS version or build, including a new build for a version already in review.
 ---
 
 # Release the Mac app (App Store)
 
-Names come from `companion.json` (`mac.dir`, `mac.project`, `mac.scheme`, `mac.projectSpec`); the team ID, product
-ids, the App Store Connect record and where release notes are kept are in the app's `.agents/notes/release-mac.md`.
+Names come from `companion.json` (`mac.dir`, `mac.project`, `mac.scheme`, `mac.projectSpec`, `store.dir`,
+`store.apple`); the team ID, the App Store Connect record, the in-app purchase ids, the app's own checks and where the
+build log and review status are kept are in the app's `.agents/notes/release-mac.md`. Read it first, and check the
+App Review thread in App Store Connect before starting a new build for a version in review.
+
+Distribution is the Mac App Store only (and TestFlight from the same upload): no DMG, no notarization. A universal app
+(`store.apple.ios` set) has an iPhone and iPad version with its own version number: that one is the `release-ios`
+skill, and the two never share a version number.
 
 ## 1. Decide the version
 
 - **New build of the same version** (update while in review or rejected): keep `CFBundleShortVersionString`, raise
   `CFBundleVersion` by 1.
-- **New version** (after approval): bump `CFBundleShortVersionString` too; `CFBundleVersion` only goes up.
-- Both live in the XcodeGen spec. Never hand-edit `project.pbxproj`.
+- **New version** (after approval): bump `CFBundleShortVersionString` too; `CFBundleVersion` only goes up, never
+  resets.
+- Both live in the Mac target of the XcodeGen spec (`mac.dir`/`mac.projectSpec`). Never hand-edit `project.pbxproj`.
 
 ## 2. Preflight (don't upload a build that fails these)
 
+Follow the app's shared-checkout rules (`AGENTS.md`): stage only your own paths.
+
 ```sh
 scripts/verify.sh --all          # includes the Laching pin check (submodule = SwiftPM = XcodeGen; NuGet = its LachingVersion)
-laching/tools/conformance.sh && git diff --exit-code <conformance.dir>   # vectors current
+laching/tools/conformance.sh && git diff --exit-code <conformance.dir>   # vectors current (or the app's own script, per its notes)
 python3 laching/tools/l10n.py check
-python3 laching/tools/voice.py check
+python3 laching/tools/voice.py check   # when the app has a voice
 ```
+
+The tests run the Debug app (`mac.devAppName`); App Store review gets Release, which nothing local launches (it would
+share the App Store copy's data). When the app's notes name a hosted Release smoke workflow, start it on GitHub's
+runners (`gh workflow run <workflow> -f hosted=true`; it bills macOS minutes, so only for a release) and make sure it's
+green for the commit you archive.
 
 Also confirm: every user-visible Mac change is ported to Windows (or says why not), README, landing and store-listing
 claims match what ships, and purchase UI is only where the app's rules allow.
@@ -45,13 +59,37 @@ claims match what ships, and purchase UI is only where the app's rules allow.
    ```
    This needs the owner's Apple ID signed in to Xcode. If it fails on auth, stop and ask; never handle credentials.
 
-## 4. App Store Connect (the owner clicks; guide them)
+## 4. App Store Connect
 
-Wait for the build to process, then: Version page → **Build** → select it; update **What's New** and review notes; the
-in-app purchases must be in the submission and Ready to Submit; release stays **Manual**; submit. Smoke-test the
-processed build in TestFlight, especially purchases and prices.
+1. **What's New:** for a new version, rewrite `apple.whatsnew` in every `<store.dir>/<lang>.md` (the source language
+   first, only what ships since the last approved build; the platform's first version has none), then
+   `python3 <store.dir>/check.py`. Commit it.
+2. **Screenshots: skip by default.** Render new store screenshots only when a window they show changed visibly enough
+   that the listing would look wrong; bug fixes rarely do. When unsure, ask the owner before rendering or uploading any.
+   If needed: `laching/tools/screenshots.sh` when windows changed, then `python3 laching/tools/store-screenshots.py`
+   (the source language; or the app's own scripts, per its notes); show it to the owner and ask before `--lang all`
+   (every language, slow).
+3. **Push** once the build has processed (the email, or the TestFlight tab):
+   `python3 <store.dir>/apple/push.py --version <v> --create --build <n> --only text,iap,screenshots,review` prints the
+   plan (drop `screenshots` when step 2 was skipped, `iap` when the in-app purchases' text didn't change); show it to
+   the owner, then rerun with `--apply`. In a universal app always pass `--only` with the Mac parts: the default also
+   pushes the iOS page, under the Mac's version number. It creates the version with the release type of
+   `store.apple.releaseType` (an existing editable version is set to it too), attaches the build, and syncs every
+   language's text, the in-app purchases' text and the screenshots. `--status --version <v>` reads what App Store
+   Connect has and still needs. Without an API key (`ASC_KEY_ID`, `ASC_ISSUER_ID`, the `.p8`), the owner pastes by
+   hand from the same files; never handle the key yourself.
+4. **Review notes** (`store.apple.review.notes`): update them when behavior changed (the `review` part pushes them);
+   reply in the Resolution Center thread when App Review asked something. The in-app purchases go in the submission
+   when they're new or their text changed; a new one must be Ready to Submit.
+5. **Before submitting** (the owner), install the processed build from TestFlight and check it the way review will:
+   it launches, onboarding opens on a fresh install, the main windows open, purchases show their prices (and anything
+   the app's notes add). A build that fails here never goes to review: fix it and upload a new build number.
+6. **Submit** (the owner: **Add for Review**, or **Resubmit**). The release follows `store.apple.releaseType`:
+   `AFTER_APPROVAL` goes live on its own once Apple approves; `MANUAL` (or unset) waits for the owner's **Release**.
+   Change it in `companion.json`, never by hand in App Store Connect, so the next push doesn't flip it back.
 
 ## 5. Wrap up
 
-- Tag `mac-<version>-<build>` on the release commit; push commits and tags only when the owner says so.
-- Record the build number and review status where the notes say.
+- Tag `mac-<version>-<build>` (for example `mac-1.0-4`) on the release commit; push commits and tags only when the
+  owner says so.
+- Record the build number and review status where the app's notes say.
