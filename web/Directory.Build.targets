@@ -2,7 +2,7 @@
 
   <!-- After the project file, where IsPackable and Description are set. -->
   <PropertyGroup Condition="'$(IsPackable)' == 'true'">
-    <PackageDescription>$(Description) $(WeblingNotice)</PackageDescription>
+    <PackageDescription>$(Description) $(LachingWebNotice)</PackageDescription>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(IsPackable)' == 'true'">

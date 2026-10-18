@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>Laching.Web.Aspire</PackageId>
+    <Description>Aspire AppHost pieces for Azure Container Apps: ingress that accepts only Cloudflare's IPv4 ranges with a Cloudflare Origin CA certificate, and a deployment step that runs a Container Apps job, such as database migrations, before the apps roll out.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.Azure.AppContainers" />
+    <!-- Aspire's MessagePack, raised past GHSA-qhrr-8q5h-9q3h (< 2.5.303) until Aspire references a fixed one. -->
+    <PackageReference Include="MessagePack" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- A copy of https://www.cloudflare.com/ips-v4; CI checks it every week. -->
+    <EmbeddedResource Include="cloudflare-ips-v4.txt" LogicalName="Laching.Web.Aspire.cloudflare-ips-v4.txt" />
+  </ItemGroup>
+
+</Project>

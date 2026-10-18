@@ -14,12 +14,12 @@ release may change or break things.
 
 | Package | Depends on | What it does |
 |---|---|---|
-| `Webling.Jobs` | EF Core, hosting abstractions | A PostgreSQL job table. Jobs are enqueued in the same `SaveChanges` as the change that caused them, claimed with `FOR UPDATE SKIP LOCKED` so replicas never run the same job, leased for 5 minutes, retried after 30 s × 2^(attempt − 1) (capped at 1 h, plus up to 20% jitter) and marked failed after 5 attempts. A job interrupted by shutdown gets its attempt back. Done jobs are deleted after 7 days, failed ones after 30. |
-| `Webling.AspNetCore` | ASP.NET Core | Behind Cloudflare: an origin check that answers 403 without the shared secret, hides health endpoints from requests through Cloudflare and trusts `CF-Connecting-IP` only after the check; security headers with a per-request CSP nonce; shared-cache headers for `[PublicPage]` components and documents that stay private for visitors with a personal cookie. |
-| `Webling.Cloudflare` | `HttpClient` | Cloudflare's APIs without ASP.NET Core, so a worker can use them: Turnstile verification behind `IHumanCheck` (a missing, reused or failed token and any network failure are refused), and cache purges by address in batches of 30. |
-| `Webling.Aspire` | Aspire.Hosting.Azure.AppContainers | AppHost pieces: Container Apps ingress that accepts only Cloudflare's IPv4 ranges (bundled, with a check against cloudflare.com for deploys) with an Origin CA certificate, and a deployment step that runs a Container Apps job, such as migrations, before the apps roll out. |
-| `Webling.Tailwind` | nothing (build only) | Tailwind CSS v4 in `dotnet build`, without Node: the pinned standalone CLI is downloaded once per user into `~/.webling/`, checked against its SHA-256, and run before each build when a style or component changed. |
-| `Webling.Images` | SkiaSharp | Uploads: PNG, JPEG and WebP recognized by magic bytes, HEIC recognized and refused, a stream that stops at a size limit, and re-encoding to upright, metadata-free sRGB WebP in several sizes or to JPEG on white. |
+| `Laching.Web.Jobs` | EF Core, hosting abstractions | A PostgreSQL job table. Jobs are enqueued in the same `SaveChanges` as the change that caused them, claimed with `FOR UPDATE SKIP LOCKED` so replicas never run the same job, leased for 5 minutes, retried after 30 s × 2^(attempt − 1) (capped at 1 h, plus up to 20% jitter) and marked failed after 5 attempts. A job interrupted by shutdown gets its attempt back. Done jobs are deleted after 7 days, failed ones after 30. |
+| `Laching.Web.AspNetCore` | ASP.NET Core | Behind Cloudflare: an origin check that answers 403 without the shared secret, hides health endpoints from requests through Cloudflare and trusts `CF-Connecting-IP` only after the check; security headers with a per-request CSP nonce; shared-cache headers for `[PublicPage]` components and documents that stay private for visitors with a personal cookie. |
+| `Laching.Web.Cloudflare` | `HttpClient` | Cloudflare's APIs without ASP.NET Core, so a worker can use them: Turnstile verification behind `IHumanCheck` (a missing, reused or failed token and any network failure are refused), and cache purges by address in batches of 30. |
+| `Laching.Web.Aspire` | Aspire.Hosting.Azure.AppContainers | AppHost pieces: Container Apps ingress that accepts only Cloudflare's IPv4 ranges (bundled, with a check against cloudflare.com for deploys) with an Origin CA certificate, and a deployment step that runs a Container Apps job, such as migrations, before the apps roll out. |
+| `Laching.Web.Tailwind` | nothing (build only) | Tailwind CSS v4 in `dotnet build`, without Node: the pinned standalone CLI is downloaded once per user into `~/.laching/`, checked against its SHA-256, and run before each build when a style or component changed. |
+| `Laching.Web.Images` | SkiaSharp | Uploads: PNG, JPEG and WebP recognized by magic bytes, HEIC recognized and refused, a stream that stops at a size limit, and re-encoding to upright, metadata-free sRGB WebP in several sizes or to JPEG on white. |
 
 Every package ships no strings and no settings of its own: the app passes them in, and secrets come from
 configuration, never from code.
@@ -27,24 +27,24 @@ configuration, never from code.
 ## Install
 
 ```sh
-dotnet add package Webling.Jobs
-dotnet add package Webling.AspNetCore
-dotnet add package Webling.Cloudflare
-dotnet add package Webling.Aspire        # in the AppHost
-dotnet add package Webling.Tailwind      # build only; nothing ships with the app
-dotnet add package Webling.Images
+dotnet add package Laching.Web.Jobs
+dotnet add package Laching.Web.AspNetCore
+dotnet add package Laching.Web.Cloudflare
+dotnet add package Laching.Web.Aspire        # in the AppHost
+dotnet add package Laching.Web.Tailwind      # build only; nothing ships with the app
+dotnet add package Laching.Web.Images
 ```
 
 One tag versions every package, so keep them on the same version.
 
 ## Using it
 
-- **Jobs.** Call `modelBuilder.ApplyWeblingJobs()` in `OnModelCreating` and add a migration: it maps the `jobs`
+- **Jobs.** Call `modelBuilder.ApplyLachingWebJobs()` in `OnModelCreating` and add a migration: it maps the `jobs`
   table with explicit snake_case names, whatever naming convention the rest of the model uses. Jobs are records
   implementing `IJob` (`static string JobType => "send-mail"`); enqueue with `db.EnqueueJob(job, now)` before
   `SaveChanges`. In the worker, `services.AddJobDispatcher<AppDbContext>(configuration.GetSection("Jobs"))` and
   `services.AddJobHandler<SendMail, SendMailHandler>()`. Handlers must be idempotent: a job can run more than once.
-  Trace `Webling.Jobs` to see one activity per run.
+  Trace `Laching.Web.Jobs` to see one activity per run.
 - **Origin.** `builder.AddCloudflareOrigin()` and `app.UseCloudflareOrigin()` first in the pipeline. A Cloudflare
   Transform Rule sends the secret in `X-Origin-Secret`; outside Development the app refuses to start without
   `Cloudflare:OriginSecret` (32+ characters).
@@ -71,15 +71,15 @@ One tag versions every package, so keep them on the same version.
 
 ```sh
 dotnet build
-dotnet test                      # Jobs tests need PostgreSQL: WEBLING_TEST_POSTGRES, or localhost:5432 postgres/postgres
+dotnet test                      # Jobs tests need PostgreSQL: LACHING_WEB_TEST_POSTGRES, or localhost:5432 postgres/postgres
 dotnet format --verify-no-changes
-scripts/tailwind-sample.sh       # packs Webling.Tailwind and builds the sample with it
+scripts/tailwind-sample.sh       # packs Laching.Web.Tailwind and builds the sample with it
 scripts/verify.sh                # all of the above that applies
 ```
 
 A throwaway server for the Jobs tests:
 `docker run -d -p 55432:5432 -e POSTGRES_PASSWORD=postgres postgres:16` and
-`WEBLING_TEST_POSTGRES="Host=localhost;Port=55432;Username=postgres;Password=postgres"`.
+`LACHING_WEB_TEST_POSTGRES="Host=localhost;Port=55432;Username=postgres;Password=postgres"`.
 
 Coding agents: read `AGENTS.md`.
 
