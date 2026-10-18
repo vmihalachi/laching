@@ -35,7 +35,7 @@ or `$COMPANION_ROOT`); the schema is [`companion.schema.json`](companion.schema.
 | `windows/assets.py` | The MSIX logos and `AppIcon.ico` (and the Debug build's) from the app icon; `--check`. |
 | `windows/vm.sh` | On a Mac, the WinUI app built and checked in a Parallels Windows VM from the working tree as it is (uncommitted changes too): `build` (x64 and ARM64), `test`, `screenshots <folder>` (the PNGs back on the Mac), `check-layout [lang…]` (`check-layout.ps1`, the shots back in `<windows.dir>/build/layout-check`), `smoke`, `run -- <command>`, `status`. Without prlctl or the VM it says so in one line and exits 3. One run at a time on the VM, from any app or worktree: another waits, naming the run it waits for (its command and checkout); `status` names it and exits 4, so a caller can skip instead. |
 | `hooks/hook.py` | Agent guardrails: generated files, the stop-time checks (ktlint over the Kotlin files an agent edits), the Windows and Android parity reminders. |
-| `skills/` | `localization`, `add-phrase`, `add-setting`, `conformance`, `voice`, `windows-port`, `release-mac`, `release-windows`, `review-invariants`. |
+| `skills/` | `localization`, `add-phrase`, `add-setting`, `conformance`, `voice`, `windows-port`, `release-mac`, `release-ios` (a universal app's iPhone and iPad version), `release-windows`, `review-invariants`. |
 | `../.github/workflows/windows-release.yml`, `windows-app.yml` | Reusable workflows (`workflow_call`) an app's own short workflows call at the release it pins: the Store release (both packages, the bundle as the artifact, the optional push, the tag) and the WinUI build check (the traps, the tests, both packages, every window). Below, *Windows apps*. |
 
 Tests: `python3 tools/tests/run.py` (over `tools/tests/fixture-app`, a minimal app; `tools.yml` runs them), and for
@@ -113,7 +113,7 @@ An app without a phrase bank or a character (a reminder app, say) leaves `charac
 5. **Skills.** Symlink the generic ones next to the app's own:
 
    ```sh
-   for s in localization add-phrase add-setting conformance voice windows-port release-mac release-windows review-invariants; do
+   for s in localization add-phrase add-setting conformance voice windows-port release-mac release-ios release-windows review-invariants; do
      ln -s "../../laching/tools/skills/$s" ".agents/skills/$s"
    done
    ```
