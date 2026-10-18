@@ -3,7 +3,8 @@ r"""Builds and checks a companion app's Windows side in a Parallels Windows VM o
 (uncommitted changes included), so the WinUI app is built and looked at in the same session as the change instead of
 in the app's Windows workflow. `vm.sh` runs this file.
 
-    laching/tools/windows/vm.sh status                         # can the VM run commands? One line; exit 0 when it can
+    laching/tools/windows/vm.sh status                         # can the VM run commands? One line; exit 0 when it can,
+                                                                # 4 while another run uses it
     laching/tools/windows/vm.sh sync                           # mirror the working tree (and a linked Laching)
     laching/tools/windows/vm.sh build [x64|ARM64…] [-- ARGS]   # the WinUI app (windows.app), Debug; both platforms
     laching/tools/windows/vm.sh test [-- ARGS]                 # windows.coreTests and windows.appTests
@@ -33,7 +34,9 @@ folder the path resolves to from the copy: `%USERPROFILE%\laching-vm\laching` fo
 app. A link the VM can't follow (an absolute path, or one that leaves LACHING_VM_DIR) is refused; link a checkout
 beside the app instead.
 
-One vm.sh run at a time per checkout, and per VM folder of a linked Laching; others wait.
+One vm.sh run at a time per VM, per checkout and per VM folder of a linked Laching, from any app or worktree: another
+waits, naming the run it waits for (its command and checkout, which a run writes in the lock files it holds, under
+~/Library/Caches/laching-vm). While a run uses the VM, `status` names it and exits 4, so a caller can skip instead.
 
 Environment:
   LACHING_VM        the VM's name in Parallels ("Windows 11")
@@ -51,9 +54,11 @@ from __future__ import annotations
 import base64
 import fcntl
 import hashlib
+import json
 import ntpath
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -71,6 +76,7 @@ import companion  # noqa: E402
 HERE = Path(__file__).resolve().parent
 GUEST_SCRIPT = HERE / "vm-guest.ps1"
 UNAVAILABLE = 3
+BUSY = 4
 PLATFORMS = ("x64", "ARM64")
 COMMANDS = ("status", "sync", "build", "test", "screenshots", "check-layout", "smoke", "run")
 
@@ -81,6 +87,10 @@ class Unavailable(Exception):
 
 class Usage(Exception):
     """A mistake in the command line or a command companion.json has nothing for."""
+
+
+class Busy(Exception):
+    """Another vm.sh run uses the VM, which `status` reports so a caller can skip instead of waiting."""
 
 
 def vm_name() -> str:
@@ -317,12 +327,14 @@ def ensure_ready(vm: str) -> None:
 
 
 def status(vm: str) -> str:
-    """One line on whether vm.sh can use the VM; raises Unavailable when it can't."""
+    """One line on whether vm.sh can use the VM; raises Unavailable when it can't and Busy while another run uses it."""
     state = vm_state(vm)
-    if state in ("suspended", "paused"):
-        return f"the VM {vm!r} is {state}; vm.sh resumes it"
-    if state != "running":
+    if state not in ("running", "suspended", "paused"):
         raise Unavailable(f"the VM {vm!r} is {state}: start it in Parallels Desktop and sign in to Windows")
+    if run := busy(vm_lock(vm)):
+        raise Busy(f"the VM {vm!r} is busy with {run}")
+    if state != "running":
+        return f"the VM {vm!r} is {state}; vm.sh resumes it"
     if not signed_in(vm):
         raise Unavailable(f"the VM {vm!r} is running but no one is signed in to Windows")
     return f"the VM {vm!r} is ready"
@@ -355,16 +367,72 @@ def powershell(ctx: Context, body: str, capture: bool = False) -> subprocess.Com
                         "-ExecutionPolicy", "Bypass", "-EncodedCommand", encode(guest_script(ctx, body))], capture)
 
 
+# MARK: One run at a time
+
+
+def caches() -> Path:
+    return Path.home() / "Library" / "Caches" / "laching-vm"
+
+
+def vm_lock(vm: str) -> Path:
+    """The lock every checkout's runs take for the VM `vm`, beside the checkouts' folders."""
+    return caches() / f"{re.sub(r'[^A-Za-z0-9._-]', '-', vm)}.lock"
+
+
+def owner(root: Path, argv: list[str]) -> dict:
+    """What a run writes in the lock files it holds, so a run that waits can say whose it waits for."""
+    return {"checkout": str(root), "command": shlex.join(["vm.sh", *argv]), "pid": os.getpid(),
+            "since": time.strftime("%H:%M:%S")}
+
+
+def holder(fd: int) -> str:
+    """The run the open lock file `fd` names (see owner): its command, its checkout, its process and its start."""
+    try:
+        run = json.loads(os.pread(fd, 65536, 0).decode("utf8").split("\n", 1)[0])
+        return f"{run['command']} from {run['checkout']} (pid {run['pid']}, since {run['since']})"
+    except (ValueError, KeyError, TypeError):
+        return "another vm.sh run"  # one that hasn't written itself in yet, or an older vm.sh's
+
+
+def busy(lock: Path) -> str | None:
+    """The run holding the lock file `lock` (see holder), or None while none does."""
+    try:
+        fd = os.open(lock, os.O_RDONLY)
+    except FileNotFoundError:
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return holder(fd)
+    finally:
+        os.close(fd)
+    return None
+
+
 @contextmanager
-def one_at_a_time(stage: Path, what: str = "in this checkout"):
-    stage.mkdir(parents=True, exist_ok=True)
-    with open(stage / "lock", "w") as handle:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            print(f"vm.sh: waiting for another vm.sh run {what}", file=sys.stderr)
-            fcntl.flock(handle, fcntl.LOCK_EX)
+def one_at_a_time(lock: Path, what: str, run: dict, poll: float = 0.5):
+    """Holds the lock file `lock` while the block runs, with `run` (see owner) written in it. While another run holds
+    it, says which one (again when that changes) and waits. The lock goes with the process, however that ends."""
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        said = None
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if (other := holder(fd)) != said:
+                    print(f"vm.sh: {what} is busy with {other}; waiting", file=sys.stderr, flush=True)
+                    said = other
+                time.sleep(poll)
+        # One line, over the last holder's before cutting what's left of it, so a reader sees one or the other whole.
+        line = (json.dumps(run) + "\n").encode()
+        os.pwrite(fd, line, 0)
+        os.ftruncate(fd, len(line))
         yield
+    finally:
+        os.close(fd)
 
 
 # MARK: Commands
@@ -558,14 +626,17 @@ def main(argv: list[str]) -> int:
             raise Usage(f"unknown command {command!r} ({', '.join(COMMANDS)}; --help)")
         config = companion.load()
         key = checkout_key(config.root)
-        ctx = Context(config.root, config, vm, key, Path.home() / "Library" / "Caches" / "laching-vm" / key)
+        ctx = Context(config.root, config, vm, key, caches() / key)
         ctx.linked = linked_checkout(ctx)
         body = command_body(ctx, command, words, extra)
         ensure_ready(vm)
-        with ExitStack() as locks:
-            locks.enter_context(one_at_a_time(ctx.stage))
+        run = owner(config.root, argv)
+        with ExitStack() as locks:  # always in this order, so two runs never hold one each and wait for the other
+            locks.enter_context(one_at_a_time(ctx.stage / "lock", "this checkout", run))
             if ctx.linked:
-                locks.enter_context(one_at_a_time(ctx.linked.stage, f"with the linked Laching in {ctx.linked.guest}"))
+                linked = f"the linked Laching in {ctx.linked.guest}"
+                locks.enter_context(one_at_a_time(ctx.linked.stage / "lock", linked, run))
+            locks.enter_context(one_at_a_time(vm_lock(vm), f"the VM {vm!r}", run))
             sync(ctx)
             if body is None:
                 return 0
@@ -589,6 +660,9 @@ def main(argv: list[str]) -> int:
     except Unavailable as reason:
         print(f"vm.sh: {reason}", file=sys.stderr)
         return UNAVAILABLE
+    except Busy as reason:
+        print(f"vm.sh: {reason}", file=sys.stderr)
+        return BUSY
 
 
 if __name__ == "__main__":
