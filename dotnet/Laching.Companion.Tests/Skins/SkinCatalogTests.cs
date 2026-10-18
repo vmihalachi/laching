@@ -62,8 +62,12 @@ public sealed class SkinCatalogTests
     {
         var vector = new SkinEntry(Fixture.Vector);
         var raster = new SkinEntry(Fixture.Raster, FixtureArt.RasterProduct);
-        Assert.Throws<ArgumentException>(() => new SkinCatalog([]));
-        Assert.Throws<ArgumentException>(() => new SkinCatalog([raster, vector]));
-        Assert.Throws<ArgumentException>(() => new SkinCatalog([vector, vector]));
+        // The messages are Swift's precondition messages (docs/conventions.md).
+        Assert.StartsWith("a skin catalog needs at least the default skin", Assert.Throws<ArgumentException>(() => new SkinCatalog([])).Message);
+        Assert.StartsWith(
+            $"the default skin {raster.Id} must be free",
+            Assert.Throws<ArgumentException>(() => new SkinCatalog([raster, vector])).Message
+        );
+        Assert.StartsWith("skin ids must be unique", Assert.Throws<ArgumentException>(() => new SkinCatalog([vector, vector])).Message);
     }
 }

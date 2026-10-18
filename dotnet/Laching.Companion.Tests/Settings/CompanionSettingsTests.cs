@@ -237,4 +237,12 @@ public sealed class CompanionSettingsTests
         Assert.Equal([nameof(CompanionSettings.Frequency), nameof(CompanionSettings.Skin)], changed);
         Assert.Equal("rarely", store.GetString(SettingsKeys.Frequency));
     }
+
+    [Fact]
+    public void AnUnknownAppearanceOrSizeThrows()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => ((AppearanceSetting)99).RawValue());
+        Assert.Throws<ArgumentOutOfRangeException>(() => ((DesktopSize)99).RawValue());
+        Assert.Throws<ArgumentOutOfRangeException>(() => ((DesktopSize)99).Height());
+    }
 }

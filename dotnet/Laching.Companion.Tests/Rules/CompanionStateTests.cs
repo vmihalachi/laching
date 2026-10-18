@@ -106,4 +106,7 @@ public sealed class CompanionStateTests
         Assert.Equal("hushedFullScreen", Mood.HushedFullScreen.RawValue());
         Assert.Null(Moods.Parse("sleepy"));
     }
+
+    [Fact]
+    public void AnUnknownMoodThrows() => Assert.Throws<ArgumentOutOfRangeException>(() => ((Mood)99).RawValue());
 }

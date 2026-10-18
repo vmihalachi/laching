@@ -38,6 +38,17 @@ The complete rules (moved from `AGENTS.md`, which keeps the short form).
   names (`plans/0.8/README.md` maps every Swift file). Tests mirror the same folders, with `Conformance/` in each Core
   and Companion test project.
   No reflection-based JSON (source-generated contexts only): the apps publish with Native AOT and warnings are errors.
+- **A programmer error stops each port in its own idiom.** A misuse the type system can't catch (a `SkinCatalog` whose
+  default skin isn't free, a joke with one part) is a `precondition` in Swift and an `ArgumentException` in C#
+  (`ArgumentOutOfRangeException` for a number out of range), with the same message text: interpolate raw values
+  (`skin.rawValue`, `mood.rawValue`; `RawValue()` in C#), never a Swift value's default description. Swift can't test a
+  trap, so each C# throw gets a test that pins it. C# also throws `ArgumentOutOfRangeException` from a switch's default
+  arm for an enum value outside the known cases, where Swift's exhaustive switch needs nothing; those get a test too. A
+  value built with a hole in it (`RiggedCharacter`'s art missing a part its rig names) is a `preconditionFailure`
+  against an `InvalidOperationException`. A member a subclass must override is a `fatalError` in Swift and `abstract` in
+  C#. Kotlin, which ports Core and the testing helpers, follows the same rule with `require` (an
+  `IllegalArgumentException`). A mistake in a file an app ships (`phrases.json`, character art) isn't a programmer
+  error: the loaders throw, on every side.
 - **Strings:** the package ships none. Titles for notification actions and the like are passed in already localized.
 - **Versioning:** SemVer, one `vX.Y.Z` tag per release for every side. There is no changelog file: the release notes
   are GitHub's, from the merged pull requests' titles, so a pull request's title says what changed for an app, and a

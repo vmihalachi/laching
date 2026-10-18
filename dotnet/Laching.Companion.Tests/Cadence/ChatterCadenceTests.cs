@@ -53,4 +53,14 @@ public sealed class ChatterCadenceTests
         Assert.Null(Frequencies.Parse("Sometimes"));
         Assert.Null(Shushes.Parse("forever"));
     }
+
+    [Fact]
+    public void AnUnknownPresetOrShushThrows()
+    {
+        var unknown = (Frequency)99;
+        Assert.Throws<ArgumentOutOfRangeException>(() => unknown.IntervalSeconds());
+        Assert.Throws<ArgumentOutOfRangeException>(() => unknown.JitterSeconds());
+        Assert.Throws<ArgumentOutOfRangeException>(() => unknown.RawValue());
+        Assert.Throws<ArgumentOutOfRangeException>(() => ((ChatterCadence.Shush)99).RawValue());
+    }
 }

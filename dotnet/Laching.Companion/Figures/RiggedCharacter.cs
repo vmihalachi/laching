@@ -99,7 +99,7 @@ public sealed class RiggedCharacter(CharacterArt art) : IDrawableCharacter
     public int GlyphFrameCount(Mood mood) => Art.Rig.Glyph.TryGetValue(mood, out var frames) ? frames.Count : 0;
 
     private MoodRig MoodRig(Mood mood) =>
-        Art.Rig.Moods.TryGetValue(mood, out var m) ? m : throw new InvalidOperationException($"{Art.Skin} has no rig for {mood}");
+        Art.Rig.Moods.TryGetValue(mood, out var m) ? m : throw new InvalidOperationException($"{Art.Skin} has no rig for {mood.RawValue()}");
 
     private PartContent Part(string name) =>
         Art.Parts.TryGetValue(name, out var content) ? content : throw new InvalidOperationException($"{Art.Skin} has no part {name}");

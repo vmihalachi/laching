@@ -227,4 +227,21 @@ public sealed class RiggedCharacterTests
         Assert.Equal(new Point(3, 1), Transform.Scale(2, new Point(1, 1)).Apply(new Point(2, 1)));
         Assert.Equal((1d, 0d, 0d, 1d, 3d, 4d), Transform.Translation(3, 4).Affine);
     }
+
+    [Fact]
+    public void ArtMissingWhatItsRigNamesThrows()
+    {
+        // The messages are Swift's preconditionFailure messages (docs/conventions.md).
+        var art = Fixture.Vector;
+        var noRig = new RiggedCharacter(art with { Rig = art.Rig with { Moods = new Dictionary<Mood, MoodRig>() } });
+        var error = Assert.Throws<InvalidOperationException>(() => noRig.StillPose(Mood.Awake));
+        Assert.Equal($"{art.Skin.RawValue} has no rig for awake", error.Message);
+        var pose = Character.StillPose(Mood.Awake);
+        var noPivots = new RiggedCharacter(art with { Pivots = new Dictionary<string, Point>() });
+        error = Assert.Throws<InvalidOperationException>(() => noPivots.Layers(pose));
+        Assert.Equal($"{art.Skin.RawValue} has no pivot {art.Rig.Head.Pivot}", error.Message);
+        var noParts = new RiggedCharacter(art with { Parts = new Dictionary<string, PartContent>() });
+        error = Assert.Throws<InvalidOperationException>(() => noParts.Layers(pose));
+        Assert.StartsWith($"{art.Skin.RawValue} has no part ", error.Message);
+    }
 }
