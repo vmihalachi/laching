@@ -17,8 +17,9 @@ folder map are in the app's `.agents/notes/windows-port.md` (or its parity doc).
   `<windows.appTests>`. The WinUI app's XAML compiler needs Windows. On a Mac with the Parallels Windows VM, build it
   there from your working tree, uncommitted changes included: `laching/tools/windows/vm.sh build` (x64 and ARM64;
   `verify.sh` does it too), `vm.sh screenshots <folder>` to look at the windows you changed (the PNGs land in the Mac
-  folder), `vm.sh smoke` for the Native AOT package. `vm.sh status` says whether the VM is there. Without it (Linux, a
-  cloud session), build on Windows or push and run the app's Windows workflow, and say so.
+  folder), `vm.sh smoke` for the Native AOT package. `vm.sh status` says whether the VM is there, and exits 4 while
+  another session's run uses it (a run waits for that one, naming it). Without it (Linux, a cloud session), build on
+  Windows or push and run the app's Windows workflow, and say so.
 - Formatting: `dotnet format whitespace <windows.dir> --folder` (the app's `.editorconfig`).
 - Swift → C#: the same type and member names, PascalCased; durations as `double` seconds with a `Seconds` suffix;
   string-backed ids (`FlavorId`, `SkinId`, `PaintRole`) as record structs; `PartContent.Vector` for Swift's `.shapes`.

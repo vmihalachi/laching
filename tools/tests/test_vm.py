@@ -1,26 +1,30 @@
 #!/usr/bin/env python3
 """Tests for tools/windows/vm.sh (vm.py), the Parallels VM runner, without a VM: the files it mirrors, the tar it
-sends, the paths the VM sees, the PowerShell it runs for each command, and the one line it prints when there's no VM
-(no prlctl, an unknown, stopped or suspended VM) against a fake `prlctl`. Where PowerShell is installed, vm-guest.ps1's
-Sync-Tree runs over a folder: what it unpacks, deletes, keeps and asks for."""
+sends, the paths the VM sees, the PowerShell it runs for each command, the one line it prints when there's no VM
+(no prlctl, an unknown, stopped or suspended VM) or another run uses it against a fake `prlctl`, and one run at a time
+on the VM from any checkout, with real vm.py processes whose VM side is faked. Where PowerShell is installed,
+vm-guest.ps1's Sync-Tree runs over a folder: what it unpacks, deletes, keeps and asks for."""
 
 from __future__ import annotations
 
 import base64
 import io
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "windows"))
-from support import TOOLS, WINDOWS, FixtureAppTestCase, git  # noqa: E402
+from support import FIXTURE_APP, TOOLS, WINDOWS, FixtureAppTestCase, git  # noqa: E402
 
 if WINDOWS:
     raise unittest.SkipTest("vm.py runs on a Mac, driving its Parallels VM (it locks with fcntl, which Windows lacks)")
@@ -363,6 +367,20 @@ echo "ran $*"
         finally:
             os.environ["PATH"] = previous
 
+    def test_status_names_the_run_that_uses_the_vm(self):
+        self.prlctl('echo "VM $2 exist running"')
+        with mock.patch.dict(os.environ, {"HOME": str(self.root)}):
+            lock = vm.vm_lock("Windows 11")
+        self.assertEqual(lock, self.root / "Library/Caches/laching-vm/Windows-11.lock")
+        run = vm.owner(Path("/Users/me/wt/app"), ["check-layout", "fr", "--", "-Only", "home"])
+        with vm.one_at_a_time(lock, "the VM 'Windows 11'", run):
+            done = self.run_vm("status")
+        self.assertEqual(done.returncode, vm.BUSY, done.stderr)
+        self.assertEqual(done.stderr, "vm.sh: the VM 'Windows 11' is busy with vm.sh check-layout fr -- -Only home "
+                                      f"from /Users/me/wt/app (pid {os.getpid()}, since {run['since']})\n")
+        done = self.run_vm("status")
+        self.assertEqual((done.returncode, done.stdout.strip()), (0, "vm.sh: the VM 'Windows 11' is ready"))
+
     def test_usage_mistakes(self):
         self.prlctl('echo "VM $2 exist running"')
         for args, words in ((["bogus"], "unknown command"), (["screenshots"], "one folder"),
@@ -374,6 +392,132 @@ echo "ran $*"
                 done = self.run_vm(*args)
                 self.assertEqual(done.returncode, 2, done.stderr)
                 self.assertIn(words, done.stderr)
+
+
+class LockTests(unittest.TestCase):
+    """One run at a time on the VM from any checkout: vm.py processes that take the real locks, with the VM's side
+    (the readiness check, the sync and the PowerShell) faked. A run marks `<name>.started` once it holds the locks
+    and ends when the test makes `<name>.done`."""
+
+    FAKE = """
+import os, subprocess, sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv.pop(1))
+import vm
+marks, name = Path(os.environ["MARKS"]), os.environ["NAME"]
+
+def powershell(ctx, body, capture=False):
+    while not (marks / f"{name}.done").exists():
+        time.sleep(0.05)
+    if os.environ.get("FAIL"):
+        raise RuntimeError("the build broke")
+    return subprocess.CompletedProcess([], 0)
+
+vm.ensure_ready = lambda vm_name: None
+vm.sync = lambda ctx: (marks / f"{name}.started").touch()
+vm.powershell = powershell
+sys.exit(vm.main(sys.argv[1:]))
+"""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.temp = Path(temp.name).resolve()
+        self.marks = self.temp / "marks"
+        self.marks.mkdir()
+        self.lock = self.temp / "home/Library/Caches/laching-vm/Windows-11.lock"
+
+    def checkout(self, name: str) -> Path:
+        root = self.temp / name
+        if not root.exists():
+            shutil.copytree(FIXTURE_APP, root)
+        return root
+
+    def start(self, name: str, checkout: str, *args: str, **env: str) -> subprocess.Popen:
+        root = self.checkout(checkout)
+        with open(self.marks / f"{name}.err", "w") as err:
+            process = subprocess.Popen(
+                [sys.executable, "-c", self.FAKE, str(TOOLS / "windows"), *args], cwd=root, stdout=subprocess.DEVNULL,
+                stderr=err, env={**os.environ, "HOME": str(self.temp / "home"), "COMPANION_ROOT": str(root),
+                                 "LACHING_VM": "Windows 11", "MARKS": str(self.marks), "NAME": name, **env})
+        self.addCleanup(process.wait)
+        self.addCleanup(process.kill)  # first, when a test fails with the run still waiting
+        return process
+
+    def wait_for(self, check, what: str):
+        deadline = time.monotonic() + 30
+        while not (found := check()):
+            if time.monotonic() > deadline:
+                self.fail(f"no {what} after 30 s")
+            time.sleep(0.05)
+        return found
+
+    def started(self, name: str) -> None:
+        self.wait_for((self.marks / f"{name}.started").exists, f"{name}.started")
+
+    def said(self, name: str, text: str) -> str:
+        """What run `name` printed, once it holds `text`."""
+        return self.wait_for(lambda: text in (said := (self.marks / f"{name}.err").read_text()) and said, text)
+
+    def finish(self, name: str, process: subprocess.Popen) -> int:
+        (self.marks / f"{name}.done").touch()
+        return process.wait(30)
+
+    def test_a_run_from_another_checkout_waits_naming_the_run_it_waits_for(self):
+        first = self.start("first", "app", "build", "x64")
+        self.started("first")
+        second = self.start("second", "wt-app", "test")
+        run = f"vm.sh build x64 from {self.temp / 'app'} (pid {first.pid}, since "
+        said = self.said("second", "waiting")
+        self.assertRegex(said, f"^vm.sh: the VM 'Windows 11' is busy with {re.escape(run)}"
+                               r"\d\d:\d\d:\d\d\); waiting\n$")
+        self.assertIn(run, vm.busy(self.lock), "status says the same")
+        time.sleep(1)
+        self.assertFalse((self.marks / "second.started").exists(), "the second run waits")
+
+        self.assertEqual(self.finish("first", first), 0)
+        self.started("second")
+        self.assertIn(f"vm.sh test from {self.temp / 'wt-app'}", vm.busy(self.lock))
+        self.assertEqual(self.finish("second", second), 0)
+        self.assertIsNone(vm.busy(self.lock))
+
+    def test_the_locks_go_when_a_run_fails_or_is_killed(self):
+        first = self.start("first", "app", "smoke", FAIL="1")
+        self.started("first")
+        second = self.start("second", "app", "build")
+        said = self.said("second", "waiting")
+        self.assertIn(f"vm.sh: this checkout is busy with vm.sh smoke from {self.temp / 'app'} (pid {first.pid}", said)
+        self.assertEqual(self.finish("first", first), 1)
+        self.assertIn("RuntimeError: the build broke", (self.marks / "first.err").read_text())
+
+        self.started("second")
+        second.kill()
+        second.wait(30)
+        self.assertIsNone(vm.busy(self.lock))
+        third = self.start("third", "wt-app", "build")
+        self.started("third")
+        self.assertEqual(self.finish("third", third), 0)
+        self.assertEqual((self.marks / "third.err").read_text(), "", "no wait")
+
+    def test_one_at_a_time_holds_the_lock_for_the_block(self):
+        run = vm.owner(Path("/Users/me/app"), ["build"])
+        self.assertIsNone(vm.busy(self.lock), "no lock file yet")
+        with self.assertRaises(RuntimeError):
+            with vm.one_at_a_time(self.lock, "the VM 'Windows 11'", run):
+                self.assertEqual(vm.busy(self.lock), f"vm.sh build from /Users/me/app (pid {os.getpid()}, "
+                                                     f"since {run['since']})")
+                raise RuntimeError
+        self.assertIsNone(vm.busy(self.lock))
+        self.assertEqual(json.loads(self.lock.read_text()), run, "left as it was: no one reads it unless it's held")
+        shorter = vm.owner(Path("/a"), ["sync"])
+        with vm.one_at_a_time(self.lock, "the VM 'Windows 11'", shorter):
+            self.assertEqual(self.lock.read_text(), json.dumps(shorter) + "\n", "the last run's line is gone whole")
+        self.lock.write_text("not json")
+        fd = os.open(self.lock, os.O_RDONLY)
+        try:
+            self.assertEqual(vm.holder(fd), "another vm.sh run")
+        finally:
+            os.close(fd)
 
 
 @unittest.skipUnless(POWERSHELL, "needs PowerShell")
