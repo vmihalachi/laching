@@ -222,7 +222,9 @@ class Client:
                 raise ApiError(f"{method} {url.removeprefix(API)}: {e.code} {detail}") from None
 
     def get_all(self, path):
-        items, url = [], path + ("&" if "?" in path else "?") + "limit=200"
+        query = path.partition("?")[2]
+        has_limit = any(x.startswith("limit=") for x in query.split("&"))  # App Store Connect refuses a second one
+        items, url = [], path if has_limit else path + ("&" if query else "?") + "limit=200"
         while url:
             page = self.request("GET", url)
             items += page["data"]
@@ -668,13 +670,18 @@ class Sync:
 
 def status(listing: Listing, api, version_string):
     """Prints what App Store Connect has for the version (the Mac's, and the iOS one with `store.apple.ios`) and what a
-    submission still needs. Reads only."""
+    submission still needs. The platforms number their versions apart, so one may lack it; exits non-zero only when
+    none has it. Reads only."""
     missing = []
-    if not status_version(listing, api, version_string, mac_page(listing), missing):
-        sys.exit(f"No macOS version {version_string} in App Store Connect.")
-    if listing.ios is not None and not status_version(listing, api, version_string, ios_page(listing), missing):
+    mac = status_version(listing, api, version_string, mac_page(listing), missing)
+    if not mac:
+        print(f"No macOS version {version_string} in App Store Connect.")
+    ios = listing.ios is not None and status_version(listing, api, version_string, ios_page(listing), missing)
+    if listing.ios is not None and not ios:
         print(f"No iOS version {version_string} yet (push.py --create adds it)")
         missing.append(f"the iOS version {version_string}")
+    if not mac and not ios:
+        sys.exit(f"No version {version_string} in App Store Connect.")
     products = {p["attributes"]["productId"]: p for p in api.get_all(f"/v1/apps/{listing.app_id}/inAppPurchasesV2")}
     for product_id in listing.iaps:
         product = products.get(product_id)

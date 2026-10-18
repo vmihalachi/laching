@@ -528,6 +528,29 @@ class StoreTests(FixtureAppTestCase):
         self.assertIn("the App Review contact", needed, "the Mac's has no details")
         self.assertIn("en-US: 0 screenshots", out, "the Mac's lines read as before")
 
+    def test_status_reports_an_ios_version_the_mac_lacks(self):
+        api, mac = self.setup_app(earlier=False)
+        self.enable_ios()
+        api.objects.pop(("appStoreVersions", mac["id"]))
+        with self.assertRaises(SystemExit) as raised, contextlib.redirect_stdout(io.StringIO()):
+            push.status(self.listing, api, "1.0.2")
+        self.assertIn("No version 1.0.2", str(raised.exception))
+
+        self.add_ios_version(api)
+        out = self.status(api)
+        self.assertIn("No macOS version 1.0.2 in App Store Connect.", out)
+        self.assertIn("iOS Version 1.0.2: PREPARE_FOR_SUBMISSION", out)
+        self.assertIn("Still needed: ", out)
+
+    def test_get_all_keeps_a_callers_limit(self):
+        client, urls = push.Client.__new__(push.Client), []
+        client.request = lambda method, url: urls.append(url) or {"data": []}
+        client.get_all("/v1/builds?filter[app]=1&limit=20")
+        client.get_all("/v1/builds?filter[app]=1")
+        client.get_all("/v1/apps")
+        self.assertEqual(urls, ["/v1/builds?filter[app]=1&limit=20", "/v1/builds?filter[app]=1&limit=200",
+                                "/v1/apps?limit=200"])
+
     def configure(self, **apple):
         path = self.root / "companion.json"
         config = json.loads(path.read_text("utf8"))
