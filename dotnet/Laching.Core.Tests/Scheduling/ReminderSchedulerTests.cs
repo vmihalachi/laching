@@ -105,6 +105,32 @@ public sealed class ReminderSchedulerTests
     }
 
     [Fact]
+    public void TestSnoozeForSecondsRemindsAfterThatLong()
+    {
+        var scheduler = MakeScheduler(Monday(10));
+        Assert.Equal([45], Run(scheduler, 45));
+        scheduler.SnoozeFor(90);
+        Assert.Equal(Monday(10, 46).AddSeconds(30), scheduler.NextFireDate);
+        Assert.Equal(
+            [SchedulerDecision.None, SchedulerDecision.None, SchedulerDecision.None, SchedulerDecision.None,
+                SchedulerDecision.Remind, SchedulerDecision.None],
+            Tick(scheduler, 120));
+    }
+
+    [Fact]
+    public void TestSnoozeMinutesIsSnoozeForSixtyTimesAsManySeconds()
+    {
+        var s = MakeScheduler(Monday(10));
+        _ = Run(s, 45);
+        s.Snooze(10);
+        var byMinutes = s.NextFireDate;
+        var t = MakeScheduler(Monday(10));
+        _ = Run(t, 45);
+        t.SnoozeFor(600);
+        Assert.Equal(byMinutes, t.NextFireDate);
+    }
+
+    [Fact]
     public void TestSnoozeWithoutReminderNeverBringsItCloser()
     {
         var scheduler = MakeScheduler(Monday(10));

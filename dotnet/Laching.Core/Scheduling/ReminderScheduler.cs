@@ -176,9 +176,12 @@ public sealed class ReminderScheduler
     /// Answering a reminder (unanswered, held during a call, or already snoozed until after a call) reminds again
     /// in <paramref name="minutes"/>. Otherwise snooze only ever pushes the next reminder later, never closer.
     /// </summary>
-    public void Snooze(int minutes = 10)
+    public void Snooze(int minutes = 10) => SnoozeFor(minutes * 60.0);
+
+    /// <summary><see cref="Snooze"/> for a duration in seconds, for a snooze that isn't whole minutes (say 90 seconds).</summary>
+    public void SnoozeFor(double seconds)
     {
-        var snoozed = clock.Now.AddMinutes(minutes);
+        var snoozed = clock.Now.AddSeconds(seconds);
         var answering = HasUnansweredReminder || IsHolding || IsAfterCallArmed;
         PausedUntil = null;
         ClearBusyState();

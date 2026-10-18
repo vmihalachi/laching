@@ -152,8 +152,11 @@ public class ReminderScheduler(
      * Push the reminder back by [minutes]. Answering a reminder (shown, held or armed for after a call) reminds in
      * exactly that long; a snooze with nothing pending never pulls the next reminder closer.
      */
-    public fun snooze(minutes: Int = 10) {
-        val snoozed = clock.now.plusSeconds(minutes * 60.0)
+    public fun snooze(minutes: Int = 10): Unit = snoozeFor(minutes * 60.0)
+
+    /** [snooze] for a duration in seconds, for a snooze that isn't whole minutes (say 90 seconds). */
+    public fun snoozeFor(seconds: Double) {
+        val snoozed = clock.now.plusSeconds(seconds)
         val answering = hasUnansweredReminder || isHolding || isAfterCallArmed
         pausedUntil = null
         clearBusyState()

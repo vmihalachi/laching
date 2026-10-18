@@ -98,7 +98,7 @@ enum SchedulerVectors {
     /// - "ticks": `count` times, advance the clock by `everySeconds` (0 = don't), then tick with
     ///   `idleSeconds` since the last input and `busy` reasons ("call", "fullScreen").
     /// - "setTime": set the clock to `time`.
-    /// - "snooze" (`minutes`), "snoozeUntilAfterCall", "pauseFor" (`seconds`), "pauseUntil" (`time`),
+    /// - "snooze" (`minutes`), "snoozeFor" (`seconds`), "snoozeUntilAfterCall", "pauseFor" (`seconds`), "pauseUntil" (`time`),
     ///   "pauseUntilEndOfToday", "resume", "sessionCompleted", "updateConfig" (`config`),
     ///   "restore" (`time`, the next fire date an earlier run scheduled), "reminderDelivered".
     /// - "isWithinActiveHours": query `time`; `expect.result` is the answer.
@@ -196,6 +196,8 @@ enum SchedulerVectors {
                 clock.now = try ConformanceSupport.date(try required(step.time, "time", step.op))
             case "snooze":
                 scheduler.snooze(minutes: try required(step.minutes, "minutes", step.op))
+            case "snoozeFor":
+                scheduler.snooze(for: TimeInterval(try required(step.seconds, "seconds", step.op)))
             case "snoozeUntilAfterCall":
                 scheduler.snoozeUntilAfterCall()
             case "pauseFor":
@@ -257,6 +259,7 @@ enum SchedulerVectors {
 
         mutating func setTime(_ date: Date) { steps.append(Step(op: "setTime", time: iso(date))) }
         mutating func snooze(minutes: Int) { steps.append(Step(op: "snooze", minutes: minutes)) }
+        mutating func snooze(seconds: Int) { steps.append(Step(op: "snoozeFor", seconds: seconds)) }
         mutating func snoozeUntilAfterCall() { steps.append(Step(op: "snoozeUntilAfterCall")) }
         mutating func pause(seconds: Int) { steps.append(Step(op: "pauseFor", seconds: seconds)) }
         mutating func pause(until date: Date) { steps.append(Step(op: "pauseUntil", time: iso(date))) }
@@ -349,6 +352,14 @@ enum SchedulerVectors {
             s.run(minutes: 45)
             s.snooze(minutes: 10)
             s.run(minutes: 15)
+        },
+        Case(
+            name: "snooze-seconds", description: "A snooze in seconds reminds again after exactly that long, here 90 seconds.",
+            start: { $0.monday(10) }
+        ) { s in
+            s.run(minutes: 45)
+            s.snooze(seconds: 90)
+            s.ticks(10, every: 15)
         },
         Case(
             name: "snooze-without-reminder",

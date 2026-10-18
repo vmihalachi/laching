@@ -90,6 +90,10 @@ class SchedulerConformanceTests {
                     scheduler.snooze(step["minutes"]!!.jsonPrimitive.int)
                 }
 
+                "snoozeFor" -> {
+                    scheduler.snoozeFor(step["seconds"]!!.jsonPrimitive.double)
+                }
+
                 "snoozeUntilAfterCall" -> {
                     scheduler.snoozeUntilAfterCall()
                 }
