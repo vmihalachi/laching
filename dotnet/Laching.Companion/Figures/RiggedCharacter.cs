@@ -8,7 +8,12 @@ namespace Laching.Companion.Figures;
 /// new art folder run through <c>tools/character.py</c>, not new code. Pure; <c>conformance/companion/characters</c>
 /// pins it. Never reads assets: image parts are placed, and the app draws them.
 /// </summary>
-public sealed class RiggedCharacter(CharacterArt art) : IDrawableCharacter
+/// <remarks>
+/// Geometry only: the app fills and strokes shapes with its palette and draws image parts from its assets. A pose comes
+/// from the mood and the time in seconds (or the still pose under reduced motion); the layers come from the pose. The
+/// tray / menu bar glyph is a vector template in a <see cref="GlyphSize"/> square for every skin.
+/// </remarks>
+public sealed class RiggedCharacter(CharacterArt art)
 {
     public CharacterArt Art { get; } = art;
 
@@ -18,10 +23,13 @@ public sealed class RiggedCharacter(CharacterArt art) : IDrawableCharacter
 
     public double GlyphSize => Art.GlyphSize;
 
+    /// <summary>The pose at <paramref name="time"/>, the mouth on the mood's timer.</summary>
     public Pose Pose(Mood mood, double time) => Pose(mood, time, null);
 
     /// <summary>
-    /// A <paramref name="mouthLevel"/> of 0 shows the rest mouth (closed between words) with no pulse; 1–3 step through
+    /// The pose at <paramref name="time"/>; with a <paramref name="mouthLevel"/> (0–3, a recorded clip's envelope right
+    /// now) the mouth and the pulse follow the voice's loudness instead of the mood's timer. A
+    /// <paramref name="mouthLevel"/> of 0 shows the rest mouth (closed between words) with no pulse; 1–3 step through
     /// the talking mouths, least open first (with two mouths: 1 the first, 2 and 3 the second), and scale the pulse by
     /// level / 3.
     /// </summary>
@@ -52,12 +60,17 @@ public sealed class RiggedCharacter(CharacterArt art) : IDrawableCharacter
     /// <summary>Levels 1–3 spread over <paramref name="count"/> mouths, the loudest on the most open.</summary>
     public static int VoicedMouthIndex(int level, int count) => Math.Min(count - 1, ((level - 1) * count + 1) / 3);
 
+    /// <summary>The pose shown when nothing moves: no blink, the first mouth.</summary>
     public Pose StillPose(Mood mood)
     {
         var m = MoodRig(mood);
         return Pose(mood, Art.Rig.StillTime) with { Blinking = false, Eyes = m.Eyes, Mouth = m.Mouth[0] };
     }
 
+    /// <summary>
+    /// The parts to draw, in order: <c>always</c> parts under the pulse, head or stem transform (or none), then the
+    /// head extras, eyes and mouth under the head, then the overlays untransformed.
+    /// </summary>
     public IReadOnlyList<PlacedPart> Layers(Pose pose)
     {
         var rig = Art.Rig;
@@ -81,6 +94,7 @@ public sealed class RiggedCharacter(CharacterArt art) : IDrawableCharacter
         return layers;
     }
 
+    /// <summary>The vector convenience: every shape part flattened through its transform; image parts are skipped.</summary>
     public IReadOnlyList<PathShape> Shapes(Pose pose) =>
         Layers(pose)
             .SelectMany(layer =>
@@ -88,6 +102,7 @@ public sealed class RiggedCharacter(CharacterArt art) : IDrawableCharacter
             )
             .ToArray();
 
+    /// <summary>Glyph frames: the mood's frames cycle (two while talking).</summary>
     public IReadOnlyList<PathShape> Glyph(Mood mood, int frame)
     {
         if (!Art.Rig.Glyph.TryGetValue(mood, out var frames) || frames.Count == 0)
@@ -96,6 +111,7 @@ public sealed class RiggedCharacter(CharacterArt art) : IDrawableCharacter
         return Art.GlyphFrames.TryGetValue(frames[index], out var shapes) ? shapes : [];
     }
 
+    /// <summary>How many glyph frames the mood cycles through.</summary>
     public int GlyphFrameCount(Mood mood) => Art.Rig.Glyph.TryGetValue(mood, out var frames) ? frames.Count : 0;
 
     private MoodRig MoodRig(Mood mood) =>

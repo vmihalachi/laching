@@ -36,7 +36,7 @@ public static class CharacterMotion
     /// talking (null keeps the mood's timer), blended up from the Shh droop for <see cref="WakeDuration"/> after waking
     /// (<paramref name="sinceWake"/>, null when it didn't just wake).
     /// </summary>
-    public static Pose PoseAt(IDrawableCharacter character, Mood mood, bool talking, bool still, double time, int? mouthLevel, double? sinceWake)
+    public static Pose PoseAt(RiggedCharacter character, Mood mood, bool talking, bool still, double time, int? mouthLevel, double? sinceWake)
     {
         var shown = Shown(mood, talking);
         if (still)
