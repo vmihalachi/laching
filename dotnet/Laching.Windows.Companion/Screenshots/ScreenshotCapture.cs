@@ -30,10 +30,10 @@ namespace Laching.Windows.Companion.Screenshots;
 /// A window is captured as the screen shows it (<c>PrintWindow</c> with full content, cropped to its visible frame),
 /// caption buttons included, as the Mac's shots show the title bar. Not <c>RenderTargetBitmap</c>: it draws XAML only,
 /// so it would miss the composition visuals the character's parts move on and the bubble's shadow and dial. Every shot is
-/// also checked: a window that didn't open, a PNG that wasn't written, or text that doesn't fit
-/// (<see cref="LayoutCheck.TextProblems"/>) is a problem, written to <see cref="ProblemsFile"/> next to the shots. A hidden
-/// run (<see cref="IsHidden"/>) cloaks its windows: the compositor still draws them, so <c>PrintWindow</c> captures them
-/// as it would on screen, but inactive.
+/// also checked: a window that didn't open, a PNG that wasn't written, a window captured before it drew (one flat colour
+/// under the caption buttons, still so when taken again), or text that doesn't fit (<see cref="LayoutCheck.TextProblems"/>)
+/// is a problem, written to <see cref="ProblemsFile"/> next to the shots. A hidden run (<see cref="IsHidden"/>) cloaks its
+/// windows: the compositor still draws them, so <c>PrintWindow</c> captures them as it would on screen, but inactive.
 /// </remarks>
 public static class ScreenshotCapture
 {
@@ -54,6 +54,15 @@ public static class ScreenshotCapture
     /// something keeps laying out, and runs side by side (the layout check) start their windows slower.
     /// </summary>
     private static readonly TimeSpan HiddenLimit = TimeSpan.FromSeconds(5);
+
+    /// <summary>The longest wait for two of XAML's frames, and then for the compositor's present, before a hidden run's capture (<see cref="Presented"/>).</summary>
+    private static readonly TimeSpan FrameLimit = TimeSpan.FromSeconds(0.5);
+
+    /// <summary>
+    /// What the blank check (<see cref="IsBlank"/>) leaves out at the sides and the bottom of a capture, in DIPs: the
+    /// frame's border and Windows 11's rounded corners, which Windows draws whether or not the content has.
+    /// </summary>
+    private const double BlankInset = 8;
 
     private static readonly List<string> Found = [];
 
@@ -154,13 +163,28 @@ public static class ScreenshotCapture
         Application.Current.Exit();
     }
 
-    /// <summary>Captures <paramref name="window"/> as the screen shows it, then checks that its text fits.</summary>
-    public static void Capture(Window window, string path)
+    /// <summary>
+    /// Captures <paramref name="window"/> as the screen shows it, then checks that its text fits. A capture taken before
+    /// the window drew (<see cref="IsBlank"/>) is taken again after <see cref="Settle"/> and a presented frame, and
+    /// reported when it is still blank.
+    /// </summary>
+    public static async Task Capture(Window window, string path)
     {
         var shot = Path.GetFileName(path);
         var hwnd = Win32Interop.GetWindowFromWindowId(window.AppWindow.Id);
-        if (!Write(hwnd, path))
+        // The caption buttons' band, which Windows draws before the content (WindowFrame's); a fitting view has none.
+        var band = window.ExtendsContentIntoTitleBar ? WindowInset.TitleBar : 0;
+        var drawn = Write(hwnd, path, band, out var blank);
+        if (drawn && blank)
+        {
+            await Task.Delay(Settle);
+            await Presented();
+            drawn = Write(hwnd, path, band, out blank);
+        }
+        if (!drawn)
             Report($"{shot}: the window couldn't be drawn");
+        else if (blank)
+            Report($"{shot}: captured before it drew");
         if (window.Content is UIElement root)
             foreach (var problem in LayoutCheck.TextProblems(root))
                 Report($"{shot}: {problem}");
@@ -182,7 +206,7 @@ public static class ScreenshotCapture
         Shell.NativeMethods.SetClientSize(window.AppWindow, new SizeInt32((int)Math.Round(size.Width * scale), (int)Math.Round(size.Height * scale)));
         Present(window);
         await Drawn(window);
-        Capture(window, path);
+        await Capture(window, path);
         window.Close();
     }
 
@@ -212,7 +236,7 @@ public static class ScreenshotCapture
         // What x:Bind sets arrives once the view has loaded, so it can be taller now than when it was first measured.
         Fit();
         await Drawn(window, TimeSpan.FromSeconds(0.3));
-        Capture(window, path);
+        await Capture(window, path);
         window.Close();
     }
 
@@ -222,7 +246,8 @@ public static class ScreenshotCapture
     /// <summary>
     /// Waits for <paramref name="window"/> to lay out and draw: <paramref name="wait"/> in a run in front; in a hidden run
     /// (<see cref="IsHidden"/>) until its content has loaded, its images have decoded and no layout pass has run for
-    /// <see cref="Quiet"/> (a fifth of a second to half a second for most windows), <see cref="HiddenLimit"/> at most.
+    /// <see cref="Quiet"/> (a fifth of a second to half a second for most windows), <see cref="HiddenLimit"/> at most, and
+    /// then for a frame of that on screen (<see cref="Presented"/>).
     /// </summary>
     internal static async Task Drawn(Window window, TimeSpan wait)
     {
@@ -241,13 +266,64 @@ public static class ScreenshotCapture
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(16));
                 if (root.IsLoaded && Stopwatch.GetElapsedTime(laidOut) >= Quiet && !Decoding(root))
-                    return;
+                    break;
             }
         }
         finally
         {
             root.LayoutUpdated -= LaidOut;
         }
+        await Presented();
+    }
+
+    /// <summary>
+    /// Waits for the screen to show what the windows have laid out: two of XAML's frames (<c>CompositionTarget.Rendering</c>,
+    /// which starts each one: what was laid out and not yet drawn is drawn and committed in the first, so the second
+    /// starts once that is done), then the compositor's present of them (<c>DwmFlush</c>, off the UI thread),
+    /// <see cref="FrameLimit"/> at most for each. Not <c>Rendered</c>, which comes only for a frame that had something to
+    /// draw. A new window's first frame can come after its layout has settled, and a capture before it shows the bare
+    /// window: the caption buttons on white or black.
+    /// </summary>
+    private static async Task Presented()
+    {
+        var frames = 0;
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Rendering(object? sender, object args)
+        {
+            if (++frames == 2)
+                started.TrySetResult();
+        }
+        CompositionTarget.Rendering += Rendering;
+        try
+        {
+            await Task.WhenAny(started.Task, Task.Delay(FrameLimit));
+        }
+        finally
+        {
+            CompositionTarget.Rendering -= Rendering;
+        }
+        await Task.WhenAny(Task.Run(Shell.NativeMethods.DwmFlush), Task.Delay(FrameLimit));
+    }
+
+    /// <summary>
+    /// Whether a capture shows a window that hadn't drawn yet: one flat colour (the bare window's white or black) under
+    /// the caption buttons. <paramref name="pixels"/> holds the capture's rows from the top, <paramref name="width"/>
+    /// 32-bit pixels each, whose alpha is ignored. Left out: the top <paramref name="band"/> rows (the caption buttons,
+    /// which Windows draws whether or not the content has) and then <paramref name="inset"/> pixels at every edge of
+    /// the rest (the frame's border and rounded corners). Not blank when that leaves nothing to look at.
+    /// </summary>
+    internal static bool IsBlank(ReadOnlySpan<int> pixels, int width, int band, int inset)
+    {
+        var height = width > 0 ? pixels.Length / width : 0;
+        var (top, bottom, left, right) = (band + inset, height - inset, inset, width - inset);
+        if (top >= bottom || left >= right)
+            return false;
+        var colour = pixels[top * width + left] & 0xFFFFFF;
+        for (var y = top; y < bottom; y++)
+            foreach (var pixel in pixels.Slice(y * width + left, right - left))
+                if ((pixel & 0xFFFFFF) != colour)
+                    return false;
+        return true;
     }
 
     /// <summary>Whether an image under <paramref name="node"/> is still loading its bitmap (no pixels yet).</summary>
@@ -270,9 +346,14 @@ public static class ScreenshotCapture
             window.Activate();
     }
 
-    /// <summary>The window's pixels as the screen composes them, cropped to its visible frame (no resize border), as a PNG.</summary>
-    private static bool Write(nint hwnd, string path)
+    /// <summary>
+    /// The window's pixels as the screen composes them, cropped to its visible frame (no resize border), as a PNG; false
+    /// when they can't be read. <paramref name="blank"/>: whether they show the window before it drew (<see cref="IsBlank"/>,
+    /// under a caption band of <paramref name="band"/> DIPs).
+    /// </summary>
+    private static bool Write(nint hwnd, string path, double band, out bool blank)
     {
+        blank = false;
         if (hwnd == 0 || !Win32.GetWindowRect(hwnd, out var outer))
             return false;
         var visible = Shell.NativeMethods.VisibleFrame(hwnd, outer);
@@ -298,13 +379,33 @@ public static class ScreenshotCapture
             var crop = new Rectangle(visible.Left - outer.Left, visible.Top - outer.Top, visible.Right - visible.Left, visible.Bottom - visible.Top);
             crop.Intersect(new Rectangle(0, 0, width, height));
             using var image = full.Clone(crop, PixelFormat.Format32bppArgb);
+            var scale = Shell.NativeMethods.Scale(hwnd);
+            blank = IsBlank(Pixels(image), image.Width, (int)Math.Ceiling(band * scale), (int)Math.Ceiling(BlankInset * scale));
             image.Save(path, ImageFormat.Png);
             return true;
         }
         catch (Exception e) when (e is ExternalException or IOException or UnauthorizedAccessException or ArgumentException)
         {
             Report($"{Path.GetFileName(path)}: not written ({e.Message})");
+            blank = false;
             return true;
+        }
+    }
+
+    /// <summary>The image's pixels, row by row from the top, as 32-bit ARGB.</summary>
+    private static int[] Pixels(Bitmap image)
+    {
+        var data = image.LockBits(new Rectangle(0, 0, image.Width, image.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        try
+        {
+            var pixels = new int[image.Width * image.Height];
+            for (var y = 0; y < image.Height; y++)
+                Marshal.Copy(data.Scan0 + y * data.Stride, pixels, y * image.Width, image.Width);
+            return pixels;
+        }
+        finally
+        {
+            image.UnlockBits(data);
         }
     }
 }

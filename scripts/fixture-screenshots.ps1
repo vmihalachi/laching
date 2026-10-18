@@ -8,7 +8,8 @@
 #   -NoBuild  run the last build.
 #   -Out      where the PNGs go (default: Fixture.App-shots in the temporary folder).
 # Fails, after copying the shots, when the run reports problems (problems.txt): a window that didn't open or couldn't
-# be drawn, a shot that wasn't written, text that doesn't fit (LayoutCheck).
+# be drawn, one captured before it drew (one flat colour, taken again), a shot that wasn't written, text that doesn't
+# fit (LayoutCheck).
 param(
     [string[]] $Only = @(),
     [string] $Out = "",
