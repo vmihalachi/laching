@@ -25,6 +25,17 @@ param(
 $ErrorActionPreference = "Stop"
 $screenshots = Join-Path $PSScriptRoot "screenshots.ps1"
 
+# companion.json as a dictionary: Windows PowerShell's ConvertFrom-Json refuses keys that differ only in case (a
+# character's glyph table has them), PowerShell 7's keeps only one of them without -AsHashtable.
+function Read-Companion([string] $file) {
+    $text = Get-Content $file -Raw -Encoding UTF8
+    if ($PSVersionTable.PSVersion.Major -ge 6) { return $text | ConvertFrom-Json -AsHashtable }
+    Add-Type -AssemblyName System.Web.Extensions
+    $serializer = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+    $serializer.MaxJsonLength = [int]::MaxValue
+    $serializer.DeserializeObject($text)
+}
+
 function Find-Root {
     if ($env:COMPANION_ROOT) { return (Resolve-Path $env:COMPANION_ROOT).Path }
     $dir = (Get-Location).Path
@@ -43,7 +54,7 @@ if ($Project) {
 }
 if (-not $Project -or $Languages.Count -eq 0) {
     $root = Find-Root
-    $config = Get-Content (Join-Path $root "companion.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+    $config = Read-Companion (Join-Path $root "companion.json")
     if ($Languages.Count -eq 0) { $Languages = @($config.languages.all) }
     if (-not $Project) {
         if (-not $config.windows -or -not $config.windows.app) { throw "companion.json has no windows.app." }

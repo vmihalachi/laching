@@ -274,7 +274,7 @@ class BumpTests(PinsTestCase):
     def test_bump_apps_finds_the_apps_next_to_its_checkout_but_not_worktrees(self):
         tools = self.root.parent / "checkout" / "tools"
         tools.mkdir(parents=True)
-        for name in ("bump-apps.sh", "companion.py", "companion.schema.json"):
+        for name in ("bump-apps.sh", "companion.py", "companion.schema.json", "conform.py"):
             (tools / name).write_bytes((TOOLS / name).read_bytes())
         worktree = self.root.parent / "app-worktree"
         worktree.mkdir()

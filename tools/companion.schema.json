@@ -65,7 +65,16 @@
             "out": { "type": "string", "description": "The app's Assets folder." }
           }
         },
-        "screenshots": { "type": "string", "description": "Where windows/screenshots.ps1 copies the shots, e.g. screenshots/windows." }
+        "screenshots": { "type": "string", "description": "Where windows/screenshots.ps1 copies the shots, e.g. screenshots/windows." },
+        "release": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "windows/store-release.ps1 and the windows-release.yml workflow: the Store packages and their bundle.",
+          "properties": {
+            "platforms": { "type": "array", "items": { "type": "string", "enum": ["x64", "ARM64"] }, "minItems": 1, "description": "The packages built and bundled; x64 and ARM64 by default." },
+            "bundle": { "type": "string", "pattern": "^[A-Za-z0-9.-]+$", "description": "The bundle's file name before _<version>_x64_arm64.msixbundle; the app's executable name by default." }
+          }
+        }
       }
     },
     "android": {
@@ -374,18 +383,30 @@
         },
         "microsoft": {
           "type": "object",
-          "description": "The Partner Center import (import.py); check.py requires the ms.* fields when it's there.",
+          "description": "The Microsoft Store: the screenshots (store-screenshots.py --canvas microsoft), the Partner Center import (import.py) and submission (push-microsoft.py); check.py requires the ms.* fields when it's there.",
+          "required": ["shots", "publisher"],
           "additionalProperties": false,
           "properties": {
             "screenshots": { "type": "string", "description": "<lang>/*.png per language; microsoft/screenshots by default." },
             "art": { "type": "string", "description": "poster-art.png, box-art.png, super-hero-art.png; microsoft/art by default." },
-            "screenshotCount": { "type": "integer", "description": "Screenshots (and captions) per language; the number of shots by default, else 8." },
-            "publisher": { "type": "string", "description": "DevStudio in the listing." },
+            "publisher": { "type": "string", "description": "The developer shown in the listing (DevStudio; devStudio in the submission API)." },
+            "storeId": { "type": "string", "pattern": "^9[0-9A-Z]{11}$", "description": "The app's Store ID in Partner Center (Product identity), which store/push-microsoft.py submits to." },
             "shots": {
               "type": "array",
               "items": { "type": "string", "pattern": "-(light|dark)$" },
               "minItems": 1,
-              "description": "store-screenshots.py --canvas microsoft: the Windows captures (file names without .png, e.g. panel-light) in upload order, one per line of ms.captions (Partner Center takes up to 10)."
+              "description": "store-screenshots.py --canvas microsoft: the Windows captures (file names without .png, e.g. panel-light) in upload order, one per line of ms.captions (Partner Center takes up to 10); import.py and push-microsoft.py want this many screenshots and captions per language."
+            },
+            "shadow": {
+              "type": "object",
+              "required": ["light", "dark"],
+              "additionalProperties": false,
+              "description": "A hard shadow instead of the soft one: a block of the theme's color (#RRGGBB) behind each window, offset right and down.",
+              "properties": {
+                "offset": { "type": "integer", "description": "Pixels right and down; 16 by default." },
+                "light": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+                "dark": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" }
+              }
             },
             "backdrop": {
               "type": "object",
@@ -395,6 +416,47 @@
                 "light": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
                 "dark": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" }
               }
+            }
+          }
+        }
+      }
+    },
+    "conform": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "companion.py conform: what the app keeps of its own on purpose.",
+      "properties": {
+        "allow": {
+          "type": "array",
+          "description": "Files named like a Laching tool that are the app's own, not a copy of the tool (its own conformance.sh, say).",
+          "items": {
+            "type": "object",
+            "required": ["path", "why"],
+            "additionalProperties": false,
+            "properties": {
+              "path": { "type": "string", "description": "Root-relative, with forward slashes." },
+              "why": { "type": "string", "description": "What it does that the tool doesn't." }
+            }
+          }
+        }
+      }
+    },
+    "verify": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "verify.sh: the app's own checks, run beside Laching's.",
+      "properties": {
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "paths", "run"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string", "description": "The line verify.sh prints." },
+              "paths": { "type": "string", "pattern": "^[^\t]+$", "description": "An extended regular expression over the changed root-relative paths; the check runs when one matches (and with --all)." },
+              "run": { "type": "string", "pattern": "^[^\t]+$", "description": "The command, run by bash from the app's root." },
+              "slow": { "type": "boolean", "description": "Skipped by --fast." }
             }
           }
         }

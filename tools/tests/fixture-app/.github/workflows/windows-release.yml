@@ -1,0 +1,36 @@
+name: Windows release
+
+# The Microsoft Store release (laching/tools/skills/release-windows): Laching's reusable workflow, at the release the
+# app pins (laching.tag), does the rest.
+on:
+  workflow_dispatch:
+    inputs:
+      hosted:
+        description: "Run on GitHub-hosted runners (bills Windows minutes at 2x; smoke-tests x64 only)"
+        type: boolean
+        default: false
+      tag:
+        description: "Tag the commit win-<version> (refuses if that tag exists: bump the version first)"
+        type: boolean
+        default: true
+      store:
+        description: "Microsoft Store: none; draft (a submission with this bundle and the listing text, not sent); submit (also send it to certification)"
+        type: choice
+        options: [none, draft, submit]
+        default: none
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    uses: vmihalachi/laching/.github/workflows/windows-release.yml@v0.5.0
+    with:
+      hosted: ${{ inputs.hosted }}
+      tag: ${{ inputs.tag }}
+      store: ${{ inputs.store }}
+    secrets: inherit

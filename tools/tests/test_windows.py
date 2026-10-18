@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "windows"))
 import assets  # noqa: E402
-from support import TOOLS, fixture_app  # noqa: E402
+from support import TOOLS, fixture_app, git  # noqa: E402
 
 WINDOWS = TOOLS / "windows"
 CHECK_WINUI = WINDOWS / "check-winui.py"
@@ -317,6 +317,69 @@ class PowerShellTests(unittest.TestCase):
             done = check("Other.exe")
             self.assertNotEqual(done.returncode, 0)
             self.assertIn("has no Fixture.exe", done.stdout + done.stderr)
+
+    def test_smoke_package_screenshots_stay_out_of_appdata(self):
+        if not os.environ.get("LOCALAPPDATA"):
+            self.skipTest("no LOCALAPPDATA here")
+        with tempfile.TemporaryDirectory() as temp:
+            package = self.package(Path(temp), "Fixture.exe")
+            done = self.powershell("-File", str(WINDOWS / "smoke-package.ps1"), "-Package", str(package),
+                                   "-Screenshots", str(Path(os.environ["LOCALAPPDATA"]) / "shots"))
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn("outside AppData", done.stdout + done.stderr)
+
+    def release_app(self, root: Path, version: str = "1.0.3.0") -> None:
+        """The fixture app as a repository with an origin, its WinUI project's manifest at `version`."""
+        app = root / "windows" / "Fixture.App"
+        app.mkdir(parents=True, exist_ok=True)
+        (app / "Package.appxmanifest").write_text(
+            '<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/'
+            f'windows10"><Identity Name="Fixture" Publisher="CN=Fixture" Version="{version}" /></Package>', "utf8")
+        origin = root.parent / "origin.git"
+        git(root.parent, "init", "-q", "--bare", str(origin))
+        git(root, "init", "-q")
+        git(root, "remote", "add", "origin", str(origin))
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "app")
+
+    def release(self, root: Path, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+        return self.powershell("-File", str(WINDOWS / "store-release.ps1"), *args,
+                               env={**os.environ, "COMPANION_ROOT": str(root), **(env or {})})
+
+    def test_store_release_version_and_tag(self):
+        with fixture_app() as root, tempfile.TemporaryDirectory() as temp:
+            # Keys that differ only in case (a character's glyph table), which Windows PowerShell's ConvertFrom-Json refuses.
+            config = root / "companion.json"
+            config.write_text(config.read_text("utf8").replace('"name": "fixture",', '"name": "fixture", "glyphs": {"A": 1, "a": 2},'), "utf8")
+            self.release_app(root)
+            output = Path(temp) / "github-output"
+            done = self.release(root, "-VersionOnly", env={"GITHUB_OUTPUT": str(output)})
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertEqual(done.stdout.strip(), "1.0.3.0")
+            self.assertEqual(output.read_bytes(), b"version=1.0.3.0\n", "no BOM, which GitHub would read as part of the name")
+
+            # -TagOnly tags HEAD and pushes the tag; from then on the version is refused, unless -AnyVersion.
+            done = self.release(root, "-TagOnly")
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertIn("win-1.0.3.0", git(root, "ls-remote", "--tags", "origin"))
+            done = self.release(root, "-VersionOnly")
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn("win-1.0.3.0 exists: bump the Identity Version", done.stdout + done.stderr)
+            done = self.release(root, "-VersionOnly", "-AnyVersion")
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            done = self.release(root, "-TagOnly")
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn("exists already", done.stdout + done.stderr)
+
+    def test_store_release_refuses_what_it_cant_build(self):
+        with fixture_app() as root:
+            self.release_app(root, version="1.0")
+            done = self.release(root, "-VersionOnly")
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn("No Identity Version", done.stdout + done.stderr)
+            done = self.release(root, "-VersionOnly", "-Platforms", "x64,x86")
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn("Platform x86: the Store packages are x64 and ARM64", done.stdout + done.stderr)
 
 
 if __name__ == "__main__":

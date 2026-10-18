@@ -68,10 +68,10 @@ linked from the Mac's folders.
   the windows inactive (`-Front` for active ones), and `-Configuration Release` shoots the Native AOT build, which is
   where untyped XAML casts fail. After changing text or a window's layout, `laching/tools/windows/check-layout.ps1
   [-Only settings]` shoots every language side by side and names the ones whose text doesn't fit.
-- **Package**: `dotnet publish <app> -c Release -p:Platform=x64 -p:GenerateAppxPackageOnBuild=true
-  -p:AppxPackageSigningEnabled=false`, then `smoke-package.ps1 -Package <.msix> -CheckOnly` (native, no
-  `runtimeconfig.json`) and, with Developer Mode, without `-CheckOnly` (it installs, starts and removes it; `-Keep` for
-  the hand checks a package needs: the startup task, a notification click after the app quit).
+- **Package**: `laching/tools/windows/store-release.ps1 -Platforms x64 -NoBundle -AnyVersion` publishes the Store
+  package (Native AOT, unsigned), checks it is native (no `runtimeconfig.json`) and, with Developer Mode, installs it
+  fresh, starts it and removes it (`smoke-package.ps1`; run that on the built `.msix` with `-Keep` for the hand checks a
+  package needs: the startup task, a notification click after the app quit). The release itself: `release-windows`.
 - **Lint**: `python3 laching/tools/windows/check-winui.py [files]`; `verify.sh` runs it on the changed app files.
 - **Images**: `python3 laching/tools/windows/assets.py` after the Mac icon changes; never edit `Assets/` by hand.
 - **The model's tests** (`windows.appTests`, `net10.0`): the model, its copy, the window list, the products and the

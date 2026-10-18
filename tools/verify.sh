@@ -25,7 +25,9 @@
 #   android.dir/**/*.kt(s)                 ktlint; ./gradlew :<android.core>:test for android.core and conformance/
 #   landing/, phrases/settings vectors     <landing.tool> check and build
 #   store.dir/*.md                         store/check.py (the listing's field limits)
-#   always                                 the Laching pins agree (submodule tag = laching.tag = SwiftPM = XcodeGen; NuGet = each package's version in it)
+#   always                                 the Laching pins agree (submodule tag = laching.tag = SwiftPM = XcodeGen; NuGet = each package's version in it);
+#                                          companion.py conform (Laching's tools, workflows and skills, not copies of them)
+#   verify.checks in companion.json        the app's own checks, each when its paths change (slow ones not with --fast)
 #
 # Prints one line per check and the tail of the log for failures. Exit 1 if anything failed.
 set -uo pipefail
@@ -43,7 +45,7 @@ while [ $# -gt 0 ]; do
     --staged) mode=staged ;;
     --base) mode=base; base="$2"; shift ;;
     --) shift; mode=paths; paths=("$@"); break ;;
-    -h|--help) sed -n '2,28p' "$TOOLS/verify.sh" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,31p' "$TOOLS/verify.sh" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1 (see --help)" >&2; exit 2 ;;
   esac
   shift
@@ -192,9 +194,26 @@ csharp_format() {
   fi
 }
 
+# The app's own checks (verify.checks): speed, paths, name and command per line.
+app_speed=() app_paths=() app_name=() app_run=()
+while IFS=$'	' read -r speed paths name run; do
+  [ -n "$speed" ] || continue
+  app_speed+=("$speed"); app_paths+=("$paths"); app_name+=("$name"); app_run+=("$run")
+done <<< "$(python3 "$TOOLS/companion.py" checks)"
+app_checks() {
+  local i
+  [ ${#app_speed[@]} -gt 0 ] || return 0
+  for i in "${!app_speed[@]}"; do
+    if [ "${app_speed[$i]}" = "$1" ] && touched "${app_paths[$i]}"; then
+      check "${app_name[$i]}" bash -c "${app_run[$i]}" </dev/null
+    fi
+  done
+}
+
 # --- always ------------------------------------------------------------------------------------
 
 check "Laching pins agree" python3 "$TOOLS/companion.py" pins
+check "Laching's tools, not copies (companion.py conform)" python3 "$TOOLS/companion.py" conform
 
 # --- fast checks -------------------------------------------------------------------------------
 
@@ -260,6 +279,8 @@ if touched "$RE_LANDING" && [ -n "$LANDING_DIR" ] && [ -d "$ROOT/$LANDING_DIR" ]
   else skip "landing: needs $LANDING_TOOL"; fi
 fi
 
+app_checks fast
+
 # --- slow checks -------------------------------------------------------------------------------
 
 if [ "$fast" = 0 ]; then
@@ -309,6 +330,7 @@ if [ "$fast" = 0 ]; then
     { has "$landing_tool" || [ -x "$landing_tool" ]; }; then
     check "landing: $LANDING_TOOL build" bash -c "cd \"$LANDING_DIR\" && \"$landing_tool\" build"
   fi
+  app_checks slow
 fi
 
 summary

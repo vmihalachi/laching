@@ -5,7 +5,8 @@ Each rule cost an app a release or a day (mybackhurts first, then Laching's fixt
 - Casting an untyped XAML object: `(Style)Application.Current.Resources[key]`, `GetTemplateChild(...) as T`,
   `VisualTreeHelper.GetParent(...) is T`, `AppWindow.Presenter is OverlappedPresenter`, `(Brush)e.NewValue` or
   `(Brush?)GetValue(...)` for a property holding a XAML object. Under Native AOT (every Store package) the object can
-  arrive wrapped as a base type, so the cast throws and `as`/`is` quietly fail. Use `XamlCast.As<T>` (Laching.Windows).
+  arrive wrapped as a base type, so the cast throws and `as`/`is` quietly fail. Use `XamlCast.As<T>` (Laching.Windows),
+  or a typed helper of the app's that goes through it.
 - A Style setting a shape's Data, Points or StrokeDashArray: the value is one object that WinUI uses for one element
   only, so repeated shapes come out blank. Set it on each element.
 - An element named `Language` (it hides FrameworkElement.Language in the generated code), and an `x:Bind` function

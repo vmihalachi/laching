@@ -1,0 +1,159 @@
+name: Windows app (reusable)
+
+# A companion app's WinUI build check, called from the app's own short workflow: on each platform the WinUI traps
+# (laching/tools/windows/check-winui.py) and the package laching/tools/windows/store-release.ps1 builds for the Store
+# (Native AOT, unsigned), checked native and, where this runner can run it, installed fresh and started; on x64 also the
+# Windows images against the icon (with windows.assets), the core and model tests on Windows (windows.coreTests,
+# windows.appTests), and every window under Native AOT in `languages`, failing on a window that doesn't open or text that
+# doesn't fit, kept as the windows-screenshots artifact: `screenshot-run` release runs screenshots.ps1 -Configuration
+# Release (the unpackaged Native AOT exe; `contrast` adds the contrast theme), package runs the installed package with
+# screenshot mode compiled in (smoke-package.ps1 -Screenshots, for an app that needs package identity). windows-release.yml builds the same packages for a release. Everything app-specific comes
+# from the app's companion.json through its laching/ submodule, so the caller's @vX.Y.Z must be the release the app pins.
+#
+# The caller:
+#   on: { workflow_dispatch: { inputs: { hosted: ... } } }
+#   jobs:
+#     app:
+#       uses: vmihalachi/laching/.github/workflows/windows-app.yml@vX.Y.Z
+#       with: { hosted: ..., languages: en,de }   (hosted: ${{ inputs.hosted }}, block style: laching/tools/README.md)
+on:
+  workflow_call:
+    inputs:
+      hosted:
+        description: "GitHub-hosted runners instead of `runner` (Windows minutes bill at 2x; only x64 starts)"
+        type: boolean
+        default: false
+      languages:
+        description: "The languages every window is opened in (comma-separated; the longest words find text that doesn't fit)"
+        type: string
+        default: en
+      screenshot-run:
+        description: "release: screenshots.ps1 -Configuration Release (unpackaged); package: the installed package in screenshot mode"
+        type: string
+        default: release
+      contrast:
+        description: "With screenshot-run release, also the contrast theme (screenshots.ps1 -Contrast)"
+        type: boolean
+        default: false
+      runner:
+        description: "The self-hosted runner's labels, as JSON"
+        type: string
+        default: '["self-hosted","Windows","ARM64"]'
+      laching-path:
+        description: "The app's Laching submodule (companion.json's laching.path)"
+        type: string
+        default: laching
+      submodules:
+        description: "actions/checkout's submodules: true for an app whose package needs another submodule (its voices), else false (only laching/ is checked out)"
+        type: string
+        default: "false"
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  app:
+    runs-on: ${{ inputs.hosted && 'windows-latest' || fromJSON(inputs.runner) }}
+    # A hung step would otherwise run for six hours of Windows minutes.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [x64, ARM64]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: ${{ inputs.submodules }}
+
+      - name: Check out ${{ inputs.laching-path }}/
+        run: git submodule update --init "${{ inputs.laching-path }}"
+
+      # The self-hosted runner keeps its own .NET 10 SDK and Python 3.
+      - uses: actions/setup-dotnet@v6
+        if: inputs.hosted
+        with:
+          dotnet-version: "10.0.x"
+
+      - uses: actions/setup-python@v7
+        if: inputs.hosted
+        with:
+          python-version: "3.12"
+
+      - name: The app's settings
+        id: app
+        shell: pwsh
+        run: |
+          if ('${{ inputs.screenshot-run }}' -notin 'release', 'package') { throw "screenshot-run is release or package, not '${{ inputs.screenshot-run }}'." }
+          $windows = (Get-Content companion.json -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable).windows
+          "assets=$([bool]$windows.assets)" >> $env:GITHUB_OUTPUT
+          "core-tests=$(if ($windows.coreTests) { "$($windows.dir)/$($windows.coreTests)/$($windows.coreTests).csproj" })" >> $env:GITHUB_OUTPUT
+          "app-tests=$(if ($windows.appTests) { "$($windows.dir)/$($windows.appTests)/$($windows.appTests).csproj" })" >> $env:GITHUB_OUTPUT
+
+      # What builds and runs in Debug but breaks under Native AOT or in the XAML compiler.
+      - name: WinUI traps
+        if: matrix.platform == 'x64'
+        run: python "${{ inputs.laching-path }}/tools/windows/check-winui.py"
+
+      - name: The Windows images match the icon
+        if: matrix.platform == 'x64' && steps.app.outputs.assets == 'True'
+        run: python "${{ inputs.laching-path }}/tools/windows/assets.py" --check
+
+      # Run on the Mac or Linux too; once on Windows catches what only differs there (paths, culture, the OS's libraries).
+      - name: Core tests on Windows
+        if: matrix.platform == 'x64' && steps.app.outputs.core-tests
+        run: dotnet test "${{ steps.app.outputs.core-tests }}" -c Release
+
+      - name: Model tests on Windows
+        if: matrix.platform == 'x64' && steps.app.outputs.app-tests
+        run: dotnet test "${{ steps.app.outputs.app-tests }}" -c Release
+
+      # The install check needs Developer Mode (the package is unsigned). On by hand on the self-hosted runner, whose
+      # service has no admin rights to turn it on.
+      - name: Developer Mode
+        if: inputs.hosted && matrix.platform == 'x64'
+        shell: powershell
+        run: reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /t REG_DWORD /f /v AllowDevelopmentWithoutDevLicense /d 1
+
+      # GitHub's x64 runner can't run ARM64: that package is checked native only. On the self-hosted runner the test
+      # install goes next to the Store copy installed there.
+      - name: Build and check the ${{ matrix.platform }} package
+        shell: powershell
+        run: |
+          $arguments = @{ Platforms = '${{ matrix.platform }}'; Out = "$env:RUNNER_TEMP\AppPackages"; NoBundle = $true; AnyVersion = $true }
+          if ('${{ inputs.hosted }}' -eq 'true') { $arguments.NoSmoke = ('${{ matrix.platform }}' -ne 'x64') } else { $arguments.SideBySide = $true }
+          if ('${{ matrix.platform }}' -eq 'x64' -and '${{ inputs.screenshot-run }}' -eq 'package') {
+            $arguments.Screenshots = "$env:RUNNER_TEMP\shots"; $arguments.Languages = '${{ inputs.languages }}'
+          }
+          & "${{ inputs.laching-path }}/tools/windows/store-release.ps1" @arguments
+
+      # Every language even when one fails, so one run shows them all. screenshots.ps1 renders into a folder under
+      # %TEMP%, which on the self-hosted runner outlives the job, so the step gets the job's own temp folder.
+      - name: Open every window
+        if: matrix.platform == 'x64' && inputs.screenshot-run == 'release'
+        shell: powershell
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $failed = @()
+          foreach ($language in ('${{ inputs.languages }}' -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+            $arguments = @{ Configuration = 'Release'; Platform = 'x64'; Language = $language; Out = "$env:RUNNER_TEMP\shots\$language" }
+            if ('${{ inputs.contrast }}' -eq 'true') { $arguments.Contrast = $true }
+            try {
+              & "${{ inputs.laching-path }}/tools/windows/screenshots.ps1" @arguments
+              if ($LASTEXITCODE -ne 0) { $failed += $language }
+            }
+            catch { Write-Host $_; $failed += $language }
+          }
+          if ($failed) { throw "The screenshot run failed in: $($failed -join ', ')" }
+
+      # Every run, so a Windows UI change can be looked at from a Mac or a cloud session; a failed run keeps the shots it
+      # got to.
+      - name: Keep the screenshots
+        if: ${{ !cancelled() && matrix.platform == 'x64' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-screenshots
+          path: ${{ runner.temp }}/shots
+          if-no-files-found: ignore

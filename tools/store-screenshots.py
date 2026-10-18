@@ -28,7 +28,9 @@ side between 320 and 3840 px and no side more than twice the other, which every 
 `microsoft` needs no captions or fonts (Partner Center shows each caption under its image): each Windows capture
 named in `store.microsoft.shots` (file names without .png, upload order, one per line of ms.captions) is centered at
 its own size, never scaled so its text stays sharp, on a 3840 × 2160 backdrop with a soft shadow. The backdrop is
-`store.microsoft.backdrop` (light/dark → color, by the capture's -light or -dark), else the paper of `store.palette`.
+`store.microsoft.backdrop` (light/dark → color, by the capture's -light or -dark), else the paper of `store.palette`;
+`store.microsoft.shadow` ({offset, light, dark}) swaps the soft shadow for a hard one, a block of that color offset by
+`offset` px right and down.
 The images go to <store.dir>/<store.microsoft.screenshots, microsoft/screenshots by default>/<language> (--out DIR:
 DIR/<language>), named <n>-<shot>.png, where import.py takes them; the folder's old PNGs go first. --lang all is every
 language of the app. The captures: the folder given, else windows.screenshots for the source language and, for any
@@ -222,6 +224,8 @@ class Microsoft:
         backdrop = config.get("store.microsoft.backdrop", {})
         self.backdrop = {mode: backdrop.get(mode) or palette.get(mode, {}).get("paper") or DEFAULT_PALETTE[mode]["paper"]
                          for mode in DEFAULT_PALETTE}
+        self.shadow = config.get("store.microsoft.shadow")
+        self.margin = self.shadow.get("offset", 16) if self.shadow else 0
 
     def render(self, root: Path) -> None:
         """Checks every capture, then replaces the folder's images, printing each one's path; exits on a bad capture."""
@@ -232,7 +236,7 @@ class Microsoft:
                 sys.exit(f"store-screenshots: no {companion.rel(path, root)} (store.microsoft.shots): capture it first")
             with Image.open(path) as image:
                 window = image.convert("RGBA")
-            if problem := window_problem(window):
+            if problem := window_problem(window, self.margin):
                 sys.exit(f"store-screenshots: {companion.rel(path, root)} {problem}")
             windows[shot] = window
         self.out.mkdir(parents=True, exist_ok=True)
@@ -248,6 +252,14 @@ class Microsoft:
     def compose(self, window: Image.Image, mode: str) -> Image.Image:
         width, height = MICROSOFT_CANVAS
         canvas = Image.new("RGB", MICROSOFT_CANVAS, self.backdrop[mode])
+        if self.shadow:
+            # A hard block of the theme's color behind the window, offset right and down; the two centered together.
+            offset = self.margin
+            x, y = (width - window.width - offset) // 2, (height - window.height - offset) // 2
+            color = self.shadow.get(mode) or "#000000"
+            ImageDraw.Draw(canvas).rectangle((x + offset, y + offset, x + offset + window.width - 1, y + offset + window.height - 1), fill=color)
+            canvas.paste(window, (x, y), window)
+            return canvas
         x, y = (width - window.width) // 2, (height - window.height) // 2
         # A soft shadow a little below the window, like Windows' own.
         shadow = Image.new("L", MICROSOFT_CANVAS, 0)
@@ -263,10 +275,10 @@ def appearance(shot: str) -> str:
     return match.group(1) if match else "light"
 
 
-def window_problem(window: Image.Image) -> str | None:
-    """Why a capture can't be a Microsoft Store image, or None."""
+def window_problem(window: Image.Image, margin: int = 0) -> str | None:
+    """Why a capture can't be a Microsoft Store image (with `margin` px of hard shadow beside it), or None."""
     width, height = MICROSOFT_CANVAS
-    if window.width > width or window.height > height:
+    if window.width + margin > width or window.height + margin > height:
         return (f"is {window.width}×{window.height}, larger than the {width}×{height} canvas (captured at a display scale"
                 " over 200%?)")
     # Hidden captures can land before the window draws: a title bar over plain white or black.

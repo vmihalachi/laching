@@ -10,6 +10,9 @@
     python3 laching/tools/companion.py bump X.Y.Z           # every pin, the submodule and the landing page to vX.Y.Z
     python3 laching/tools/companion.py link [LACHING]      # build against a Laching checkout (../laching) until unlink
     python3 laching/tools/companion.py unlink               # back to the pinned release, byte for byte
+    python3 laching/tools/companion.py conform              # the app uses Laching's tools, not copies (exit 1 on drift)
+    python3 laching/tools/companion.py checks               # the app's own verify.sh checks (verify.checks), tab-separated
+    python3 laching/tools/companion.py apps [APP…]          # the apps next to this checkout: their pins and conform (exit 1 on drift)
 
 The root is the folder holding `companion.json`: `$COMPANION_ROOT` when set, else the nearest one walking up from the
 current directory. Paths in the file are relative to it. Other tools import this module:
@@ -399,6 +402,7 @@ _PACKAGE_EXACT = r'exact:\s*"([^"]+)"'
 _SPEC_EXACT = r"(?:exactVersion|exact):\s*\"?([0-9][^\s\"]*)"
 _NUGET = re.compile(r'Include="(Laching\.[A-Za-z.]+)"\s+Version="([^"]+)"')
 _COMPANION_TAG = re.compile(r'"laching"\s*:\s*\{[^{}]*?"tag"\s*:\s*"([^"]*)"')
+_WORKFLOW_REF = re.compile(r"[\w.-]+/laching/\.github/workflows/([\w.-]+\.ya?ml)@([\w.-]+)")
 _LANDING_PACKAGE = "@laching/landing"
 _LANDING_DEPENDENCY = re.compile(r'"@laching/landing"\s*:\s*"[~^]?(\d+\.\d+\.\d+)"')
 _LOCKFILES = ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock")
@@ -446,7 +450,8 @@ def _submodule_tag(submodule: Path) -> str:
 def pin_sites(config: Config) -> list[Pin]:
     """Every place the Laching release is pinned: the submodule's tag, companion.json's `laching.tag`, the `exact:` of
     the core package's Package.swift, the `exactVersion`/`exact` of the XcodeGen spec, every `Laching.*` NuGet
-    reference under the Windows folder and, for an app with an Android side, the `lachingVersion` of the submodule's
+    reference under the Windows folder, every call of one of Laching's reusable workflows (`uses: .../laching/.github/
+    workflows/windows-release.yml@vX.Y.Z`) and, for an app with an Android side, the `lachingVersion` of the submodule's
     `kotlin/gradle.properties` (the Gradle build the app includes). A place the app doesn't have is left out."""
     found: list[Pin] = []
     if submodule := _submodule(config):
@@ -464,6 +469,11 @@ def pin_sites(config: Config) -> list[Pin]:
             for match in _NUGET.finditer(read_text(file)):
                 found.append(Pin(f"{rel(file, config.root)} {match.group(1)}", match.group(2), file, match.span(2),
                                  match.group(1)))
+    workflows = config.root / ".github" / "workflows"
+    if workflows.is_dir():
+        for file in sorted([*workflows.glob("*.yml"), *workflows.glob("*.yaml")]):
+            for match in _WORKFLOW_REF.finditer(read_text(file)):
+                found.append(Pin(f"{rel(file, config.root)} {match.group(1)}@", match.group(2), file, match.span(2)))
     if config.get("android") and (gradle := _kotlin_properties(config)) and gradle.is_file():
         match = _GRADLE_VERSION.search(read_text(gradle))
         # No file of its own to rewrite: `bump` moves the submodule and this moves with it.
@@ -1097,6 +1107,11 @@ def main(argv: list[str]) -> int:
         print(__doc__)
         return 0 if argv else 2
     command, rest = argv[0], argv[1:]
+    if command == "apps":
+        import conform
+
+        laching = Path(__file__).resolve().parent.parent
+        return conform.apps([Path(app).resolve() for app in rest] or conform.app_folders(laching), laching)
     if command == "validate":
         files = [Path(f) for f in rest] or [find_root() / FILE]
         status = 0
@@ -1106,7 +1121,9 @@ def main(argv: list[str]) -> int:
             print(f"{file}: " + ("ok" if not problems else "\n  " + "\n  ".join(problems)))
             status |= bool(problems)
         return status
-    config = load()
+    # conform reports what the schema refuses with the rest of its problems, and bump moves an app whose companion.json
+    # the release's schema refuses, so the app's verify.sh says what to change.
+    config = load(check=command not in ("conform", "bump"))
     if command == "root":
         print(config.root)
     elif command == "env":
@@ -1116,6 +1133,13 @@ def main(argv: list[str]) -> int:
             print(f"{key}={shlex.quote(value)}")
     elif command == "pins":
         return print_pins(config)
+    elif command == "conform":
+        import conform
+
+        return conform.check(config)
+    elif command == "checks":
+        for entry in config.get("verify.checks", []):
+            print("	".join(["slow" if entry.get("slow") else "fast", entry["paths"], entry["name"], entry["run"]]))
     elif (command, len(rest)) in (("bump", 1), ("link", 0), ("link", 1), ("unlink", 0)):
         try:
             if command == "bump":
