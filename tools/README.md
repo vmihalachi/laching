@@ -38,7 +38,8 @@ or `$COMPANION_ROOT`); the schema is [`companion.schema.json`](companion.schema.
 | `skills/` | `localization`, `add-phrase`, `add-setting`, `conformance`, `voice`, `windows-port`, `release-mac`, `release-ios` (a universal app's iPhone and iPad version), `release-windows`, `review-invariants`. |
 | `../.github/workflows/windows-release.yml`, `windows-app.yml` | Reusable workflows (`workflow_call`) an app's own short workflows call at the release it pins: the Store release (both packages, the bundle as the artifact, the optional push, the tag) and the WinUI build check (the traps, the tests, both packages, every window). Below, *Windows apps*. |
 
-Tests: `python3 tools/tests/run.py` (over `tools/tests/fixture-app`, a minimal app; `tools.yml` runs them), and for
+Tests: `python3 tools/tests/run.py` (over `tools/tests/fixture-app`, a minimal app, the files side by side, `--jobs N`
+at once; `tools.yml` runs them), and for
 the landing package `npx vp test run` in `tools/landing`.
 
 An app without a phrase bank or a character (a reminder app, say) leaves `character` and `conformance` out of
