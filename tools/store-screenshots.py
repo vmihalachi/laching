@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Composes store screenshots from the captures (`screenshots.store` in companion.json): the Mac App Store's by default,
-Google Play's with --canvas.
+Google Play's or the Microsoft Store's with --canvas.
 
-    python3 laching/tools/store-screenshots.py [--canvas mac|android-phone|android-tablet] [--lang LANG|all]…
+    python3 laching/tools/store-screenshots.py [--canvas mac|android-phone|android-tablet|microsoft] [--lang LANG|all]…
         [--out DIR] [captures-dir]
 
 Each language's images land in <store.out>/<language> (<store.out>/<canvas>/<language> for an Android canvas; --out
@@ -24,10 +24,26 @@ Canvases: `mac` is landscape, the window on the right and the text beside it, dr
 shot of a language reserving its tallest caption's height so the screens line up; `android-tablet` (2560 × 1600, a
 10-inch tablet) is the landscape layout. `store.canvases` overrides an Android canvas's size; Google Play takes each
 side between 320 and 3840 px and no side more than twice the other, which every Android image is checked against.
+
+`microsoft` needs no captions or fonts (Partner Center shows each caption under its image): each Windows capture
+named in `store.microsoft.shots` (file names without .png, upload order, one per line of ms.captions) is centered at
+its own size, never scaled so its text stays sharp, on a 3840 × 2160 backdrop with a soft shadow. The backdrop is
+`store.microsoft.backdrop` (light/dark → color, by the capture's -light or -dark), else the paper of `store.palette`.
+The images go to <store.dir>/<store.microsoft.screenshots, microsoft/screenshots by default>/<language> (--out DIR:
+DIR/<language>), named <n>-<shot>.png, where import.py takes them; the folder's old PNGs go first. --lang all is every
+language of the app. The captures: the folder given, else windows.screenshots for the source language and, for any
+other, the windows the shots need captured in that language first (`screenshots.ps1 -Only … -Front -Language` into
+build/store-captures/microsoft/<language>; from a Mac through `windows/vm.sh screenshots`). A capture larger than the
+canvas, or one flat color below its top quarter (a window captured before it drew), stops the run before anything is
+written.
 """
+
+from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -39,7 +55,11 @@ sys.path.insert(0, str(TOOLS))
 import companion  # noqa: E402
 
 ANDROID_CANVASES = {"android-phone": (1080, 1920), "android-tablet": (2560, 1600)}
-CANVASES = ("mac", *ANDROID_CANVASES)
+# Partner Center takes desktop screenshots from 1366 × 768 up to this.
+MICROSOFT_CANVAS = (3840, 2160)
+CANVASES = ("mac", *ANDROID_CANVASES, "microsoft")
+# A capture's appearance, the end of its file name.
+APPEARANCE = re.compile(r"-(light|dark)$")
 # Google Play's screenshot limits: each side, and the longer side over the shorter.
 PLAY_SIDE = (320, 3840)
 PLAY_RATIO = 2
@@ -192,6 +212,69 @@ class Settings:
         return canvas
 
 
+class Microsoft:
+    """The Microsoft Store's images for one language: each Windows capture of `store.microsoft.shots` centered at its own
+    size on a 3840 × 2160 backdrop of its appearance."""
+
+    def __init__(self, config: companion.Config, shots: list[str], captures: Path, out: Path):
+        self.shots, self.captures, self.out = shots, captures, out
+        palette = config.get("screenshots.store.palette", {})
+        backdrop = config.get("store.microsoft.backdrop", {})
+        self.backdrop = {mode: backdrop.get(mode) or palette.get(mode, {}).get("paper") or DEFAULT_PALETTE[mode]["paper"]
+                         for mode in DEFAULT_PALETTE}
+
+    def render(self, root: Path) -> None:
+        """Checks every capture, then replaces the folder's images, printing each one's path; exits on a bad capture."""
+        windows = {}
+        for shot in self.shots:
+            path = self.captures / f"{shot}.png"
+            if not path.is_file():
+                sys.exit(f"store-screenshots: no {companion.rel(path, root)} (store.microsoft.shots): capture it first")
+            with Image.open(path) as image:
+                window = image.convert("RGBA")
+            if problem := window_problem(window):
+                sys.exit(f"store-screenshots: {companion.rel(path, root)} {problem}")
+            windows[shot] = window
+        self.out.mkdir(parents=True, exist_ok=True)
+        # import.py uploads every PNG there: an earlier run's must not stand in for a shot that's gone.
+        for stale in self.out.glob("*.png"):
+            stale.unlink()
+        digits = len(str(len(self.shots)))  # 01-… past nine, so the names sort in upload order
+        for i, shot in enumerate(self.shots, 1):
+            path = self.out / f"{i:0{digits}}-{shot}.png"
+            self.compose(windows[shot], appearance(shot)).save(path, optimize=True)
+            print(f"{companion.rel(path, root)} ({windows[shot].width}×{windows[shot].height} window)")
+
+    def compose(self, window: Image.Image, mode: str) -> Image.Image:
+        width, height = MICROSOFT_CANVAS
+        canvas = Image.new("RGB", MICROSOFT_CANVAS, self.backdrop[mode])
+        x, y = (width - window.width) // 2, (height - window.height) // 2
+        # A soft shadow a little below the window, like Windows' own.
+        shadow = Image.new("L", MICROSOFT_CANVAS, 0)
+        ImageDraw.Draw(shadow).rectangle((x, y + 16, x + window.width, y + window.height + 16), fill=90 if mode == "dark" else 60)
+        shadow = shadow.filter(ImageFilter.GaussianBlur(40))
+        canvas.paste(Image.new("RGB", MICROSOFT_CANVAS, "#000000"), (0, 0), shadow)
+        canvas.paste(window, (x, y), window)
+        return canvas
+
+
+def appearance(shot: str) -> str:
+    match = APPEARANCE.search(shot)
+    return match.group(1) if match else "light"
+
+
+def window_problem(window: Image.Image) -> str | None:
+    """Why a capture can't be a Microsoft Store image, or None."""
+    width, height = MICROSOFT_CANVAS
+    if window.width > width or window.height > height:
+        return (f"is {window.width}×{window.height}, larger than the {width}×{height} canvas (captured at a display scale"
+                " over 200%?)")
+    # Hidden captures can land before the window draws: a title bar over plain white or black.
+    if window.convert("RGB").crop((0, window.height // 4, window.width, window.height)).getcolors(1):
+        return "is one flat color below its top quarter: captured before the window drew? Capture it again"
+    return None
+
+
 def wrap(draw, text, font, width):
     """Greedy wrap, then balanced so the last line isn't a lone word."""
 
@@ -242,14 +325,63 @@ def capture(config: companion.Config, language: str, captions: list[dict]) -> Pa
     return folder
 
 
+def windows_capture(config: companion.Config, language: str, shots: list[str]) -> Path:
+    """The Windows windows `shots` show, captured in `language` into build/store-captures/microsoft."""
+    folder = config.root / "build" / "store-captures" / "microsoft" / language
+    folder.mkdir(parents=True, exist_ok=True)
+    # The capture only adds shots: an earlier run's must not stand in for one that didn't render.
+    for stale in folder.glob("*.png"):
+        stale.unlink()
+    if subprocess.run(windows_capture_command(config, folder, language, shots)).returncode:
+        sys.exit(f"store-screenshots: capturing the {language} windows failed")
+    return folder
+
+
+def windows_capture_command(config: companion.Config, folder: Path, language: str, shots: list[str],
+                            windows: bool = os.name == "nt") -> list[str]:
+    """screenshots.ps1 (the app's own <windows.dir>/scripts/screenshots.ps1, else Laching's) for `shots`, shown in front
+    as in use: run here on Windows, in the VM through vm.sh elsewhere."""
+    args = ["-Only", ",".join(dict.fromkeys(APPEARANCE.sub("", shot) for shot in shots)), "-Front", "-Language", language]
+    if not windows:
+        return [str(TOOLS / "windows" / "vm.sh"), "screenshots", str(folder), "--", *args]
+    own = config.path("windows.dir")
+    script = own / "scripts" / "screenshots.ps1" if own else None
+    script = script if script and script.is_file() else TOOLS / "windows" / "screenshots.ps1"
+    return ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-Out", str(folder), *args]
+
+
+def microsoft(parser: argparse.ArgumentParser, args: argparse.Namespace, config: companion.Config) -> int:
+    shots = config.get("store.microsoft.shots")
+    if not shots:
+        parser.error("--canvas microsoft needs store.microsoft.shots in companion.json: the Windows captures in upload order")
+    languages = config.languages if "all" in (args.lang or []) else list(dict.fromkeys(args.lang or [config.source_language]))
+    if missing := [lang for lang in languages if lang not in config.languages]:
+        parser.error(f"{', '.join(missing)} isn't in languages.all ({', '.join(config.languages)})")
+    if args.captures and len(languages) > 1:
+        parser.error("a captures folder is one language's: name one --lang")
+    out = args.out or config.require_path("store.dir") / config.get("store.microsoft.screenshots", "microsoft/screenshots")
+    for language in languages:
+        if args.captures:
+            captures = args.captures
+        elif language != config.source_language:
+            captures = windows_capture(config, language, shots)
+        else:
+            captures = config.require_path("windows.screenshots")
+        Microsoft(config, shots, captures, out / language).render(config.root)
+    return 0
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("captures", nargs="?", type=Path, help="one language's captures (default: see above)")
     parser.add_argument("--canvas", choices=CANVASES, default="mac")
-    parser.add_argument("--lang", action="append", help="a language of the captions, or all (repeatable; default: the source)")
-    parser.add_argument("--out", type=Path, help="instead of <store.out> (<store.out>/<canvas>): the images go to DIR/<lang>")
+    parser.add_argument("--lang", action="append",
+                        help="a language of the captions (microsoft: of the app), or all (repeatable; default: the source)")
+    parser.add_argument("--out", type=Path, help="instead of the canvas's folder (see above): the images go to DIR/<lang>")
     args = parser.parse_args(argv)
     config = companion.load()
+    if args.canvas == "microsoft":
+        return microsoft(parser, args, config)
     captions = json.loads(config.require_path("screenshots.store.captions").read_text(encoding="utf-8"))
     languages = list(captions) if "all" in (args.lang or []) else list(dict.fromkeys(args.lang or [config.source_language]))
     if missing := [lang for lang in languages if lang not in captions]:

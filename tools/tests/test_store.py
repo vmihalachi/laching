@@ -487,6 +487,17 @@ class StoreTests(FixtureAppTestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("en: 0 screenshots", result.stderr)
 
+    def test_import_wants_one_screenshot_per_shot_without_a_count(self):
+        path = self.root / "companion.json"
+        data = json.loads(path.read_text("utf8"))
+        data["store"]["microsoft"] = {"publisher": "Fixture Studio", "shots": ["panel-light", "home-light", "panel-dark"]}
+        path.write_text(json.dumps(data), "utf8")
+        result = subprocess.run([sys.executable, str(TOOLS / "store" / "import.py"), "--out", str(self.root / "out")],
+                                capture_output=True, text=True, env={**os.environ, "COMPANION_ROOT": str(self.root)})
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("en: 0 screenshots in", result.stderr)
+        self.assertIn("want 3", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

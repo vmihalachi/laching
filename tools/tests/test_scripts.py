@@ -5,6 +5,9 @@ store-screenshots.py and dev-icon.swift run when Pillow and a Mac with Swift are
 
 from __future__ import annotations
 
+import contextlib
+import importlib.util
+import io
 import json
 import os
 import plistlib
@@ -17,6 +20,7 @@ import tempfile
 import unittest
 import zlib
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import companion  # noqa: E402
@@ -575,6 +579,169 @@ class StoreScreenshotTests(unittest.TestCase):
                                   cwd=root, capture_output=True, text=True)
             self.assertEqual(tall.returncode, 1)
             self.assertIn("1080×2400: Google Play takes no side more than 2× the other", tall.stderr)
+
+
+class MicrosoftStoreScreenshotTests(FixtureAppTestCase):
+    """--canvas microsoft: Windows captures centered unscaled on 3840 × 2160, from synthetic windows."""
+
+    def setUp(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("needs Pillow (pip3 install pillow)")
+        super().setUp()
+        self.Image = Image
+        self.config_path = self.root / "companion.json"
+        self.data = json.loads(self.config_path.read_text("utf8"))
+        self.data["store"]["microsoft"].update({"shots": ["panel-light", "home-dark"], "backdrop": {"light": "#102030"}})
+        self.write_config()
+        self.captures = self.root / "screenshots" / "windows"
+        self.window(self.captures / "panel-light.png", (400, 300))
+        self.window(self.captures / "home-dark.png", (601, 451), body=(30, 30, 30))
+        self.out = self.root / "store-listing" / "microsoft" / "screenshots"
+
+    def write_config(self):
+        self.config_path.write_text(json.dumps(self.data), "utf8")
+
+    def window(self, path: Path, size, body=(250, 248, 240), content=True):
+        """A window: a title band, a body and, unless `content` is off, something drawn in it."""
+        image = self.Image.new("RGB", size, body)
+        image.paste((200, 200, 200), (0, 0, size[0], 32))
+        if content:
+            image.paste((240, 180, 40), (size[0] // 3, size[1] // 2, size[0] // 2, size[1] - 20))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        image.save(path)
+
+    def run_tool(self, *args: str):
+        return subprocess.run([sys.executable, str(TOOLS / "store-screenshots.py"), "--canvas", "microsoft", *args],
+                              cwd=self.root, capture_output=True, text=True)
+
+    def test_centers_each_capture_unscaled_in_upload_order(self):
+        stale = self.out / "en" / "9-gone-light.png"
+        self.window(stale, (100, 100))
+        result = self.run_tool()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), [
+            "store-listing/microsoft/screenshots/en/1-panel-light.png (400×300 window)",
+            "store-listing/microsoft/screenshots/en/2-home-dark.png (601×451 window)",
+        ])
+        self.assertEqual(sorted(path.name for path in (self.out / "en").iterdir()), ["1-panel-light.png", "2-home-dark.png"])
+        for name, capture, backdrop in (("1-panel-light", "panel-light", (0x10, 0x20, 0x30)),
+                                        ("2-home-dark", "home-dark", (0x1C, 0x1C, 0x1E))):
+            image = self.Image.open(self.out / "en" / f"{name}.png").convert("RGB")
+            window = self.Image.open(self.captures / f"{capture}.png").convert("RGB")
+            self.assertEqual(image.size, (3840, 2160))
+            x, y = (3840 - window.width) // 2, (2160 - window.height) // 2
+            self.assertEqual(image.crop((x, y, x + window.width, y + window.height)).tobytes(), window.tobytes(), name)
+            # The backdrop of its appearance: store.microsoft.backdrop, else the store palette's paper.
+            self.assertEqual(image.getpixel((0, 0)), backdrop)
+            # A shadow under the window.
+            self.assertLess(sum(image.getpixel((x + window.width // 2, y + window.height + 20))), sum(backdrop))
+
+    def test_refuses_a_bad_capture_before_writing(self):
+        first = self.run_tool()
+        self.assertEqual(first.returncode, 0, first.stderr)
+        made = sorted((self.out / "en").iterdir())
+
+        # Captured before it drew: a title bar over one flat color.
+        self.window(self.captures / "home-dark.png", (600, 450), body=(0, 0, 0), content=False)
+        blank = self.run_tool()
+        self.assertEqual(blank.returncode, 1)
+        self.assertIn("screenshots/windows/home-dark.png is one flat color below its top quarter", blank.stderr)
+        # Larger than the canvas (never scaled down).
+        self.window(self.captures / "home-dark.png", (3900, 400))
+        large = self.run_tool()
+        self.assertEqual(large.returncode, 1)
+        self.assertIn("is 3900×400, larger than the 3840×2160 canvas", large.stderr)
+        # Missing.
+        (self.captures / "home-dark.png").unlink()
+        missing = self.run_tool()
+        self.assertEqual(missing.returncode, 1)
+        self.assertIn("no screenshots/windows/home-dark.png (store.microsoft.shots)", missing.stderr)
+        self.assertEqual(sorted((self.out / "en").iterdir()), made, "nothing is touched until every capture is good")
+
+    def test_folders_and_languages(self):
+        # A captures folder for one other language, into --out.
+        italian = self.root / "captures-it"
+        for shot in ("panel-light", "home-dark"):
+            self.window(italian / f"{shot}.png", (300, 200))
+        given = self.run_tool("--lang", "it", "--out", str(self.root / "elsewhere"), str(italian))
+        self.assertEqual(given.returncode, 0, given.stderr)
+        self.assertTrue((self.root / "elsewhere" / "it" / "2-home-dark.png").exists())
+        # store.microsoft.screenshots moves the folder, as import.py reads it.
+        self.data["store"]["microsoft"]["screenshots"] = "ms/shots"
+        self.write_config()
+        moved = self.run_tool()
+        self.assertEqual(moved.returncode, 0, moved.stderr)
+        self.assertTrue((self.root / "store-listing" / "ms" / "shots" / "en" / "1-panel-light.png").exists())
+        # A language must be the app's, a folder is one language's, and the canvas needs its shots.
+        unknown = self.run_tool("--lang", "fr")
+        self.assertEqual(unknown.returncode, 2)
+        self.assertIn("fr isn't in languages.all (en, it, de)", unknown.stderr)
+        both = self.run_tool("--lang", "all", str(italian))
+        self.assertIn("a captures folder is one language's", both.stderr)
+        del self.data["store"]["microsoft"]["shots"]
+        self.write_config()
+        unset = self.run_tool()
+        self.assertEqual(unset.returncode, 2)
+        self.assertIn("--canvas microsoft needs store.microsoft.shots", unset.stderr)
+
+    def test_shots_are_checked_by_the_schema(self):
+        self.assertEqual(companion.validate(self.data), [])
+        self.data["store"]["microsoft"]["shots"] = ["panel"]
+        self.data["store"]["microsoft"]["backdrop"] = {"light": "white"}
+        problems = companion.validate(self.data)
+        self.assertIn("store.microsoft.shots[0]: 'panel' doesn't match -(light|dark)$", problems)
+        self.assertIn("store.microsoft.backdrop.light: 'white' doesn't match ^#[0-9A-Fa-f]{6}$", problems)
+
+    def load_tool(self):
+        spec = importlib.util.spec_from_file_location("store_screenshots", TOOLS / "store-screenshots.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_captures_another_language_first(self):
+        tool = self.load_tool()
+        config = companion.load(self.root)
+        folder = self.root / "build" / "store-captures" / "microsoft" / "it"
+        shots = ["panel-light", "home-dark", "panel-dark"]
+        self.assertEqual(tool.windows_capture_command(config, folder, "it", shots, windows=False), [
+            str(TOOLS / "windows" / "vm.sh"), "screenshots", str(folder), "--",
+            "-Only", "panel,home", "-Front", "-Language", "it",
+        ])
+        on_windows = tool.windows_capture_command(config, folder, "it", shots, windows=True)
+        self.assertEqual(on_windows[:6], ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                                          str(TOOLS / "windows" / "screenshots.ps1")])
+        self.assertEqual(on_windows[6:], ["-Out", str(folder), "-Only", "panel,home", "-Front", "-Language", "it"])
+        own = self.root / "windows" / "scripts" / "screenshots.ps1"
+        own.parent.mkdir(parents=True, exist_ok=True)
+        own.write_text("# the app's own\n", "utf8")
+        self.assertEqual(tool.windows_capture_command(config, folder, "it", shots, windows=True)[5], str(own.resolve()))
+
+        # A run for Italian clears the old captures, captures, then composes from them.
+        self.window(folder / "panel-light.png", (50, 50))
+        calls = []
+
+        def capture(command):
+            calls.append(command)
+            self.assertFalse(any(folder.glob("*.png")), "an old capture must not stand in for a new one")
+            for shot in ("panel-light", "home-dark"):
+                self.window(folder / f"{shot}.png", (320, 240))
+            return subprocess.CompletedProcess(command, 0)
+
+        with mock.patch.object(tool.subprocess, "run", capture), mock.patch.dict(os.environ, {"COMPANION_ROOT": str(self.root)}), \
+                contextlib.redirect_stdout(io.StringIO()) as printed:
+            self.assertEqual(tool.main(["--canvas", "microsoft", "--lang", "it"]), 0)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("store-listing/microsoft/screenshots/it/1-panel-light.png (320×240 window)", printed.getvalue())
+
+        def failing(command):
+            return subprocess.CompletedProcess(command, 3)
+
+        with mock.patch.object(tool.subprocess, "run", failing), mock.patch.dict(os.environ, {"COMPANION_ROOT": str(self.root)}):
+            with self.assertRaises(SystemExit) as stop:
+                tool.main(["--canvas", "microsoft", "--lang", "de"])
+        self.assertEqual(str(stop.exception), "store-screenshots: capturing the de windows failed")
 
 
 class DevIconTests(unittest.TestCase):
