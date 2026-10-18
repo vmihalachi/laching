@@ -8,8 +8,9 @@ Usage (from the app's root):
 
 What it syncs, per language (companion.json's `store.apple` names the app, its locales and in-app purchases):
   text         App Information (name, subtitle, privacy URL) and the version page (description, keywords,
-               promotional text, What's New, support and marketing URLs), plus copyright (and manual release on a
-               version it creates)
+               promotional text, What's New, support and marketing URLs), plus copyright and the release type
+               (`store.apple.releaseType`, MANUAL or AFTER_APPROVAL: set on an editable version when configured, and
+               manual on a version it creates without it)
   iap          each in-app purchase's display name, description, review note and review screenshot (each left alone
                when its config has none); one that doesn't exist yet is created with its price and availability
                (`store.apple.iaps`)
@@ -21,6 +22,9 @@ With `store.apple.ios` (a universal app), the iPhone and iPad version page too (
   ios-text         the iOS version's page from the listing's `ios.*` fields (App Information is shared with the Mac)
   ios-screenshots  the iPhone 6.9" and iPad 13" sets, from `store.apple.ios.iphoneScreenshots`/<lang>/*.png and
                    `ios.ipadScreenshots`/<lang>/*.png
+  ios-header       the iOS 27 product page header (`store.apple.ios.header`, apple/header.png by default: 3840x1646, no
+                   alpha), one image placed on every language, in each placement group the App Asset Library's
+                   reference data gives that size; on by default when the file exists
 The iOS version for --version is found or created (--create) like the Mac's, and --build is attached to it too; the
 `review` part sets its App Review notes as well, and --status reports it (screenshots per display type) after the Mac's.
 A field the listing doesn't have is left alone, and What's New is left out on a platform's first version (App Store
@@ -53,10 +57,11 @@ from listing import Listing, load  # noqa: E402
 API = "https://api.appstoreconnect.apple.com"
 EDITABLE = {"PREPARE_FOR_SUBMISSION", "DEVELOPER_REJECTED", "REJECTED", "METADATA_REJECTED",
             "INVALID_BINARY"}
-PARTS = ("text", "iap", "screenshots", "review", "previews", "ios-text", "ios-screenshots")
+PARTS = ("text", "iap", "screenshots", "review", "previews", "ios-text", "ios-screenshots", "ios-header")
 IPHONE_SCREENSHOTS = "APP_IPHONE_67"  # the 6.9" display (App Store Connect's name predates it)
 IPAD_SCREENSHOTS = "APP_IPAD_PRO_3GEN_129"  # the 13" display
 SCREENSHOT_NAMES = {IPHONE_SCREENSHOTS: 'iPhone 6.9"', IPAD_SCREENSHOTS: 'iPad 13"'}
+HEADER = "PRODUCT_PAGE_HEADER_ASSET"  # the App Asset Library's placement type for the product page header
 
 
 class Page(NamedTuple):
@@ -109,6 +114,14 @@ def review_notes(listing: Listing):
     text = listing.review_notes.read_text(encoding="utf-8")
     section = text.split("## App Review Information → Notes", 1)[1]
     return section.split("```text\n", 1)[1].split("\n```", 1)[0].strip()
+
+
+def png_info(path):
+    """(width, height, has alpha) from a PNG's IHDR chunk."""
+    data = path.read_bytes()[:26]
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError(f"{path.name} isn't a PNG")
+    return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big"), data[25] in (4, 6)
 
 
 def changed(want, have):
@@ -256,15 +269,20 @@ class Sync:
             self.log(f"{page.name} version {version_string}: {state}")
             if state not in EDITABLE:
                 self.log("  Not editable in this state: only the promotional text can change.")
-            # The release type is set only on a new version: after that it's the owner's call in App Store Connect.
-            attrs = changed({"copyright": self.listing.copyright}, version["attributes"])
+            # The release type follows `store.apple.releaseType` when it's set; without it, it's the owner's call.
+            want = {"copyright": self.listing.copyright}
+            if self.listing.release_type and state in EDITABLE:
+                want["releaseType"] = self.listing.release_type
+            attrs = changed(want, version["attributes"])
             if attrs:
                 self.step(f"set {', '.join(attrs)} on the version",
                           lambda: self.api.update("appStoreVersions", version["id"], attrs))
         elif create:
-            version = self.step(f"create {page.name} version {version_string} (manual release)", lambda: self.api.create(
+            release = self.listing.release_type or "MANUAL"
+            version = self.step(f"create {page.name} version {version_string} ({release.lower().replace('_', ' ')} release)",
+                                lambda: self.api.create(
                 "appStoreVersions", {"platform": page.platform, "versionString": version_string,
-                                     "copyright": self.listing.copyright, "releaseType": "MANUAL"},
+                                     "copyright": self.listing.copyright, "releaseType": release},
                 {"app": ("apps", self.listing.app_id)}))
             if version is None and self.apply:
                 return None
@@ -511,6 +529,81 @@ class Sync:
             self.media(localization, locale, [f], "appPreviewSets", "previewType", self.listing.preview_type,
                        "appPreviews")
 
+    def header_groups(self, width, height):
+        """The placement groups whose header specification takes a width x height image (DEFAULT_PROFILE, platform ANY,
+        in October 2026), from the App Asset Library's reference data: its identifiers aren't an enumeration, so they're
+        read, never hard-coded. A Mac group, should one appear, is left out: the header is the iOS page's."""
+        ref = self.api.request("GET", f"/v1/appAssetLibraryRefData?filter[placementTypes]={HEADER}")["data"][0]["attributes"]
+        specs = {s["specId"] for s in ref.get("imageSpecs", []) if HEADER in s.get("compatiblePlacementTypes", [])
+                 and s["dimensions"]["minWidth"] <= width <= s["dimensions"]["maxWidth"]
+                 and s["dimensions"]["minHeight"] <= height <= s["dimensions"]["maxHeight"]}
+        allowed = {g for f in ref.get("features", []) if f.get("featureId") == "APP_STORE_VERSIONS"
+                   for p in f.get("placementPolicies", []) if p.get("placementType") == HEADER
+                   for limit in p.get("groupLimits", []) for g in limit.get("groupIds", [])}
+        platforms = {g["placementProfileGroupId"]: g.get("platform", "") for g in ref.get("placementProfileGroups", [])}
+        return sorted(m["placementGroupId"] for t in ref.get("placementTypes", []) if t.get("placementTypeId") == HEADER
+                      for m in t.get("specMappings", []) if specs & set(m.get("specs", []))
+                      and m["placementGroupId"] in allowed
+                      and not platforms.get(m["placementGroupId"], "MAC").startswith("MAC"))
+
+    def header(self, localizations):
+        """Places the product page header on every language's iOS version page, in each placement group that takes its
+        size, replacing a header with another file there (the uploaded file's name carries its MD5)."""
+        f = self.listing.ios_header
+        if not f.exists():
+            self.problems.append(f"no header {f} (3840x1646, no alpha)")
+            return
+        width, height, alpha = png_info(f)
+        if alpha:
+            self.problems.append(f"{f.name} has an alpha channel; App Store Connect refuses it for a header")
+            return
+        groups = self.header_groups(width, height)
+        if not groups:
+            self.problems.append(f"no header placement takes {width}x{height} (3840x1646)")
+            return
+        name = f"header-{md5(f)[:12]}{f.suffix}"
+        image = {}  # uploaded once, the first time a language needs it
+
+        def upload():
+            library = self.api.request("GET", f"/v1/apps/{self.listing.app_id}/assetLibrary")["data"]["id"]
+            data = f.read_bytes()
+            item = self.api.create("appAssetLibraryImages", {"fileName": name, "fileSize": len(data),
+                                                             "category": "CREATIVE_ASSETS",
+                                                             "referenceName": "Product page header"},
+                                   {"assetLibrary": ("appAssetLibraries", library)})
+            self.api.upload(item["attributes"]["uploadOperations"], data)
+            self.api.update("appAssetLibraryImages", item["id"], {"uploaded": True})
+            return item
+
+        for locale, (_, localization) in localizations.items():
+            placed = {}
+            if localization:
+                page = self.api.request("GET", f"/v1/appStoreVersionLocalizations/{localization['id']}/placements"
+                                               f"?filter[placementType]={HEADER}&include=image&limit=50") or {}
+                files = {i["id"]: i["attributes"].get("fileName") for i in page.get("included", [])}
+                for p in page.get("data") or []:
+                    image_id = ((p.get("relationships", {}).get("image") or {}).get("data") or {}).get("id")
+                    placed[p["attributes"]["placementGroup"]] = (p["id"], files.get(image_id))
+            for group in groups:
+                have = placed.get(group)
+                if have and have[1] == name:
+                    continue
+                if not image:
+                    item = self.step(f"upload the header {f.name} ({width}x{height}) to the asset library", upload)
+                    if self.apply and item is None:
+                        return
+                    image.update(item or {"id": None})
+                self.log(f"  {locale}: header ({group}): {'replace ' + str(have[1]) if have else 'place'} {f.name}")
+                if not self.apply or not localization:
+                    continue
+                if have:
+                    self.step(f"{locale}: remove the header {have[1]}",
+                              lambda have=have: self.api.delete("appAssetLibraryPlacements", have[0]))
+                self.step(f"{locale}: place the header", lambda group=group: self.api.create(
+                    "appAssetLibraryPlacements", {"placementType": HEADER, "placementGroup": group},
+                    {"appStoreVersionLocalization": ("appStoreVersionLocalizations", localization["id"]),
+                     "image": ("appAssetLibraryImages", image["id"])}))
+
 
 def status(listing: Listing, api, version_string):
     """Prints what App Store Connect has for the version (the Mac's, and the iOS one with `store.apple.ios`) and what a
@@ -578,8 +671,13 @@ def status_version(listing: Listing, api, version_string, page, missing):
         a = loc["attributes"]
         empty = [k for k in ("description", "keywords", "supportUrl") if not a.get(k)]
         counts = [(SCREENSHOT_NAMES.get(t, ""), shots.get(t, 0)) for _, t in page.screenshots]
+        header = ""
+        if page.platform == "IOS":
+            placed = (api.request("GET", f"/v1/appStoreVersionLocalizations/{loc['id']}/placements"
+                                         f"?filter[placementType]={HEADER}") or {}).get("data") or []
+            header = f", {len(placed)} header placement{'' if len(placed) == 1 else 's'}"
         print(f"  {tag}{a['locale']}: " + ", ".join(f"{n} {name + ' ' if name else ''}screenshots" for name, n in counts)
-              + (f", empty: {', '.join(empty)}" if empty else ""))
+              + header + (f", empty: {', '.join(empty)}" if empty else ""))
         missing += [f"{tag}{a['locale']} {name + ' ' if name else ''}screenshots" for name, n in counts if not n]
         missing += [f"{tag}{a['locale']} {k}" for k in empty]
     return True
@@ -591,7 +689,8 @@ def main():
     parser.add_argument("--create", action="store_true", help="create the version if it doesn't exist")
     parser.add_argument("--build", help="attach this build number (CFBundleVersion) to the version")
     listing = load()
-    default = "text,iap,screenshots,review" + (",ios-text,ios-screenshots" if listing.ios is not None else "")
+    default = "text,iap,screenshots,review" + (",ios-text,ios-screenshots" if listing.ios is not None else "") + (
+        ",ios-header" if listing.ios is not None and listing.ios_header.exists() else "")
     parser.add_argument("--only", default=default,
                         help=f"comma-separated parts: {', '.join(PARTS)} (default: {default}; the ios- parts need "
                              "store.apple.ios)")
@@ -617,16 +716,23 @@ def main():
     sync = Sync(listing, Client(), args.apply)
     if not args.apply:
         print("Dry run: nothing is written. Add --apply to push.\n")
-    version = sync.version(args.version, args.create, args.build)
-    if version is None:
-        sys.exit("\n".join(sync.problems))
+    # Each platform's version only when one of its parts asks for it: the Mac and iOS apps have their own version
+    # numbers, so a push for one must not create the other's version of that number. `review` goes with the platform
+    # whose parts are asked for, or with both when it's alone.
+    mac_parts, ios_parts = parts & {"text", "screenshots", "previews"}, parts & {"ios-text", "ios-screenshots", "ios-header"}
+    mac = bool(mac_parts) or ("review" in parts and not ios_parts)
+    ios = sync.ios is not None and (bool(ios_parts) or ("review" in parts and not mac_parts))
+    if mac:
+        version = sync.version(args.version, args.create, args.build)
+        if version is None:
+            sys.exit("\n".join(sync.problems))
     localizations = {}
     if parts & {"text", "screenshots", "previews"}:
         print("Text")
         localizations = sync.text(args.langs, version, args.extra_locales, write="text" in parts)
     if "iap" in parts:
         sync.iaps(args.langs, args.extra_locales)
-    if "review" in parts:
+    if "review" in parts and mac:
         sync.review(version)
     if "screenshots" in parts:
         print("Screenshots")
@@ -634,20 +740,23 @@ def main():
     if "previews" in parts:
         print("Previews")
         sync.previews(localizations)
-    if sync.ios is not None and parts & {"ios-text", "ios-screenshots", "review"}:
+    if ios:
         print("iOS")
         ios_version = sync.version(args.version, args.create, args.build, sync.ios)
         if ios_version is None:
             sys.exit("\n".join(sync.problems))
         if "review" in parts:
             sync.review(ios_version, sync.ios)
-    if parts & {"ios-text", "ios-screenshots"}:
+    if ios_parts:
         print("iOS text")
         ios_localizations = sync.text(args.langs, ios_version, args.extra_locales, write="ios-text" in parts,
                                       page=sync.ios)
         if "ios-screenshots" in parts:
             print("iOS screenshots")
             sync.screenshots(ios_localizations, sync.ios)
+        if "ios-header" in parts:
+            print("iOS header")
+            sync.header(ios_localizations)
     if sync.problems:
         print("\nProblems:\n" + "\n".join(f"  {p}" for p in sync.problems))
         sys.exit(1)
