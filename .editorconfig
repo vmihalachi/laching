@@ -1,0 +1,13 @@
+root = true
+
+[*]
+end_of_line = lf
+insert_final_newline = true
+
+[*.{bat,cmd,sln}]
+end_of_line = crlf
+
+# Conformance vectors are compared byte for byte: leave them exactly as they are.
+[conformance/**]
+end_of_line = unset
+insert_final_newline = unset

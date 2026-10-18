@@ -1,2 +1,10 @@
+# Store text with LF and check it out with LF on every OS, whatever core.autocrlf says.
+* text=auto eol=lf
+# cmd.exe needs CRLF to parse labels and multi-line blocks reliably.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+# Visual Studio writes solution files with CRLF; matching it avoids churn.
+*.sln text eol=crlf
+
 # Conformance vectors are compared byte for byte: never convert line endings.
 conformance/** -text
