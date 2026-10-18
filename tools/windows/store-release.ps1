@@ -175,10 +175,15 @@ function Get-Arch([IO.FileInfo] $msix) {
 }
 
 # The app's packages under a folder: one .msix per platform, never the Windows App Runtime's under Dependencies\, the
-# screenshot-mode package or an earlier bundle's copies.
+# screenshot-mode package or an earlier bundle's copies. Only the folders below $folder count, so a search of
+# <Out>\screenshot-mode itself finds the screenshot-mode package.
 function Find-Packages([string] $folder) {
-    @(Get-ChildItem $folder -Recurse -Filter "*_${version}_*.msix" -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notmatch '[\\/](Dependencies|screenshot-mode|bundle-input)[\\/]' })
+    # Get-Item's FullName is spelled like its children's (long names, not 8.3), so it is a prefix of theirs.
+    $dir = Get-Item -LiteralPath $folder -ErrorAction SilentlyContinue
+    if (-not $dir) { return @() }
+    $root = $dir.FullName.TrimEnd('\', '/')
+    @(Get-ChildItem -LiteralPath $root -Recurse -Filter "*_${version}_*.msix" -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName.Substring($root.Length) -notmatch '[\\/](Dependencies|screenshot-mode|bundle-input)[\\/]' })
 }
 
 function Publish([string] $platform, [string] $folder, [string[]] $extra) {
