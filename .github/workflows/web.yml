@@ -75,7 +75,29 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # setup-dotnet downloads the newest .NET 10 SDK (300 MB, 30-odd seconds) whenever the image is a patch behind. The
+      # image's own SDK does when it is in the newest feature band and meets web/global.json (asked in web/): the latitude
+      # web/global.json's latestPatch gives.
+      - name: The image's .NET SDK
+        id: sdk
+        if: runner.os == 'Windows'
+        working-directory: web
+        shell: pwsh
+        run: |
+          $band = { param($v) if ($v -match '^10\.0\.(\d)\d\d$') { $Matches[1] } }
+          $image = dotnet --version 2>$null
+          if ($LASTEXITCODE -ne 0) { $image = $null }
+          $index = 'https://builds.dotnet.microsoft.com/dotnet/release-metadata/releases-index.json'
+          $newest = try {
+            (Invoke-RestMethod $index).'releases-index' | Where-Object 'channel-version' -eq '10.0' | ForEach-Object 'latest-sdk'
+          } catch { }
+          $use = $null -ne (& $band $image) -and (& $band $image) -eq (& $band $newest)
+          "The image's SDK: $image; the newest: $newest; using the image's: $use"
+          "use=$("$use".ToLower())" >> $env:GITHUB_OUTPUT
+          exit 0
+
       - uses: actions/setup-dotnet@v6
+        if: steps.sdk.outputs.use != 'true'
         with:
           global-json-file: web/global.json
 
