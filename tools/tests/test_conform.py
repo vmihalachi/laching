@@ -85,8 +85,10 @@ class ConformTests(FixtureAppTestCase):
         self.write(".github/workflows/notes.yml", "# makeappx bundles them, in windows-release.yml\njobs: {}\n")
         found = self.problems()
         self.assertEqual(len(found), 2, found)
-        self.assertIn(".github/workflows/package.yml: builds the Store packages itself (GenerateAppxPackageOnBuild)", found[0])
-        self.assertIn("calls windows-release.yml@v0.4.0, but the app pins Laching v0.5.0: call it @v0.5.0", found[1])
+        self.assertTrue(any(".github/workflows/package.yml: builds the Store packages itself (GenerateAppxPackageOnBuild)"
+                            in p for p in found), found)
+        self.assertTrue(any("calls windows-release.yml@v0.4.0, but the app pins Laching v0.5.0: call it @v0.5.0" in p
+                            for p in found), found)
 
         (workflows / "windows.yml").unlink()
         self.assertTrue(any("no workflow calls Laching's windows-app.yml" in p for p in self.problems()))
@@ -106,7 +108,7 @@ class ConformTests(FixtureAppTestCase):
                                   capture_output=True, text=True, check=True).stdout.strip()
             git(self.root, "update-index", "--add", "--cacheinfo", f"120000,{blob},.agents/skills/{name}")
         git(self.root, "add", ".agents/skills/release-windows", ".agents/skills/add-exercise")
-        found = [p for p in self.problems() if p.startswith(".agents")]
+        found = sorted(p for p in self.problems() if p.startswith(".agents"))
         self.assertEqual(len(found), 2, found)
         self.assertIn(".agents/skills/release-windows: a copy of laching/tools/skills/release-windows: link it", found[0])
         self.assertIn(".agents/notes/release-windows.md", found[0])

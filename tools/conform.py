@@ -54,8 +54,8 @@ def tracked(root: Path) -> list[str]:
     done = companion.git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
     if done.returncode == 0:
         return [name for name in done.stdout.split("\0") if name]
-    return [path.relative_to(root).as_posix() for path in root.rglob("*")
-            if path.is_file() and not SKIPPED_DIRS & set(path.relative_to(root).parts)]
+    return sorted(path.relative_to(root).as_posix() for path in root.rglob("*")
+                  if path.is_file() and not SKIPPED_DIRS & set(path.relative_to(root).parts))
 
 
 def code_lines(text: str, suffix: str) -> list[str]:
