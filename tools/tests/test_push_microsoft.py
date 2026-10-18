@@ -10,6 +10,7 @@ import io
 import json
 import tempfile
 import unittest
+import urllib.parse
 import zipfile
 from pathlib import Path
 from unittest import mock
@@ -59,6 +60,11 @@ def published(listing_key="en", shots=2):
 
 def quiet():
     return lambda *_: None
+
+
+def is_sign_in(url):
+    """Whether a request went to Microsoft Entra's sign-in host."""
+    return urllib.parse.urlsplit(url).hostname == "login.microsoftonline.com"
 
 
 class BundleTests(unittest.TestCase):
@@ -208,7 +214,7 @@ class FakeOpener:
 
     def __call__(self, req):
         self.requests.append((req.get_method(), req.full_url, req.data))
-        if "login.microsoftonline.com" in req.full_url:
+        if is_sign_in(req.full_url):
             return Response(json.dumps({"access_token": "t"}).encode())
         path = req.full_url.removeprefix(push.API)
         answer = self.answers.get((req.get_method(), path))
@@ -224,7 +230,7 @@ class ClientTests(unittest.TestCase):
         client = self.client({("GET", "/applications/x"): {"id": "x"}})
         self.assertEqual(client.app(), {"id": "x"})
         client.app()
-        logins = [r for r in client.open.requests if "login" in r[1]]
+        logins = [r for r in client.open.requests if is_sign_in(r[1])]
         self.assertEqual(len(logins), 1)
         self.assertIn(b"resource=https%3A%2F%2Fmanage.devcenter.microsoft.com", logins[0][2])
 
@@ -268,7 +274,7 @@ class PrepareTests(StoreTestCase):
             args = argparse.Namespace(bundle=str(make_bundle(tmp)), only="package,text", notes=None,
                                       replace_pending=replace, apply=apply, langs=["en"])
             push.cmd_prepare(client, self.store, args)
-        return [(m, u.removeprefix(push.API), d) for m, u, d in client.open.requests if "login" not in u]
+        return [(m, u.removeprefix(push.API), d) for m, u, d in client.open.requests if not is_sign_in(u)]
 
     def test_dry_run_only_reads(self):
         calls = self.run_prepare(apply=False)
