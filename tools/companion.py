@@ -133,6 +133,15 @@ class Config:
 # MARK: Helpers the tools share
 
 
+def utf8_console() -> None:
+    """Writes stdout and stderr as UTF-8, whatever the console's code page: Windows Python encodes a redirected or
+    remote console (ssh, the VM, a pipe) in cp1252, where the tools' arrows and ellipses raise UnicodeEncodeError
+    midway through a command. Each tool calls it first thing under `__main__`."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def fail(message: str) -> None:
     """Prints `error: message` and exits 2, the tools' usage-or-setup error."""
     print(f"error: {message}", file=sys.stderr)
@@ -1168,4 +1177,5 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    utf8_console()
     sys.exit(main(sys.argv[1:]))

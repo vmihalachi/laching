@@ -643,6 +643,8 @@ def cloud_stop(event):
 
 
 if __name__ == "__main__":
+    companion.utf8_console()
+    sys.stdin.reconfigure(encoding="utf-8")  # the agents send UTF-8 JSON, not the code page
     try:
         mode = sys.argv[1]
         payload = json.load(sys.stdin)

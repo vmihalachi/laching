@@ -69,7 +69,8 @@ class ReleaseTests(unittest.TestCase):
         env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
         command = ["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "-c", "init.defaultBranch=master",
                    "-c", "tag.gpgSign=false", "-c", "commit.gpgSign=false", *args]
-        return subprocess.run(command, cwd=self.root, env=env, check=True, capture_output=True, text=True).stdout.strip()
+        return subprocess.run(command, cwd=self.root, env=env, check=True,
+                              capture_output=True, encoding="utf8").stdout.strip()
 
     def read(self, name: str) -> str:
         return (self.root / name).read_text("utf8")
@@ -105,7 +106,7 @@ class ReleaseTests(unittest.TestCase):
 
     def run_release(self, *args: str, pulls: bool = True) -> subprocess.CompletedProcess:
         return subprocess.run(["sh", str(self.root / "scripts/release.sh"), *args], cwd=self.root, env=self.env(pulls),
-                              capture_output=True, text=True)
+                              capture_output=True, encoding="utf8")
 
     def out(self, *args: str) -> str:
         result = self.run_release(*args)
@@ -194,7 +195,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn(">0.13.0</LachingVersion>", self.read("dotnet/Directory.Build.props"), "NuGet keeps 0.13.0")
         self.assertIn(">0.13.0</LachingWebVersion>", self.read("web/Directory.Build.props"), "the web packages too")
         verify = subprocess.run(["bash", str(self.root / "scripts/verify.sh"), "--version", "0.13.1"], cwd=self.root,
-                                capture_output=True, text=True)
+                                capture_output=True, encoding="utf8")
         self.assertEqual(verify.returncode, 0, verify.stdout + verify.stderr)
         self.assertEqual(self.run_release("bump", "0.13.1").returncode, 1, "bump goes forward")
         self.commit("0.13.1: release")
@@ -238,7 +239,7 @@ class ReleaseTests(unittest.TestCase):
                              DRY_RUN="false", GITHUB_OUTPUT=str(output), GITHUB_STEP_SUMMARY=str(summary))
         script = "\n".join(line[indent + 2:] for line in lines[start:end])
         result = subprocess.run(["bash", "-e", "-c", script], cwd=cwd or self.root, env={**variables, **env},
-                                capture_output=True, text=True)
+                                capture_output=True, encoding="utf8")
         return result, dict(line.split("=", 1) for line in output.read_text("utf8").splitlines())
 
     def plan(self, **env: str) -> tuple[subprocess.CompletedProcess, dict[str, str], str]:
@@ -270,7 +271,7 @@ class ReleaseTests(unittest.TestCase):
         return origin
 
     def remote(self, origin: Path, *args: str) -> str:
-        return subprocess.run(["git", "-C", str(origin), *args], capture_output=True, text=True).stdout.strip()
+        return subprocess.run(["git", "-C", str(origin), *args], capture_output=True, encoding="utf8").stdout.strip()
 
     def test_a_dry_run_writes_nothing_and_a_release_runs_on_master(self):
         origin = self.origin()

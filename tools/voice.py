@@ -1042,4 +1042,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    companion.utf8_console()
     sys.exit(main())
