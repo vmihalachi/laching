@@ -11,7 +11,7 @@
     <!-- One version for every web package: the release they last shipped in. scripts/release.sh bump moves it only
          when web/ changed since, so it can trail the tag (and LachingVersion, dotnet/'s). 0.19.0 is the release before
          they moved here from Webling: they were never published as Laching.Web.*, so the next release ships them. -->
-    <LachingWebVersion Condition="'$(LachingWebVersion)' == ''">0.19.0</LachingWebVersion>
+    <LachingWebVersion Condition="'$(LachingWebVersion)' == ''">0.19.1</LachingWebVersion>
     <Version>$(LachingWebVersion)</Version>
     <Authors>Vlad Mihalachi</Authors>
     <Copyright>© 2026 Vlad Mihalachi</Copyright>
