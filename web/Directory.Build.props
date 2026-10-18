@@ -1,0 +1,29 @@
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <RepoRoot>$(MSBuildThisFileDirectory)</RepoRoot>
+    <!-- One version for every web package: the release they last shipped in. scripts/release.sh bump moves it only
+         when web/ changed since, so it can trail the tag (and LachingVersion, dotnet/'s). 0.19.0 is the release before
+         they moved here from Webling: they were never published as Laching.Web.*, so the next release ships them. -->
+    <LachingWebVersion Condition="'$(LachingWebVersion)' == ''">0.19.0</LachingWebVersion>
+    <Version>$(LachingWebVersion)</Version>
+    <Authors>Vlad Mihalachi</Authors>
+    <Copyright>© 2026 Vlad Mihalachi</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/vmihalachi/laching/tree/master/web</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/vmihalachi/laching</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>laching;aspnetcore;blazor;aspire;cloudflare</PackageTags>
+    <IsPackable>false</IsPackable>
+    <!-- Appended to every package description, so it shows on nuget.org. -->
+    <LachingWebNotice>No support: built for my own projects and shared as is; issues and pull requests aren't monitored, and any release may change or break things.</LachingWebNotice>
+  </PropertyGroup>
+
+</Project>

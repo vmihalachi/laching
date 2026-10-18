@@ -5,8 +5,9 @@ Guide for coding agents (Claude Code reads it through `CLAUDE.md`). Humans start
 **What it is:** an MIT Swift package plus .NET packages with the generic parts of a menu bar / tray app:
 pure scheduling (`LachingCore` / `Laching.Core`), permission-free system signals, app-shell plumbing, a
 StoreKit store, and the layer a desk companion app is built on (`LachingCompanion` / `Laching.Companion`, its UI
-and `tools/`). Used by mybackhurts, sunnysays and Mister Pagliacci. The Swift code is the reference; the C# port replays its
-conformance vectors.
+and `tools/`). Used by mybackhurts, sunnysays and Mister Pagliacci. Beside them, `web/`: the `Laching.Web.*` NuGet
+packages for small ASP.NET Core sites behind Cloudflare (formerly Webling), used by Adjudeca and sharing nothing else.
+The Swift code is the reference; the C# port replays its conformance vectors.
 
 ## Doc map
 
@@ -25,7 +26,8 @@ conformance vectors.
 with `Tests/<Product>Tests/`; `dotnet/` holds their C# mirrors (`Laching.Core`, `Laching.Companion`,
 `Laching.Companion.Shell`, `Laching.Testing`, `Laching.Windows`, `Laching.Windows.Companion`, their tests and
 `Fixture.App`); `conformance/` the generated vectors (never hand-edit); `tools/` the companion apps' tools;
-`scripts/` the repo's own scripts; `plans/` the released designs' record. The folder-by-folder map, with what each
+`scripts/` the repo's own scripts; `plans/` the released designs' record; `web/` the web packages (`src/`, `tests/`,
+their own solution and build files). The folder-by-folder map, with what each
 product imports and what runs where, is `docs/layout.md`.
 
 ## Commands
@@ -44,6 +46,8 @@ scripts/fixture-screenshots.ps1 [-Only home]   # Windows only: the fixture's win
 python3 tools/windows/check-winui.py dotnet/Fixture.App dotnet/Laching.Windows.Companion   # the WinUI traps under Native AOT
 dotnet format whitespace dotnet --folder       # C# style (dotnet/.editorconfig)
 python3 tools/tests/run.py                     # the tools' tests
+dotnet test web/Laching.Web.sln                # the web packages; Jobs tests need PostgreSQL (LACHING_WEB_TEST_POSTGRES, or localhost:5432)
+web/scripts/tailwind-sample.sh                 # packs Laching.Web.Tailwind and builds the sample with it
 scripts/verify.sh                              # runs what applies to your changes; --all for everything
 # a Stop hook runs scripts/verify.sh --fast on the files you edited; fix what it reports before ending
 ```

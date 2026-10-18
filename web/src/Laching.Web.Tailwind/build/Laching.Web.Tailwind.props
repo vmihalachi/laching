@@ -1,0 +1,19 @@
+<Project>
+
+  <!--
+    Defaults a project can override in its own PropertyGroup:
+
+      TailwindInput           the stylesheet to compile, relative to the project      Styles/app.css
+      TailwindOutput          the compiled, minified stylesheet                        wwwroot/css/app.css
+      LachingToolsDirectory   where downloaded tools are kept, per user                ~/.laching/
+
+    TailwindSource items list the files whose changes rebuild the stylesheet. Without any, the targets use
+    Styles/**/*.css, Components/**/*.razor and Components/**/*.cs.
+  -->
+  <PropertyGroup>
+    <TailwindInput Condition="'$(TailwindInput)' == ''">Styles/app.css</TailwindInput>
+    <TailwindOutput Condition="'$(TailwindOutput)' == ''">wwwroot/css/app.css</TailwindOutput>
+    <LachingToolsDirectory Condition="'$(LachingToolsDirectory)' == ''">$([System.Environment]::GetFolderPath(SpecialFolder.UserProfile))/.laching/</LachingToolsDirectory>
+  </PropertyGroup>
+
+</Project>

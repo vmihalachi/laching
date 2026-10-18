@@ -11,3 +11,6 @@ __pycache__/
 .claude/settings.local.json
 .claude/worktrees/
 .impeccable/
+TestResults/
+*.nupkg
+web/tests/Laching.Web.Tailwind.Sample/wwwroot/

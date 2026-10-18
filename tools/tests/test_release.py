@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Tests for scripts/release.sh (`plan`, `nuget`, `landing`, `bump`) and release.yml's plan step itself, over a copy of
-this repository's version files and .NET projects tagged v0.13.0 in a temporary git repository, with `gh` and `npm`
+"""Tests for scripts/release.sh (`plan`, `nuget`, `web`, `landing`, `bump`) and release.yml's plan step itself, over a copy of
+this repository's version files and .NET projects (the web packages' too) tagged v0.13.0 in a temporary git repository, with `gh` and `npm`
 stood in for."""
 
 from __future__ import annotations
@@ -17,7 +17,8 @@ from support import NO_SHEBANG, REPO, WINDOWS
 
 WORKFLOW = REPO / ".github/workflows/release.yml"
 COPIED = ("scripts/release.sh", "scripts/verify.sh", "Sources/LachingCore/Laching.swift", "kotlin/gradle.properties",
-          "README.md", "site/index.html", "dotnet/Directory.Build.props", "tools/landing/package.json")
+          "README.md", "site/index.html", "dotnet/Directory.Build.props", "web/Directory.Build.props",
+          "web/Directory.Build.targets", "web/Directory.Packages.props", "tools/landing/package.json")
 # gh api repos/…/commits/<sha>/pulls --jq …: the lines the --jq makes, from $FAKE_PULLS/<sha> ("number<tab>labels");
 # "Bad credentials" without that folder. `gh workflow run` is logged.
 GH = ('[ "$1" = workflow ] && { echo "$*" >> "$FAKE_PULLS.log"; exit "${FAKE_GH_WORKFLOW_STATUS:-0}"; }\n'
@@ -33,15 +34,18 @@ class ReleaseTests(unittest.TestCase):
         self.tmp = Path(temporary.name)
         self.root = self.tmp / "laching"
         # The version files, the projects and the tools' shell scripts (which verify.sh may source).
-        for file in [*(REPO / name for name in COPIED), *(REPO / "dotnet").glob("*/*.csproj"), *(REPO / "tools").glob("*.sh")]:
+        for file in [*(REPO / name for name in COPIED), *(REPO / "dotnet").glob("*/*.csproj"), *(REPO / "web/src").glob("*/*.csproj"),
+                     *(REPO / "tools").glob("*.sh")]:
             (self.root / file.relative_to(REPO)).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(file, self.root / file.relative_to(REPO))
-        # Whatever this repository's release, the copy is at 0.13.0, NuGet with it.
+        # Whatever this repository's release, the copy is at 0.13.0, NuGet and the web packages with it.
         version = re.search(r'version = "([^"]+)"', self.read("Sources/LachingCore/Laching.swift")).group(1)
         for name in ("Sources/LachingCore/Laching.swift", "kotlin/gradle.properties", "README.md", "site/index.html"):
             self.write(name, self.read(name).replace(version, "0.13.0"))
         self.write("dotnet/Directory.Build.props", re.sub(r"(<LachingVersion[^>]*>)[^<]+", r"\g<1>0.13.0",
                                                           self.read("dotnet/Directory.Build.props")))
+        self.write("web/Directory.Build.props", re.sub(r"(<LachingWebVersion[^>]*>)[^<]+", r"\g<1>0.13.0",
+                                                       self.read("web/Directory.Build.props")))
         self.bin = self.tmp / "bin"
         self.bin.mkdir()
         for name, body in (("gh", GH), ("npm", '[ "$1 $2 $3" = "view @laching/landing version" ] && echo 0.13.0\n')):
@@ -134,15 +138,31 @@ class ReleaseTests(unittest.TestCase):
         self.change("dotnet/Laching.Windows/Tray.cs")
         self.assertEqual(self.out("nuget", "0.13.1"), "ship (the packages changed since 0.13.0, their version on NuGet)")
 
+    def test_the_web_packages_ship_when_their_sources_or_build_files_changed(self):
+        self.assertEqual(self.out("web-projects").splitlines(), sorted(
+            path.parent.name for path in (REPO / "web/src").glob("*/*.csproj")
+            if "<IsPackable>true</IsPackable>" in path.read_text("utf8")))
+        for path in ("web/README.md", "web/tests/Laching.Web.Jobs.Tests/A.cs", "web/scripts/a.sh", "dotnet/Laching.Core/A.cs"):
+            self.change(path)
+        self.assertEqual(self.out("web", "0.13.1"),
+                         "skip (the web packages are unchanged since 0.13.0, their version on NuGet)")
+        for path in ("web/src/Laching.Web.Jobs/Job.cs", "web/Directory.Packages.props"):
+            self.git("reset", "-q", "--hard", "v0.13.0")
+            self.change(path)
+            self.assertEqual(self.out("web", "0.13.1"),
+                             "ship (the web packages changed since 0.13.0, their version on NuGet)", path)
+
     def test_bump_writes_the_strings_and_lachingversion_only_when_nuget_ships(self):
         self.change("tools/a.py")
         self.assertEqual(self.out("bump", "0.13.1"), "Bumped 0.13.0 to 0.13.1; NuGet: skip (the packages are unchanged "
-                                                     "since 0.13.0, their version on NuGet)")
+                                                     "since 0.13.0, their version on NuGet); web: skip (the web packages "
+                                                     "are unchanged since 0.13.0, their version on NuGet)")
         self.assertIn('exact: "0.13.1"', self.read("README.md"))
         self.assertIn("latest release is `v0.13.1`", self.read("README.md"))
         self.assertIn("lachingVersion=0.13.1", self.read("kotlin/gradle.properties"))
         self.assertIn(">v0.13.1</a>", self.read("site/index.html"))
         self.assertIn(">0.13.0</LachingVersion>", self.read("dotnet/Directory.Build.props"), "NuGet keeps 0.13.0")
+        self.assertIn(">0.13.0</LachingWebVersion>", self.read("web/Directory.Build.props"), "the web packages too")
         verify = subprocess.run(["bash", str(self.root / "scripts/verify.sh"), "--version", "0.13.1"], cwd=self.root,
                                 capture_output=True, text=True)
         self.assertEqual(verify.returncode, 0, verify.stdout + verify.stderr)
@@ -153,7 +173,14 @@ class ReleaseTests(unittest.TestCase):
         self.change("dotnet/Laching.Core/Clock.cs")
         self.assertIn("NuGet: ship", self.out("bump", "0.13.2"))
         self.assertIn(">0.13.2</LachingVersion>", self.read("dotnet/Directory.Build.props"))
+        self.assertIn(">0.13.0</LachingWebVersion>", self.read("web/Directory.Build.props"), "each on its own")
         self.assertEqual(self.out("nuget", "0.13.2"), "ship (LachingVersion is 0.13.2 already)", "the same after")
+        self.git("checkout", "-q", "--", ".")
+
+        self.change("web/src/Laching.Web.Images/ImageEncoder.cs")
+        self.assertIn("web: ship", self.out("bump", "0.13.2"))
+        self.assertIn(">0.13.2</LachingWebVersion>", self.read("web/Directory.Build.props"))
+        self.assertEqual(self.out("web", "0.13.2"), "ship (LachingWebVersion is 0.13.2 already)", "the same after")
 
     def test_landing_ships_when_it_changed_since_npms_version(self):
         self.assertEqual(self.out("landing"), "no (tools/landing is unchanged since 0.13.0, the version on npm)")
@@ -223,7 +250,8 @@ class ReleaseTests(unittest.TestCase):
         result, outputs, summary = self.plan(DRY_RUN="true")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(outputs, {"release": "false"})
-        for line in ("Plan: release 0.13.1 (patch:", "NuGet: ship (", "@laching/landing: no (", "Dry run: nothing"):
+        for line in ("Plan: release 0.13.1 (patch:", "NuGet: ship (", "Web packages: skip (", "@laching/landing: no (",
+                     "Dry run: nothing"):
             self.assertIn(line, summary)
         self.assertEqual(self.remote(origin, "rev-parse", "master"), head)
         self.assertEqual(self.remote(origin, "tag", "--list", "v0.13.1"), "")
@@ -235,8 +263,8 @@ class ReleaseTests(unittest.TestCase):
         # Nothing before the tag job writes to the repository, and the tag job waits for every build to pass.
         jobs = WORKFLOW.read_text("utf8").split("\n  tag:\n")
         self.assertNotIn("contents: write", jobs[0])
-        self.assertIn("needs: [plan, core, windows, landing]", jobs[1].split("\n  npm:\n")[0])
-        for job in ("core", "windows", "landing"):
+        self.assertIn("needs: [plan, core, windows, web, landing]", jobs[1].split("\n  npm:\n")[0])
+        for job in ("core", "windows", "web", "landing"):
             self.assertIn(f"(needs.{job}.result == 'success' || needs.{job}.result == 'skipped')", jobs[1])
 
         origin = self.origin()
@@ -245,14 +273,14 @@ class ReleaseTests(unittest.TestCase):
         head = self.git("rev-parse", "HEAD")
         result, plan, _ = self.plan()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual({key: plan[key] for key in ("release", "version", "previous", "base", "nuget", "landing")},
+        self.assertEqual({key: plan[key] for key in ("release", "version", "previous", "base", "nuget", "web", "landing")},
                          {"release": "true", "version": "0.13.1", "previous": "0.13.0", "base": head, "nuget": "true",
-                          "landing": "false"})
+                          "web": "false", "landing": "false"})
         self.assertEqual(self.remote(origin, "rev-parse", "master"), head, "the plan pushes nothing")
         self.assertEqual(self.remote(origin, "tag", "--list", "v0.13.1"), "")
 
         jobs = {"VERSION": plan["version"], "TREE": plan["tree"], "BASE": plan["base"]}
-        for job in ("core", "windows"):
+        for job in ("core", "windows", "web"):
             build, _ = self.step("Bump, as the release commit will be", self.checkout(origin, head, job), job, **jobs)
             self.assertEqual(build.returncode, 0, f"{job} bumps to the planned tree: " + build.stdout + build.stderr)
 

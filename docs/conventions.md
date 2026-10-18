@@ -69,4 +69,16 @@ The complete rules (moved from `AGENTS.md`, which keeps the short form).
   when their code changed since their last one. The six NuGet packages share `LachingVersion`
   (`dotnet/Directory.Build.props`), which `bump` moves only then. `scripts/verify.sh` fails when the strings disagree
   or `LachingVersion` is above the tag. The `release` skill has the details.
-- Formatting is enforced in CI: `.swift-format` (4 spaces, 140 columns) and `dotnet/.editorconfig`.
+  The six `Laching.Web.*` packages work the same way on their own `LachingWebVersion` (`web/Directory.Build.props`),
+  shipped when `web/src` or `web/`'s build files changed since `v<LachingWebVersion>` (`scripts/release.sh web`).
+- **The web packages (`web/`)** follow the same rules where they apply (doc comments on public types, no app's name or
+  strings, secrets from configuration only) and add their own:
+  - The jobs table's SQL names (table, columns, indexes) never change: they are in apps' migration history. A new
+    column is additive, with a default.
+  - The Tailwind CLI's version and its SHA-256 list change together, in `build/Laching.Web.Tailwind.targets`; an
+    upgrade is a release.
+  - When `web.yml`'s Monday check says Cloudflare's IPv4 ranges changed, update
+    `src/Laching.Web.Aspire/cloudflare-ips-v4.txt` and release.
+  - Tests never reach the network; the Jobs tests need PostgreSQL and each makes its own database.
+- Formatting is enforced in CI: `.swift-format` (4 spaces, 140 columns), `dotnet/.editorconfig` and
+  `web/.editorconfig`.
