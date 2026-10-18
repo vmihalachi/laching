@@ -9,6 +9,7 @@ launch (the app's own mode names; "screens" when the shot's env names none), `LA
 `LACHING_LANG` and `LACHING_REGION` give the locale, so no reboot between languages; the app writes
 `files/screens/<shot>-<theme>.png`, `problems.txt` and `done`, then finishes. The files come back through
 `adb exec-out run-as <app> cat`, which works on every debuggable build (adb pull can't read an app's private files).
+Each command goes to the log with the seconds it took, as do the boot and each run.
 
 Needs the Android SDK: `emulator` and `adb` on PATH or under $ANDROID_HOME ($ANDROID_SDK_ROOT, else
 ~/Library/Android/sdk, ~/Android/Sdk, or Android/Sdk under %LOCALAPPDATA% on Windows). The Debug APK comes from
@@ -103,9 +104,12 @@ class Emulator:
         command = [self.adb_path, "-s", self.serial, *args]
         if not quiet:
             self.note(f"$ adb -s {self.serial} {' '.join(args)}")
+        began = time.monotonic()
         done = subprocess.run(command, capture_output=True, text=not binary, timeout=timeout)
         if not binary and not quiet and (text := (done.stdout + done.stderr).strip()):
             self.note(text)
+        if not quiet:
+            self.note(f"({time.monotonic() - began:.1f} s)")
         return done
 
     def shell(self, *args: str, timeout: float = 120, quiet: bool = False) -> str:
@@ -120,7 +124,8 @@ class Emulator:
         self.note("$ " + " ".join(command))
         with self.log.open("a", encoding="utf8") as out:
             self.process = subprocess.Popen(command, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
-        deadline = time.monotonic() + BOOT_TIMEOUT
+        began = time.monotonic()
+        deadline = began + BOOT_TIMEOUT
         self.adb("wait-for-device", timeout=BOOT_TIMEOUT)
         while self.shell("getprop", "sys.boot_completed", quiet=True) != "1":
             if self.process.poll() is not None:
@@ -129,6 +134,7 @@ class Emulator:
                 self.kill()
                 raise RuntimeError(f"{self.avd} didn't boot in {BOOT_TIMEOUT} s; see {self.log}")
             time.sleep(2)
+        self.note(f"(booted in {time.monotonic() - began:.1f} s)")
         self.demo_mode()
 
     def demo_mode(self) -> None:
@@ -172,12 +178,14 @@ class Emulator:
             if name != MODE:
                 command += ["--es", name, value]
         self.shell(*command)
-        deadline = time.monotonic() + timeout
+        began = time.monotonic()
+        deadline = began + timeout
         while self.adb("shell", "run-as", app_id, "ls", "files/screens/done", quiet=True).returncode != 0:
             if time.monotonic() > deadline:
                 self.shell("am", "force-stop", app_id)
                 raise RuntimeError(f"the run didn't finish in {timeout:.0f} s")
             time.sleep(2)
+        self.note(f"(drew in {time.monotonic() - began:.1f} s)")
         if clear:
             shutil.rmtree(raw, ignore_errors=True)
         raw.mkdir(parents=True, exist_ok=True)

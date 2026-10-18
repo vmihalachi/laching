@@ -8,11 +8,13 @@ be drawn (ScreenshotCapture's checks, `LayoutCheck+iOS.swift`). The iOS twin of 
 
 Defaults: every device below, every language in languages.all, LAYOUT_JOBS (else 4; at least one per device type)
 simulators at a time. Shots and problems go to <mac.dir>/build/layout-check/ios-<device>/<language>. It builds the Debug
-app for the Simulator once (`mac.iosScheme`; --app runs one already built), then clones a simulator per job from a
-template it keeps ("<name> layout: <device type>", made once with accessibility on, which the text checks read), boots
-the clones, and runs the languages on them side by side, each one launch of the app in screenshot mode
+app for the Simulator once (`mac.iosScheme`; --app runs one already built), into the build folder screens.py shares
+(sim.py's `derived_data`), then clones a simulator per job from a template it keeps ("<name> layout: <device type>",
+made once with accessibility on, which the text checks read, so a clone boots once), boots the clones, and runs the
+languages on them side by side, each one launch of the app in screenshot mode
 (`mac.screenshotEnv`) with -AppleLanguages and -AppleLocale (the language's region, sim.py): no reboot between
-languages. The clones are deleted at the end (--keep leaves them).
+languages. The clones ("<name> layout <device type> clone #<n> (<pid>)") are deleted at the end (--keep leaves
+them).
 
 Devices: se (iPhone SE 3rd generation, the smallest), promax (the largest iPhone), ipad (iPad Pro 13" upright),
 ipad-landscape (the same turned, drawn at the turned screen's size: iPadOS won't turn a windowed app), ipad-split (a
@@ -26,10 +28,7 @@ templates stay (`xcrun simctl delete <udid>` removes one).
 import argparse
 import os
 import plistlib
-import queue
-import re
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -69,26 +68,10 @@ def template(app_name: str, short: str, runtime: dict) -> str:
     log(f"Making the {name} simulator ({runtime['name']}), once")
     made = sim.Simulator.create(name, TYPE_PREFIX + short, runtime["identifier"])
     made.boot()
-    made.accessibility_on()
-    made.simctl("shutdown")
+    for domain, key, value in sim.ACCESSIBILITY:
+        made.write_default(domain, key, value)
+    made.shutdown()
     return made.udid
-
-
-def clean_stale_clones(app_name: str) -> None:
-    """Deletes the clones of runs that are no longer running (killed before they could)."""
-    pattern = re.compile(rf"^{re.escape(app_name)} layout clone .* \((\d+)\)$")
-    for device in sim.devices():
-        match = pattern.match(device["name"])
-        if not match:
-            continue
-        try:
-            os.kill(int(match.group(1)), 0)
-            continue  # that run is still going
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            continue
-        sim.Simulator(device["udid"]).delete()
 
 
 def run_language(simulator: sim.Simulator, bundle: str, device: str, language: str, only: str, env_name: str,
@@ -137,88 +120,48 @@ def main() -> int:
     else:
         log("Building the iOS app (Debug, Simulator)")
         try:
-            app = sim.build(config, config.mac_dir / "build" / "ios-layout.noindex")
+            app = sim.build(config, sim.derived_data(config))
         except RuntimeError as error:
             sys.exit(f"check-layout-ios: {error}")
     bundle = plistlib.loads((app / "Info.plist").read_bytes())["CFBundleIdentifier"]
 
     runtimes = sim.runtimes()
-    clean_stale_clones(app_name)
+    sim.clean_stale_clones(app_name)
     # Devices on the same simulator type share its clones: the iPad's three ways are launches of one app.
-    types: dict[str, dict] = {}
+    tasks: dict[str, list[tuple[str, str]]] = {}
+    runtime_of: dict[str, dict] = {}
     for device in devices:
-        short, runtime = pick_type(device, runtimes)
-        entry = types.setdefault(short, {"runtime": runtime, "tasks": queue.Queue(), "count": 0})
-        for language in languages:
-            entry["tasks"].put((device, language))
-            entry["count"] += 1
-    # Clones per type in proportion to its runs, at least one each.
-    total = sum(t["count"] for t in types.values())
-    jobs = max(args.jobs, len(types))
-    for t in types.values():
-        t["workers"] = max(1, round(jobs * t["count"] / total))
-    while sum(t["workers"] for t in types.values()) > jobs:
-        busiest = max((t for t in types.values() if t["workers"] > 1), key=lambda t: t["workers"] / t["count"])
-        busiest["workers"] -= 1
-    for short, t in types.items():
-        t["workers"] = min(t["workers"], t["count"])
-        t["template"] = template(app_name, short, t["runtime"])
+        short, runtime_of[short] = pick_type(device, runtimes)
+        tasks.setdefault(short, []).extend((device, language) for language in languages)
+    workers = sim.shares(args.jobs, {short: len(runs) for short, runs in tasks.items()})
+    groups = [sim.Clones(template(app_name, short, runtime_of[short]), f"{app_name} layout {short}", runs, workers[short])
+              for short, runs in tasks.items()]
 
     results: dict[tuple[str, str], list[str]] = {}
-    clones: list[sim.Simulator] = []
-    clones_lock = threading.Lock()
 
-    def worker(short: str, number: int) -> None:
-        entry = types[short]
+    def prepare(simulator: sim.Simulator) -> None:
+        simulator.boot_with(sim.ACCESSIBILITY)  # the template has it: one boot
+        if args.text_size:
+            simulator.simctl("ui", "content_size", args.text_size)
+        simulator.install(app)
+
+    def work(simulator: sim.Simulator, task: tuple[str, str]) -> None:
+        device, language = task
+        began = time.monotonic()
         try:
-            name = f"{app_name} layout clone {short} #{number} ({os.getpid()})"
-            simulator = sim.Simulator(sim.simctl("clone", entry["template"], name).strip())
-            with clones_lock:
-                clones.append(simulator)
-            simulator.boot()
-            simulator.accessibility_on()
-            if args.text_size:
-                simulator.simctl("ui", "content_size", args.text_size)
-            simulator.install(app)
-        except Exception as error:  # noqa: BLE001 - the runs it would have made report it
-            log(f"check-layout-ios: the {short} simulator #{number} didn't start ({error})")
-            while True:
-                try:
-                    device, language = entry["tasks"].get_nowait()
-                except queue.Empty:
-                    return
-                # Another clone of the type may still take it; this one can't.
-                if entry["workers"] > 1:
-                    entry["tasks"].put((device, language))
-                    entry["workers"] -= 1
-                    return
-                results[(device, language)] = [f"the simulator didn't start ({error})"]
-        while True:
-            try:
-                device, language = entry["tasks"].get_nowait()
-            except queue.Empty:
-                return
-            began = time.monotonic()
-            try:
-                problems = run_language(simulator, bundle, device, language, args.only, env_name,
-                                        out_root / f"ios-{device}" / language)
-            except Exception as error:  # noqa: BLE001
-                problems = [f"the run failed ({error})"]
-            results[(device, language)] = problems
-            log(f"  ios-{device} {language}: {len(problems)} problem(s), {time.monotonic() - began:.0f} s")
+            problems = run_language(simulator, bundle, device, language, args.only, env_name,
+                                    out_root / f"ios-{device}" / language)
+        except Exception as error:  # noqa: BLE001
+            problems = [f"the run failed ({error})"]
+        results[task] = problems
+        log(f"  ios-{device} {language}: {len(problems)} problem(s), {time.monotonic() - began:.0f} s")
 
-    threads = [threading.Thread(target=worker, args=(short, n + 1), daemon=True)
-               for short, t in types.items() for n in range(t["workers"])]
-    log(f"Running {total} launch(es) on {len(threads)} simulator(s): {', '.join(devices)} × {' '.join(languages)}")
-    try:
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-    finally:
-        if not args.keep:
-            for simulator in clones:
-                simulator.delete()
+    def failed(task: tuple[str, str], error: Exception) -> None:
+        results[task] = [f"the simulator didn't start ({error})"]
+
+    total = sum(len(runs) for runs in tasks.values())
+    log(f"Running {total} launch(es) on {sum(workers.values())} simulator(s): {', '.join(devices)} × {' '.join(languages)}")
+    sim.on_clones(groups, prepare, work, failed, note=lambda line: log(f"check-layout-ios: {line}"), keep=args.keep)
     return report(results, "ios", devices, languages, out_root, started)
 
 
