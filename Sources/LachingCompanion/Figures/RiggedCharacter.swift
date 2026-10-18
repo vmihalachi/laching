@@ -110,17 +110,17 @@ public struct RiggedCharacter: Sendable {
     // MARK: Helpers
 
     private func moodRig(_ mood: Mood) -> MoodRig {
-        guard let m = art.rig.moods[mood] else { preconditionFailure("\(art.skin) has no rig for \(mood)") }
+        guard let m = art.rig.moods[mood] else { preconditionFailure("\(art.skin.rawValue) has no rig for \(mood.rawValue)") }
         return m
     }
 
     private func part(_ name: String) -> PartContent {
-        guard let content = art.parts[name] else { preconditionFailure("\(art.skin) has no part \(name)") }
+        guard let content = art.parts[name] else { preconditionFailure("\(art.skin.rawValue) has no part \(name)") }
         return content
     }
 
     private func pivot(_ name: String) -> Point {
-        guard let point = art.pivots[name] else { preconditionFailure("\(art.skin) has no pivot \(name)") }
+        guard let point = art.pivots[name] else { preconditionFailure("\(art.skin.rawValue) has no pivot \(name)") }
         return point
     }
 

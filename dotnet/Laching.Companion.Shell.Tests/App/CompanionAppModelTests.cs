@@ -291,6 +291,19 @@ public sealed class CompanionAppModelTests
     }
 
     [Fact]
+    public void AnUnknownPostponeReasonThrows() =>
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            FixtureModel.StatusLineFor(
+                new SchedulerStatus.Postponed((BusyReason)99),
+                Snapshot.Calm,
+                DateTimeOffset.UnixEpoch,
+                TimeZoneInfo.Utc,
+                DateTimeOffset.UnixEpoch.AddHours(12),
+                FixtureCopy.Status("HH:mm")
+            )
+        );
+
+    [Fact]
     public void ACallStartingMidLineStopsSpeech()
     {
         var model = MakeModel();

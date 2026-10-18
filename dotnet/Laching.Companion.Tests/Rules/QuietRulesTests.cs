@@ -127,4 +127,12 @@ public sealed class QuietRulesTests
         Assert.NotEqual(Snapshot.Calm, new Snapshot { IsOutputMuted = false });
         Assert.Equal("busy", SkipReason.Busy.RawValue());
     }
+
+    [Fact]
+    public void AnUnknownTriggerOrSkipReasonThrows()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => ((Trigger)99).PhraseTag());
+        Assert.Throws<ArgumentOutOfRangeException>(() => ((Trigger)99).RawValue());
+        Assert.Throws<ArgumentOutOfRangeException>(() => ((SkipReason)99).RawValue());
+    }
 }

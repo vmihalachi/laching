@@ -22,7 +22,7 @@ public struct SkinCatalog: Equatable, Sendable {
     /// `skins[0]` is the default and must be free; ids must be unique.
     public init(_ skins: [SkinEntry]) {
         precondition(!skins.isEmpty, "a skin catalog needs at least the default skin")
-        precondition(skins[0].unlockedBy == nil, "the default skin \(skins[0].id) must be free")
+        precondition(skins[0].unlockedBy == nil, "the default skin \(skins[0].id.rawValue) must be free")
         precondition(Set(skins.map(\.id)).count == skins.count, "skin ids must be unique")
         self.skins = skins
     }

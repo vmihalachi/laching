@@ -27,15 +27,19 @@ public sealed class PhraseTests
     }
 
     [Fact]
-    public void ASequenceNeedsTwoParts() =>
-        Assert.Throws<ArgumentException>(() => new Phrase("joke", Phrase.Sequence("Only a setup"), [Tag.General]));
+    public void ASequenceNeedsTwoParts()
+    {
+        var error = Assert.Throws<ArgumentException>(() => new Phrase("joke", Phrase.Sequence("Only a setup"), [Tag.General]));
+        Assert.StartsWith("Phrase joke: a sequence needs at least two parts", error.Message);
+    }
 
     [Fact]
     public void WeightIsNormalByDefaultAndStartsAtOne()
     {
         Assert.Equal(3, new Phrase("hello", Phrase.Line("Hello"), [Tag.General]).Weight);
         Assert.Equal(1, new Phrase("rare", Phrase.Line("Rarely"), [Tag.General], weight: 1).Weight);
-        Assert.Throws<ArgumentOutOfRangeException>(() => new Phrase("never", Phrase.Line("Never"), [Tag.General], weight: 0));
+        var error = Assert.Throws<ArgumentOutOfRangeException>(() => new Phrase("never", Phrase.Line("Never"), [Tag.General], weight: 0));
+        Assert.StartsWith("Phrase never: weight must be at least 1", error.Message);
         Assert.Throws<ArgumentOutOfRangeException>(() => new Phrase("never", Phrase.Line("Never"), [Tag.General], weight: -2));
     }
 
@@ -92,4 +96,7 @@ public sealed class PhraseTests
         Assert.Null(Tags.Parse("lunch"));
         Assert.Equal(9, Tags.Events.Count);
     }
+
+    [Fact]
+    public void AnUnknownTagThrows() => Assert.Throws<ArgumentOutOfRangeException>(() => ((Tag)99).RawValue());
 }

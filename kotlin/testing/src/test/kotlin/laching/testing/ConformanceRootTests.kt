@@ -3,6 +3,7 @@ package laching.testing
 import kotlinx.serialization.json.JsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class ConformanceRootTests {
@@ -25,5 +26,11 @@ class ConformanceRootTests {
         assertEquals(0.25, random.nextUnit())
         assertEquals(0.75, random.nextUnit())
         assertEquals(2, random.reads)
+    }
+
+    @Test
+    fun `a scripted random needs a value`() {
+        val error = assertFailsWith<IllegalArgumentException> { ScriptedRandom(emptyList()) }
+        assertEquals("ScriptedRandom needs at least one value", error.message)
     }
 }
