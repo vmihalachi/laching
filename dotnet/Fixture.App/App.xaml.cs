@@ -12,6 +12,7 @@ using Laching.Windows.Companion.Speech;
 using Laching.Windows.Companion.Views;
 using Laching.Windows.Shell.Localization;
 using Laching.Windows.System;
+using Microsoft.UI.Xaml.Media;
 using FixtureApp.Views;
 using Shot = Laching.Windows.Companion.Screenshots.ScreenshotScript<Laching.Testing.Fixtures.FixtureWindow, Laching.Companion.Settings.CompanionSettings>.Shot;
 
@@ -136,7 +137,8 @@ public partial class App : CompanionApp
     private static void Prepare()
     {
         Loc.UseLanguage(ScreenshotCapture.Language ?? Loc.Choose(Languages));
-        CompanionLook.Current = new CompanionLook(FixtureModel.Palette);
+        // A display face Windows ships, so the bubble's own face shows without an app's font.
+        CompanionLook.Current = new CompanionLook(FixtureModel.Palette) { DisplayFont = new FontFamily("Georgia") };
     }
 
     private WindowsCompanionHost<FixtureWindow> MakeHost()
