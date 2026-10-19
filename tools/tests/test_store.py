@@ -556,6 +556,44 @@ class StoreTests(FixtureAppTestCase):
         self.assertEqual(urls, ["/v1/builds?filter[app]=1&limit=20", "/v1/builds?filter[app]=1&limit=200",
                                 "/v1/apps?limit=200"])
 
+    def flaky_urlopen(self, failures, calls):
+        """An urlopen that times out `failures` times, then answers {} (as a context manager)."""
+        def urlopen(req, timeout=None):
+            calls.append(req.get_method())
+            if len(calls) <= failures:
+                raise push.urllib.error.URLError(TimeoutError(60, "Operation timed out"))
+            return mock.MagicMock(**{"__enter__.return_value.read.return_value": b"{}"})
+        return urlopen
+
+    def test_a_timed_out_request_is_retried_unless_it_is_a_post(self):
+        client = push.Client.__new__(push.Client)
+        client.token, client.minted = "token", push.time.time()
+        calls = []
+        with mock.patch.object(push.urllib.request, "urlopen", self.flaky_urlopen(2, calls)), \
+                mock.patch.object(push.time, "sleep"):
+            client.update("appScreenshots", "1", {"uploaded": True})
+        self.assertEqual(calls, ["PATCH"] * 3)
+
+        calls.clear()
+        with mock.patch.object(push.urllib.request, "urlopen", self.flaky_urlopen(1, calls)), \
+                mock.patch.object(push.time, "sleep"), self.assertRaisesRegex(push.ApiError, "timed out"):
+            client.request("POST", "/v1/appScreenshots", {})
+        self.assertEqual(calls, ["POST"], "a POST that timed out may have gone through")
+
+    def test_an_upload_chunk_is_retried_and_a_lasting_failure_is_an_api_error(self):
+        client, calls = push.Client.__new__(push.Client), []
+        operations = [{"url": "https://upload.example/1", "method": "PUT", "offset": 0, "length": 2}]
+        with mock.patch.object(push.urllib.request, "urlopen", self.flaky_urlopen(3, calls)), \
+                mock.patch.object(push.time, "sleep"):
+            client.upload(operations, b"ab")
+        self.assertEqual(calls, ["PUT"] * 4)
+
+        calls.clear()
+        with mock.patch.object(push.urllib.request, "urlopen", self.flaky_urlopen(9, calls)), \
+                mock.patch.object(push.time, "sleep"), self.assertRaises(push.ApiError):
+            client.upload(operations, b"ab")
+        self.assertEqual(len(calls), 5)
+
     def configure(self, **apple):
         path = self.root / "companion.json"
         config = json.loads(path.read_text("utf8"))
