@@ -15,6 +15,15 @@ the build log and review status are kept are in the app's `.agents/notes/release
 Mac in `release-mac.md`). Read them first, and check the App Review thread before starting a new build for a version
 in review.
 
+## Go-ahead
+
+Running this skill is the owner's go-ahead for the whole release: upload, apply the store push (`push.py --apply`),
+update the review notes, push the release commits and tag, and run the hosted smoke workflow without stopping to ask.
+Read each dry run and stop only when it shows something unexpected (another platform's version, screenshots being
+replaced, a version in an unexpected state). Still the owner's: new store screenshots (ask first), credentials (never
+handle them), and submitting for review. When another session's unpushed commits sit on top, push only the release's
+own: `git push origin <sha>:refs/heads/master`.
+
 ## 1. Decide the version
 
 - The iOS target's `CFBundleShortVersionString` and `CFBundleVersion` are in its own `info` → `properties` in the
@@ -63,8 +72,8 @@ iPad match what ships, and that purchase UI is only where the app's rules allow.
    `<store.dir>/<lang>.md` (the source language first, only what ships on iPhone and iPad since the last approved iOS
    build), then `python3 <store.dir>/check.py`. Commit it.
 2. **Screenshots: skip by default**, as for the Mac: render new ones only when a screen they show changed visibly. When
-   unsure, ask the owner. Render the source language first (all three devices; the app's notes name the command), show
-   them, and ask before every language (slow). The devices: iPhone 6.9" (1320×2868, `store.apple.ios.iphoneScreenshots`),
+   unsure, ask the owner. Render the source language first (all three devices; the app's notes name the command), and
+   every language (slow) once the owner has OK'd them. The devices: iPhone 6.9" (1320×2868, `store.apple.ios.iphoneScreenshots`),
    iPad 13" (2064×2752, `ios.ipadScreenshots`) and **iPhone Duo** (1398×2034 or 2007×2853; the `iPhone-Duo`
    simulator captures at either scale; `ios.duoScreenshots`, `<store.dir>/apple/duo/<lang>/` by default). Smaller
    iPhones and iPads scale from these; the Duo doesn't, so without its own set its tab stays empty. App Store Connect
@@ -80,7 +89,7 @@ iPad match what ships, and that purchase UI is only where the app's rules allow.
 4. **Push** once the build has processed:
    `python3 <store.dir>/apple/push.py --version <iOS version> --create --build <n> --only ios-text,ios-screenshots,ios-header,ios-search,review`
    prints the plan (drop `ios-screenshots`, `ios-header` or `ios-search` when they didn't change; `ios-screenshots`
-   covers the Duo's too); show it to the owner, then rerun with `--apply`. Always pass `--only` with the iOS parts:
+   covers the Duo's too); read it, then rerun with `--apply`. Always pass `--only` with the iOS parts:
    without them the Mac's page is pushed too, under the iOS version number. It creates the iOS version with the
    release type of `store.apple.releaseType` (an existing editable version is set to it too), attaches the build, and
    syncs every language's text, the screenshots, the header (uploaded once to the app's Asset Library, placed on
@@ -100,6 +109,6 @@ iPad match what ships, and that purchase UI is only where the app's rules allow.
 
 ## 5. Wrap up
 
-- Tag `ios-<version>-<build>` (for example `ios-1.0.0-1`) on the release commit; push commits and tags only when the
-  owner says so.
+- Tag `ios-<version>-<build>` (for example `ios-1.0.0-1`) on the release commit and push the release's commits and
+  the tag (only the release's own, see *Go-ahead*).
 - Record the iOS build number and review status where the app's notes say.
