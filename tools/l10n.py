@@ -769,7 +769,7 @@ def cmd_sync(args) -> int:
             for name, options in builds:
                 build = subprocess.run(
                     ["xcodebuild", "-project", CONFIG.require("mac.project"), "-scheme", name, *options,
-                     "-derivedDataPath", str(DERIVED), "build"],
+                     "-derivedDataPath", str(DERIVED), "build", *companion.xcode_cache_settings()],
                     cwd=MACOS, stdout=log, stderr=subprocess.STDOUT,
                 )
                 if build.returncode != 0:
@@ -1228,4 +1228,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    companion.utf8_console()
     sys.exit(main())

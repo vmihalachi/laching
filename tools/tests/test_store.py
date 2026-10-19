@@ -33,20 +33,32 @@ def png(width, height, alpha=False, salt=b""):
 
 
 # The App Asset Library's reference data, trimmed: a header spec for 3840x1646 on App Store Connect's one group
-# (DEFAULT_PROFILE, platform ANY), an iPhone and a Mac group, and one for another size.
+# (DEFAULT_PROFILE, platform ANY), an iPhone and a Mac group, and one for another size; the search results asset's
+# range on DEFAULT_PROFILE; the iPhone Duo's screenshot sizes.
 HEADER_REF = {
-    "features": [{"featureId": "APP_STORE_VERSIONS", "placementPolicies": [{"placementType": push.HEADER, "groupLimits": [
-        {"groupIds": ["DEFAULT_PROFILE", "IPHONE_PROFILE", "MAC_PROFILE", "IPHONE_OTHER"], "maxCount": 1}]}]}],
+    "features": [{"featureId": "APP_STORE_VERSIONS", "placementPolicies": [
+        {"placementType": push.HEADER, "groupLimits": [
+            {"groupIds": ["DEFAULT_PROFILE", "IPHONE_PROFILE", "MAC_PROFILE", "IPHONE_OTHER"], "maxCount": 1}]},
+        {"placementType": push.SEARCH, "groupLimits": [{"groupIds": ["DEFAULT_PROFILE"], "maxCount": 1}]},
+        {"placementType": push.SCREENSHOT, "groupLimits": [{"groupIds": [push.DUO, "MAC_PROFILE"], "maxCount": 10}]}]}],
     "placementProfileGroups": [{"placementProfileGroupId": g, "platform": p} for g, p in (
         ("DEFAULT_PROFILE", "ANY"), ("IPHONE_PROFILE", "IPHONE_APP_STORE"), ("MAC_PROFILE", "MAC_APP_STORE"),
-        ("IPHONE_OTHER", "IPHONE_APP_STORE"))],
+        ("IPHONE_OTHER", "IPHONE_APP_STORE"), (push.DUO, "IPHONE_APP_STORE"))],
     "imageSpecs": [{"specId": "wide", "compatiblePlacementTypes": [push.HEADER], "dimensions": {
                         "minWidth": 3840, "maxWidth": 3840, "minHeight": 1646, "maxHeight": 1646}},
                    {"specId": "other", "compatiblePlacementTypes": [push.HEADER], "dimensions": {
-                        "minWidth": 1920, "maxWidth": 1920, "minHeight": 1080, "maxHeight": 1080}}],
+                        "minWidth": 1920, "maxWidth": 1920, "minHeight": 1080, "maxHeight": 1080}},
+                   {"specId": "search", "compatiblePlacementTypes": [push.SEARCH], "dimensions": {
+                        "minWidth": 1920, "maxWidth": 3840, "minHeight": 1280, "maxHeight": 2560}},
+                   {"specId": "duo", "compatiblePlacementTypes": [push.SCREENSHOT], "dimensions": {
+                        "minWidth": 1398, "maxWidth": 1398, "minHeight": 2034, "maxHeight": 2034}}],
     "placementTypes": [{"placementTypeId": push.HEADER, "specMappings": [
         {"placementGroupId": "DEFAULT_PROFILE", "specs": ["wide"]}, {"placementGroupId": "IPHONE_PROFILE", "specs": ["wide"]},
-        {"placementGroupId": "MAC_PROFILE", "specs": ["wide"]}, {"placementGroupId": "IPHONE_OTHER", "specs": ["other"]}]}],
+        {"placementGroupId": "MAC_PROFILE", "specs": ["wide"]}, {"placementGroupId": "IPHONE_OTHER", "specs": ["other"]}]},
+                       {"placementTypeId": push.SEARCH, "specMappings": [
+        {"placementGroupId": "DEFAULT_PROFILE", "specs": ["search"]}]},
+                       {"placementTypeId": push.SCREENSHOT, "specMappings": [
+        {"placementGroupId": push.DUO, "specs": ["duo"]}, {"placementGroupId": "MAC_PROFILE", "specs": ["duo"]}]}],
 }
 
 
@@ -87,6 +99,8 @@ class FakeApi:
                             {"filter[version]": "version", "filter[preReleaseVersion.platform]": "platform"})
         kind = path.rsplit("/", 1)[1]
         parent_id = path.rsplit("/", 2)[1]
+        if path.startswith("/v1/appAssetLibraries/") and kind == "images":
+            kind = "appAssetLibraryImages"
         return self.children(kind, parent_id)
 
     def request(self, method, path, body=None):
@@ -115,6 +129,9 @@ class FakeApi:
         if "locale" in attributes and any(o["attributes"].get("locale") == attributes["locale"]
                                           for o in self.children(kind, parent)):
             raise push.ApiError(f"409 Entity with locale: {attributes['locale']} already exists.")
+        if kind == "appAssetLibraryImages" and any(o["attributes"].get("referenceName") == attributes["referenceName"]
+                                                   for o in self.children(kind, parent)):
+            raise push.ApiError(f"409 Reference name '{attributes['referenceName']}' is already in use")
         obj = self.add(kind, attributes, parent)
         obj["relationships"] = relationships
         if kind == "appInfoLocalizations":  # like App Store Connect: the editable version gets the language too
@@ -179,7 +196,8 @@ class StoreTests(FixtureAppTestCase):
         problems = check.check(self.listing, self.listing.fields("de"), self.listing.fields("en"))
         self.assertIn("apple.subtitle: 34 > 30 characters", problems)
         self.assertIn("apple.keywords: no spaces around commas (they count toward the limit)", problems)
-        result = subprocess.run([sys.executable, str(TOOLS / "store" / "check.py"), "de"], capture_output=True, text=True,
+        result = subprocess.run([sys.executable, str(TOOLS / "store" / "check.py"), "de"],
+                                capture_output=True, encoding="utf8",
                                 env={**os.environ, "COMPANION_ROOT": str(self.root)})
         self.assertEqual(result.returncode, 1)
         self.assertIn("de: 2 problem(s)", result.stdout)
@@ -246,7 +264,8 @@ class StoreTests(FixtureAppTestCase):
         self.write_google_page(title="Fixture, the friend who lives at your desk")
         problems = check.check(self.listing, self.listing.fields("en"), self.listing.fields("en"))
         self.assertIn("google.title: 42 > 30 characters", problems)
-        result = subprocess.run([sys.executable, str(TOOLS / "store" / "check.py"), "en"], capture_output=True, text=True,
+        result = subprocess.run([sys.executable, str(TOOLS / "store" / "check.py"), "en"],
+                                capture_output=True, encoding="utf8",
                                 env={**os.environ, "COMPANION_ROOT": str(self.root)})
         self.assertIn("Play title 42/30, short 41/80", result.stdout)
 
@@ -368,7 +387,8 @@ class StoreTests(FixtureAppTestCase):
 
     def test_the_ios_parts_need_the_ios_config(self):
         result = subprocess.run([sys.executable, str(TOOLS / "store" / "push.py"), "--version", "1.0", "--only", "ios-text"],
-                                capture_output=True, text=True, env={**os.environ, "COMPANION_ROOT": str(self.root)})
+                                capture_output=True, encoding="utf8",
+                                env={**os.environ, "COMPANION_ROOT": str(self.root)})
         self.assertEqual(result.returncode, 2)
         self.assertIn("need store.apple.ios", result.stderr)
 
@@ -502,7 +522,7 @@ class StoreTests(FixtureAppTestCase):
         api.add("appScreenshots", {"fileName": "1.png"}, phone["id"])
         out = self.status(api)
         self.assertIn("iOS Version 1.0.2: PREPARE_FOR_SUBMISSION", out)
-        self.assertIn('iOS en-US: 1 iPhone 6.9" screenshots, 0 iPad 13" screenshots, 0 header placements, '
+        self.assertIn('iOS en-US: 1 iPhone 6.9" screenshots, 0 iPad 13" screenshots, 0 header placements, 0 search results placements, '
                       'empty: supportUrl', out)
         needed = out.split("Still needed: ")[1]
         self.assertIn("a build on the iOS version page", needed)
@@ -512,6 +532,29 @@ class StoreTests(FixtureAppTestCase):
         self.assertNotIn("iOS App Review contact", needed)
         self.assertIn("the App Review contact", needed, "the Mac's has no details")
         self.assertIn("en-US: 0 screenshots", out, "the Mac's lines read as before")
+
+    def test_status_reports_an_ios_version_the_mac_lacks(self):
+        api, mac = self.setup_app(earlier=False)
+        self.enable_ios()
+        api.objects.pop(("appStoreVersions", mac["id"]))
+        with self.assertRaises(SystemExit) as raised, contextlib.redirect_stdout(io.StringIO()):
+            push.status(self.listing, api, "1.0.2")
+        self.assertIn("No version 1.0.2", str(raised.exception))
+
+        self.add_ios_version(api)
+        out = self.status(api)
+        self.assertIn("No macOS version 1.0.2 in App Store Connect.", out)
+        self.assertIn("iOS Version 1.0.2: PREPARE_FOR_SUBMISSION", out)
+        self.assertIn("Still needed: ", out)
+
+    def test_get_all_keeps_a_callers_limit(self):
+        client, urls = push.Client.__new__(push.Client), []
+        client.request = lambda method, url: urls.append(url) or {"data": []}
+        client.get_all("/v1/builds?filter[app]=1&limit=20")
+        client.get_all("/v1/builds?filter[app]=1")
+        client.get_all("/v1/apps")
+        self.assertEqual(urls, ["/v1/builds?filter[app]=1&limit=20", "/v1/builds?filter[app]=1&limit=200",
+                                "/v1/apps?limit=200"])
 
     def configure(self, **apple):
         path = self.root / "companion.json"
@@ -548,11 +591,12 @@ class StoreTests(FixtureAppTestCase):
         sync = push.Sync(self.listing, api, apply=True, log=discard)
         return api, sync, ios
 
-    def placed(self, api, ios):
+    def placed(self, api, ios, placement_type=push.HEADER):
         return sorted((loc["attributes"]["locale"], p["attributes"]["placementGroup"],
                        api.objects[("appAssetLibraryImages", p["relationships"]["image"][1])]["attributes"]["fileName"])
                       for loc in api.children("appStoreVersionLocalizations", ios["id"])
-                      for p in api.children("appAssetLibraryPlacements", loc["id"]))
+                      for p in api.children("appAssetLibraryPlacements", loc["id"])
+                      if p["attributes"]["placementType"] == placement_type)
 
     def test_the_header_is_uploaded_once_and_placed_on_every_ios_language(self):
         api, sync, ios = self.header_app()
@@ -594,6 +638,65 @@ class StoreTests(FixtureAppTestCase):
             self.assertIn(problem, sync.problems[0])
         self.assertEqual([k for k, _ in api.objects if k.startswith("appAssetLibrary")], [])
 
+    def test_the_search_results_asset_is_placed_like_the_header(self):
+        api, sync, ios = self.header_app()
+        search = self.listing.ios_search
+        search.parent.mkdir(parents=True, exist_ok=True)
+        search.write_bytes(png(3840, 2560))
+        self.listing.ios_header.write_bytes(png(3840, 1646))
+        localizations = sync.text(["en", "de"], ios, extra=False, write=False, page=sync.ios)
+        sync.header(localizations)
+        sync.search_results(localizations)
+        self.assertEqual(sync.problems, [])
+        name = next(o["attributes"]["fileName"] for (k, _), o in api.objects.items()
+                    if k == "appAssetLibraryImages" and o["attributes"]["fileName"].startswith("search-"))
+        self.assertEqual(self.placed(api, ios, push.SEARCH), [(locale, "DEFAULT_PROFILE", name)
+                                                              for locale in ("de-DE", "en-US")])
+        self.assertEqual(len(self.placed(api, ios)), 4, "the header stays where it was")
+
+        api.calls.clear()
+        sync.header(localizations)
+        sync.search_results(localizations)
+        self.assertEqual([c for c in api.calls if c[0] != "GET"], [], "a second run changes nothing")
+
+        search.write_bytes(png(1000, 800))
+        sync.search_results(localizations)
+        self.assertEqual(len(sync.problems), 2)
+        self.assertIn("1000x800", sync.problems[0])
+
+    def test_duo_screenshots_are_placed_per_language_in_order(self):
+        api, sync, ios = self.header_app()
+        for lang, salts in (("en", (b"1", b"2")), ("de", (b"3",))):
+            folder = self.listing.duo_screenshots / lang
+            folder.mkdir(parents=True, exist_ok=True)
+            for i, salt in enumerate(salts):
+                (folder / f"{i + 1}-shot.png").write_bytes(png(1398, 2034, salt=salt))
+        localizations = sync.text(["en", "de"], ios, extra=False, write=False, page=sync.ios)
+        sync.duo_screenshots(localizations)
+        self.assertEqual(sync.problems, [])
+        en = [c[2] for c in api.calls if c[:2] == ("POST", "appAssetLibraryImages")]
+        self.assertEqual(len(en), 3, "each file uploaded once")
+        placed = self.placed(api, ios, push.SCREENSHOT)
+        self.assertEqual([(locale, group) for locale, group, _ in placed],
+                         [("de-DE", push.DUO), ("en-US", push.DUO), ("en-US", push.DUO)], "the Duo's group, not the Mac's")
+
+        api.calls.clear()
+        sync.duo_screenshots(localizations)
+        self.assertEqual([c for c in api.calls if c[0] != "GET"], [], "a second run changes nothing")
+
+        for p in [k for k in api.objects if k[0] == "appAssetLibraryPlacements"]:
+            del api.objects[p]
+        api.calls.clear()
+        sync.duo_screenshots(localizations)
+        self.assertEqual([c for c in api.calls if c[:2] == ("POST", "appAssetLibraryImages")], [],
+                         "a later run places the images already in the library instead of uploading them again")
+        self.assertEqual(len(self.placed(api, ios, push.SCREENSHOT)), 3)
+
+        (self.listing.duo_screenshots / "en" / "2-shot.png").write_bytes(png(1320, 2868))
+        sync.duo_screenshots(localizations)
+        self.assertEqual(len(sync.problems), 1)
+        self.assertIn("1320x2868", sync.problems[0])
+
     # MARK: import.py
 
     def test_import_builds_a_partner_center_folder(self):
@@ -609,7 +712,8 @@ class StoreTests(FixtureAppTestCase):
             (art / name).write_bytes(PNG)
         out = self.root / "build" / "import"
         result = subprocess.run([sys.executable, str(TOOLS / "store" / "import.py"), "--out", str(out)],
-                                capture_output=True, text=True, env={**os.environ, "COMPANION_ROOT": str(self.root)})
+                                capture_output=True, encoding="utf8",
+                                env={**os.environ, "COMPANION_ROOT": str(self.root)})
         self.assertEqual(result.returncode, 0, result.stderr)
         with open(out / "listings.csv", encoding="utf-8-sig", newline="") as f:
             rows = list(csv.reader(f))
@@ -623,7 +727,8 @@ class StoreTests(FixtureAppTestCase):
 
     def test_import_refuses_a_language_without_its_screenshots(self):
         result = subprocess.run([sys.executable, str(TOOLS / "store" / "import.py"), "--out", str(self.root / "out")],
-                                capture_output=True, text=True, env={**os.environ, "COMPANION_ROOT": str(self.root)})
+                                capture_output=True, encoding="utf8",
+                                env={**os.environ, "COMPANION_ROOT": str(self.root)})
         self.assertEqual(result.returncode, 1)
         self.assertIn("en: 0 screenshots", result.stderr)
 
@@ -633,7 +738,8 @@ class StoreTests(FixtureAppTestCase):
         data["store"]["microsoft"] = {"publisher": "Fixture Studio", "shots": ["panel-light", "home-light", "panel-dark"]}
         path.write_text(json.dumps(data), "utf8")
         result = subprocess.run([sys.executable, str(TOOLS / "store" / "import.py"), "--out", str(self.root / "out")],
-                                capture_output=True, text=True, env={**os.environ, "COMPANION_ROOT": str(self.root)})
+                                capture_output=True, encoding="utf8",
+                                env={**os.environ, "COMPANION_ROOT": str(self.root)})
         self.assertEqual(result.returncode, 1)
         self.assertIn("en: 0 screenshots in", result.stderr)
         self.assertIn("want 3", result.stderr)

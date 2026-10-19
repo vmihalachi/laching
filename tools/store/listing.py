@@ -123,6 +123,8 @@ class Listing:
         self.iphone_screenshots = self.dir / ios.get("iphoneScreenshots", "apple/iphone")
         self.ipad_screenshots = self.dir / ios.get("ipadScreenshots", "apple/ipad")
         self.ios_header = self.dir / ios.get("header", "apple/header.png")
+        self.duo_screenshots = self.dir / ios.get("duoScreenshots", "apple/duo")
+        self.ios_search = self.dir / ios.get("searchResults", "apple/search-results.png")
         self.microsoft = config.get("store.microsoft")
         self.google = config.get("store.google")
 

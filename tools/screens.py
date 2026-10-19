@@ -3,7 +3,7 @@
 what changed since the last accepted run.
 
     laching/tools/screens.py capture [--platforms mac,windows,ios,android] [--langs en,fr|all]
-                                      [--only screen,…] [--themes light,dark] [--jobs N] [--no-build]
+                                      [--only screen,…] [--themes light,dark] [--jobs N] [--no-build] [--cold]
     laching/tools/screens.py compare [--langs …] [--only …] [--themes …]     # sheets and index.html
     laching/tools/screens.py diff [--against NAME] [--threshold BITS]       # what changed since NAME was accepted
     laching/tools/screens.py accept [NAME]                                   # the captures as they are become NAME
@@ -23,13 +23,16 @@ name or its capture kind (mac, windows, ios, android), null where it has none. E
 `capture` builds each platform once and runs them side by side: the Mac through `screens.platforms.<p>.script` (or
 Laching's screenshots.sh), hidden, the languages `--jobs` at a time (LAYOUT_JOBS, 3); Windows in the Parallels VM
 through `windows/vm.sh check-layout` (or `vm.sh screenshots` once per language with `"vm": "screenshots"`); iOS on
-simulators of its own, one per device, side by side, each language one launch of the app in screenshot mode
-(`mac.screenshotEnv`, as check-layout-ios.py runs it), which draws its window without the status bar; shots with an
-`env` of their own get a launch of their own; Android on headless emulators (`avd`, one per platform, side by side;
-avd.py), each language one launch with Laching's intent extras (`LACHING_SCREENSHOT_MODE`, `LACHING_SCREENS`,
-`LACHING_LANG`, `LACHING_REGION`; a shot's `env` adds extras, `camera` gives the emulator the host's webcam), the
-status bar in demo mode at 09:41. Every platform checks that text fits (its problems.txt) and reports a
-screen it didn't capture. Exits 1 when there are problems, 3 when no platform could run.
+simulators of its own, one per device ("<name> screens <platform>", made once with its defaults written, so it boots
+once), side by side, each language one launch of the app in screenshot mode (`mac.screenshotEnv`, as
+check-layout-ios.py runs it), which draws its window without the status bar; shots with an `env` of their own get a
+launch of their own; `--jobs` is also the iOS simulators in all, at least one per device: a device given more runs its
+languages side by side on clones of its simulator (sim.py's `on_clones`, deleted at the end); Android on headless
+emulators (`avd`, one per platform, side by side; avd.py), each language one launch with Laching's intent extras
+(`LACHING_SCREENSHOT_MODE`, `LACHING_SCREENS`, `LACHING_LANG`, `LACHING_REGION`; a shot's `env` adds extras, `camera`
+gives the emulator the host's webcam), the status bar in demo mode at 09:41, each emulator quick-booting from the
+snapshot its first run saved (`--cold` boots them cold and saves new ones). Every platform checks that text fits (its
+problems.txt) and reports a screen it didn't capture. Exits 1 when there are problems, 3 when no platform could run.
 
 `--only` takes canonical screen names; `--platforms` platform names or capture kinds. A sheet leaves out platforms
 without the screen and the ones not captured in that language. `diff` keeps a 256-bit difference hash per image, so a
@@ -65,6 +68,10 @@ THEMES = ("light", "dark")
 KINDS = ("mac", "windows", "ios", "android")
 VM_UNAVAILABLE = 3
 DEFAULT_BASELINE = "accepted"
+# What a screenshot simulator needs: accessibility on (the fit checks read the accessibility tree), and an iPad's apps
+# full screen, with no Stage Manager windows or Split View. Each takes effect on the next boot.
+SIMULATOR_DEFAULTS = (*sim.ACCESSIBILITY, ("com.apple.springboard", "SBChamoisWindowingEnabled", False),
+                      ("com.apple.springboard", "SBMedusaMultitaskingEnabled", False))
 # Row heights on a sheet, in pixels: desktop windows on top, devices below.
 TOP_HEIGHT, BOTTOM_HEIGHT = 760, 960
 
@@ -184,6 +191,7 @@ class Capture:
     themes: list[str]
     jobs: int
     build: bool
+    cold: bool = False  # cold-boot the AVDs (and save their snapshots anew) instead of loading their snapshots
     problems: list[tuple[int, str, str]] = field(default_factory=list)  # (platform index, language, text)
     ran: set = field(default_factory=set)
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -203,17 +211,21 @@ class Capture:
 
     def sh(self, command: list, log: Path, env: dict | None = None, cwd: Path | None = None,
            timeout: float | None = None) -> int:
-        """Runs `command` with its output appended to `log`; its exit code (124 when it outlasts `timeout` seconds)."""
+        """Runs `command` with its output appended to `log`, then the seconds it took; its exit code (124 when it
+        outlasts `timeout` seconds)."""
         with log.open("a", encoding="utf8") as out:
             out.write(f"$ {' '.join(str(c) for c in command)}\n")
             out.flush()
+            began = time.monotonic()
             try:
-                return subprocess.run([str(c) for c in command], stdout=out, stderr=subprocess.STDOUT,
+                code = subprocess.run([str(c) for c in command], stdout=out, stderr=subprocess.STDOUT,
                                       cwd=cwd or self.screens.root, env={**os.environ, **(env or {})},
                                       timeout=timeout).returncode
             except subprocess.TimeoutExpired:
                 out.write(f"(gave up after {timeout:.0f} s)\n")
                 return 124
+            out.write(f"{sim.took(began)}\n")
+            return code
 
     def wanted(self, platform: Platform) -> list[tuple[str, Shot]]:
         return [(screen, shot) for screen in self.names if (shot := self.screens.shot(screen, platform))]
@@ -376,13 +388,13 @@ class Capture:
         for language in self.languages:
             self.problem(platform, language, f"not captured: {reason}")
 
-    # iOS: one build, then a simulator of its own per device, side by side.
+    # iOS: one build, then a simulator of its own per device, side by side; with more than one language, clones of it.
 
     def ios(self, platforms: list[Platform]) -> None:
         log = self.log("ios")
         log.write_text("", "utf8")
         config = self.screens.config
-        derived = config.mac_dir / "build" / "screens-ios.noindex"
+        derived = sim.derived_data(config)
         try:
             if self.build:
                 self.say("ios: building")
@@ -395,54 +407,96 @@ class Capture:
                     self.problem(platform, language, str(error))
             return
         bundle = plistlib.loads((app / "Info.plist").read_bytes())["CFBundleIdentifier"]
+        platforms = [platform for platform in platforms if self.wanted(platform)]
+        # `jobs` simulators in all, at least one per device: a device with more runs its languages on clones.
+        workers = sim.shares(self.jobs, {platform.name: len(self.languages) for platform in platforms})
         threads = [threading.Thread(target=self.device, args=(platform, app, bundle)) for platform in platforms
-                   if self.wanted(platform)]
+                   if workers[platform.name] == 1]
+        cloned = [platform for platform in platforms if workers[platform.name] > 1]
+        if cloned:
+            threads.append(threading.Thread(target=self.clones, args=(cloned, workers, app, bundle)))
         for thread in threads:
             thread.start()
         for thread in threads:
             thread.join()
 
+    def simulator_name(self, platform: Platform) -> str:
+        return f"{self.app_name} screens {platform.name}"
+
+    @property
+    def app_name(self) -> str:
+        return self.screens.config.get("name", self.screens.root.name)
+
     def device(self, platform: Platform, app: Path, bundle: str) -> None:
+        """One device's simulator, kept between runs: boots it once and runs every language on it."""
         log = self.log(platform.name)
         log.write_text("", "utf8")
         try:
-            phone = sim.Simulator(simulator(
-                f"{self.screens.config.get('name', self.screens.root.name)} screens {platform.name}",
-                platform.settings.get("device")), log)
+            phone = sim.Simulator(simulator(self.simulator_name(platform), platform.settings.get("device"), log), log)
             self.say(f"{platform.name}: booting {platform.settings.get('device')}")
-            phone.boot()
-            # The fit checks need accessibility on; an iPad's apps full screen, with no Stage Manager windows or
-            # Split View. Both take effect on the next boot.
-            phone.accessibility_on()
-            phone.write_default("com.apple.springboard", "SBChamoisWindowingEnabled", False)
-            phone.write_default("com.apple.springboard", "SBMedusaMultitaskingEnabled", False)
-            phone.shutdown()
-            phone.boot()
+            phone.boot_with(SIMULATOR_DEFAULTS)
             phone.install(app)
         except RuntimeError as error:
             for language in self.languages:
                 self.problem(platform, language, f"{error}; see {log}")
             return
-        # One launch draws every shot asked for; a shot with an env of its own needs a launch with it.
+        for language in self.languages:
+            self.on_simulator(phone, platform, bundle, language)
+        phone.shutdown()
+
+    def clones(self, platforms: list[Platform], workers: dict[str, int], app: Path, bundle: str) -> None:
+        """The devices whose languages run side by side: clones of each one's simulator (sim.on_clones), each booted
+        once (the defaults come with the clone), the app installed, then a language at a time until none are left."""
+        groups = []
+        sim.clean_stale_clones(self.app_name)
+        for platform in platforms:
+            log = self.log(platform.name)
+            log.write_text("", "utf8")
+            try:
+                template = sim.Simulator(simulator(self.simulator_name(platform), platform.settings.get("device"), log),
+                                         log)
+                template.shutdown()  # a simulator clones only when shut down
+            except RuntimeError as error:
+                for language in self.languages:
+                    self.problem(platform, language, f"{error}; see {log}")
+                continue
+            self.say(f"{platform.name}: {workers[platform.name]} clones of {platform.settings.get('device')}")
+            tasks = [(platform, language) for language in self.languages]
+            groups.append(sim.Clones(template.udid, self.simulator_name(platform), tasks, workers[platform.name], log))
+
+        def prepare(clone: sim.Simulator) -> None:
+            clone.boot_with(SIMULATOR_DEFAULTS)
+            clone.install(app)
+
+        def failed(task: tuple[Platform, str], error: Exception) -> None:
+            platform, language = task
+            logs = self.log(platform.name).parent
+            self.problem(platform, language, f"the simulator didn't start ({error}); see {logs}/{platform.name}-*.log")
+
+        sim.on_clones(groups, prepare, lambda clone, task: self.on_simulator(clone, task[0], bundle, task[1]), failed,
+                      note=lambda line: self.say(f"ios: {line}"))
+
+    def on_simulator(self, phone: sim.Simulator, platform: Platform, bundle: str, language: str) -> None:
+        """One language on a booted simulator with the app installed: one launch draws every shot asked for, and a shot
+        with an env of its own gets a launch with it."""
         launches: dict[tuple, list[tuple[str, Shot]]] = {}
         for screen, shot in self.wanted(platform):
             launches.setdefault(shot.env, []).append((screen, shot))
         mode = self.screens.config.get("mac.screenshotEnv") or "LACHING_SCREENSHOT_MODE"
-        for language in self.languages:
-            count = 0
-            for number, (env, wanted) in enumerate(launches.items(), 1):
-                raw = self.screens.out / "raw" / platform.name / language / str(number)
-                try:
-                    phone.run(bundle, language, {mode: ",".join(dict.fromkeys(shot.name for _, shot in wanted)),
-                                                     **dict(env)}, raw)
-                except RuntimeError as error:
-                    self.problem(platform, language, f"{error}; see {log}")
-                    continue
-                self.problems_from(platform, language, raw, 0, log)
-                count += self.collect(platform, language, raw, wanted)
-            self.ran.add(platform.name)
-            self.say(f"{platform.name} {language}: {count} shots")
-        phone.shutdown()
+        began = time.monotonic()
+        count = 0
+        for number, (env, wanted) in enumerate(launches.items(), 1):
+            raw = self.screens.out / "raw" / platform.name / language / str(number)
+            try:
+                phone.run(bundle, language, {mode: ",".join(dict.fromkeys(shot.name for _, shot in wanted)),
+                                             **dict(env)}, raw)
+            except RuntimeError as error:
+                self.problem(platform, language, f"{error}; see {phone.log}")
+                continue
+            self.problems_from(platform, language, raw, 0, phone.log)
+            count += self.collect(platform, language, raw, wanted)
+        self.ran.add(platform.name)
+        self.say(f"{platform.name} {language}: {count} shots, {time.monotonic() - began:.0f} s")
 
     def android(self, platforms: list[Platform]) -> None:
         log = self.log("android")
@@ -478,7 +532,7 @@ class Capture:
             return
         wanted = self.wanted(platform)
         try:
-            emulator = avd.Emulator(name, index, log, camera=any(shot.camera for _, shot in wanted))
+            emulator = avd.Emulator(name, index, log, camera=any(shot.camera for _, shot in wanted), cold=self.cold)
             self.say(f"{platform.name}: booting {name}")
             emulator.boot()
             emulator.install(apk)
@@ -512,8 +566,9 @@ class Capture:
             emulator.kill()
 
 
-def simulator(name: str, device: str | None) -> str:
-    """The UDID of the simulator called `name`, made the first time from `device` on the newest iOS runtime that runs it."""
+def simulator(name: str, device: str | None, log: Path | None = None) -> str:
+    """The UDID of the simulator called `name`, made the first time from `device` on the newest iOS runtime that runs it
+    with SIMULATOR_DEFAULTS written (booted once to write them, then shut down)."""
     if not device:
         raise RuntimeError("no device in screens.platforms (a simulator device type)")
     for found in sim.devices():
@@ -523,7 +578,12 @@ def simulator(name: str, device: str | None) -> str:
     if runtime is None:
         raise RuntimeError(f"no installed iOS simulator runtime supports {device} (Xcode → Settings → Components)")
     try:
-        return sim.Simulator.create(name, device, runtime["identifier"]).udid
+        made = sim.Simulator.create(name, device, runtime["identifier"], log)
+        made.boot()
+        for domain, key, value in SIMULATOR_DEFAULTS:
+            made.write_default(domain, key, value)
+        made.shutdown()
+        return made.udid
     except RuntimeError as error:
         raise RuntimeError(f"couldn't make a {device} simulator: {error}") from None
 
@@ -871,8 +931,9 @@ def main(argv: list[str]) -> int:
     capture.add_argument("--only", help="canonical screen names, comma-separated (default: every one)")
     capture.add_argument("--themes", default="light,dark", help="light, dark or both (default)")
     capture.add_argument("--jobs", type=int, default=int(os.environ.get("LAYOUT_JOBS", 3)),
-                         help="Mac and Windows languages at a time (LAYOUT_JOBS, 3)")
+                         help="Mac and Windows languages at a time, iOS simulators in all (LAYOUT_JOBS, 3)")
     capture.add_argument("--no-build", action="store_true", help="run the last builds")
+    capture.add_argument("--cold", action="store_true", help="cold-boot the Android emulators and save their snapshots anew")
     sheets = commands.add_parser("compare", help="one sheet per screen, language and theme, and index.html")
     sheets.add_argument("--langs", help="languages, comma-separated, or all (default: the captured ones)")
     sheets.add_argument("--only", help="canonical screen names, comma-separated")
@@ -893,7 +954,7 @@ def main(argv: list[str]) -> int:
         if args.command == "capture":
             platforms = screens.pick_platforms(words(args.platforms))
             languages = screens.pick_languages(words(args.langs), [screens.config.source_language])
-            return Capture(screens, platforms, languages, names, themes, args.jobs, not args.no_build).run()
+            return Capture(screens, platforms, languages, names, themes, args.jobs, not args.no_build, args.cold).run()
         if args.command == "compare":
             languages = screens.pick_languages(words(args.langs), screens.captured_languages())
             return compare(screens, languages, names, themes)
@@ -909,5 +970,6 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    companion.utf8_console()
     need_pillow()
     sys.exit(main(sys.argv[1:]))

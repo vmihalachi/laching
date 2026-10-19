@@ -41,7 +41,7 @@ class HookTestCase(FixtureAppTestCase):
     def run_hook(self, mode, event, payload=None):
         env = {**os.environ, "CLAUDE_PROJECT_DIR": str(self.root), "TMPDIR": self.tmp}
         return subprocess.run([sys.executable, str(HOOK), mode], input=payload if payload is not None else json.dumps(event),
-                              text=True, capture_output=True, env=env, timeout=60)
+                              encoding="utf8", capture_output=True, env=env, timeout=60)
 
     def configure(self, **hooks):
         """Adds `hooks` entries to the fixture app's companion.json."""

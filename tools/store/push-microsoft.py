@@ -497,4 +497,6 @@ def main(argv=None, client=Client):
 
 
 if __name__ == "__main__":
+    for stream in (sys.stdout, sys.stderr):  # UTF-8 on a cp1252 Windows console too (companion.utf8_console)
+        stream.reconfigure(encoding="utf-8", errors="replace")
     sys.exit(main())

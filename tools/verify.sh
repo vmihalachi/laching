@@ -295,7 +295,7 @@ if [ "$fast" = 0 ]; then
   if touched "$RE_SWIFT" "${CONFORMANCE_DIR:+^$CONFORMANCE_DIR/}"; then
     if [ "$darwin" = 1 ]; then
       check "xcodebuild test" bash -c "cd \"$MAC_DIR\" && xcodebuild -project \"$MAC_PROJECT\" -scheme \"$MAC_SCHEME\" \
-        -destination 'platform=macOS' -derivedDataPath \"$ROOT/$DERIVED\" -quiet test"
+        -destination 'platform=macOS' -derivedDataPath \"$ROOT/$DERIVED\" -quiet $XCODE_CACHE test"
     else skip "xcodebuild test: needs macOS + Xcode"; fi
   fi
   if touched "$RE_WINDOWS_CORE" && [ -n "$WINDOWS_CORE_TESTS" ]; then

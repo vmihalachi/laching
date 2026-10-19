@@ -40,12 +40,13 @@ cd dotnet && dotnet test Laching.Core.Tests   # anywhere with the .NET 10 SDK (L
 cd dotnet && dotnet test Laching.Companion.Tests   # the companion vectors, the same anywhere
 cd dotnet && dotnet test Laching.Companion.Shell.Tests   # the companion shell's logic, the same anywhere
 cd dotnet && dotnet test Laching.Testing.Tests   # the mocks, the conformance helpers and the fixtures, the same anywhere
+cd dotnet && dotnet test Laching.Tests.slnf   # the four above in one run (what verify.sh runs)
 cd dotnet && dotnet test Laching.Windows.Companion.Tests   # Windows only: the speaker, the chime and the Windows shell's services
 dotnet run --project dotnet/Fixture.App        # Windows only: the fixture app, for the checks by hand
 scripts/fixture-screenshots.ps1 [-Only home]   # Windows only: the fixture's windows to PNGs, light and dark; fails on layout problems (-Only runs hidden; -NoBuild to repeat)
 python3 tools/windows/check-winui.py dotnet/Fixture.App dotnet/Laching.Windows.Companion   # the WinUI traps under Native AOT
 dotnet format whitespace dotnet --folder       # C# style (dotnet/.editorconfig)
-python3 tools/tests/run.py                     # the tools' tests
+python3 tools/tests/run.py [l10n] [--jobs N]  # the tools' tests, side by side (one process per CPU; a word filters by file name)
 dotnet test web/Laching.Web.sln                # the web packages; Jobs tests need PostgreSQL (LACHING_WEB_TEST_POSTGRES, or localhost:5432)
 web/scripts/tailwind-sample.sh                 # packs Laching.Web.Tailwind and builds the sample with it
 scripts/verify.sh                              # runs what applies to your changes; --all for everything
@@ -91,6 +92,9 @@ The short form; the full rules with their examples are in `docs/conventions.md`.
 - **Package code never names an app** and ships no strings: apps inject their bank, defaults, skins, palette,
   voices and every label (`Text`, string or copy struct); `tools/` reads everything app-specific from `companion.json`.
 - **No permission prompts, no network.**
+- **No migrations for renamed persisted keys:** when a rename changes a settings, cache or preference key
+  (`deskling.*` → `laching.*`), the old value is dropped; mention it in one line at most, with no shim, pull request or
+  release note unless the owner asks.
 - **Behavior changes are additive and vector-tested:** a config field whose default keeps every vector
   byte-identical, a unit test, a vector case and the C# port in the same change. `conformance/companion` pins
   mechanism over fixtures; each app pins its own content.

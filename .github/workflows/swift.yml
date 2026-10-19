@@ -3,7 +3,8 @@ name: Swift
 # Builds and tests the Swift package (the reference implementation) and checks that the committed
 # conformance vectors are current. macOS minutes bill at 10x, so the paths stay narrow. The linux job builds the
 # pure products (LachingCore, LachingCompanion, LachingTesting) without Apple frameworks and runs
-# LachingCoreTests and LachingCompanionTests there; the other test targets are macOS-only and build empty.
+# LachingCoreTests and LachingCompanionTests there; the other test targets are macOS-only and build empty. The macOS
+# job builds incrementally from a cached .build everywhere but on master, which builds clean.
 on:
   push:
     branches:
@@ -46,6 +47,38 @@ jobs:
       - name: Check Swift formatting (.swift-format)
         run: xcrun swift-format lint -r --strict --configuration .swift-format Sources Tests
 
+      # SwiftPM tells a changed source by its mtime, any difference counting (older too), and a checkout stamps every
+      # file with the current time. So each file gets an mtime from its blob id: the same content always has the same
+      # mtime, and a restored .build recompiles only the files that changed.
+      - name: Stamp the sources' mtimes from their contents
+        run: |
+          python3 - <<'EOF'
+          import os, subprocess
+          listing = subprocess.run(["git", "ls-files", "-s", "-z", "--", "Package.swift", "Sources", "Tests"],
+                                   capture_output=True, text=True, check=True).stdout
+          for entry in filter(None, listing.split("\0")):
+              meta, path = entry.split("\t", 1)
+              stamp = 978307200 + int(meta.split()[1][:7], 16)  # 2001-01-01 plus 28 bits of the blob id
+              os.utime(path, (stamp, stamp))
+          EOF
+
+      - name: The build cache's key
+        id: build-cache
+        run: |
+          toolchain=$({ xcodebuild -version; swift --version; } 2>&1 | shasum -a 256 | cut -c1-16)
+          echo "prefix=swift-$RUNNER_OS-$RUNNER_ARCH-$toolchain-" >> "$GITHUB_OUTPUT"
+
+      # Branches and pull requests start from the newest .build for this toolchain (their own, else master's). Master
+      # never restores one: it builds clean and saves the cache the branches start from, so no cache can pass master.
+      - name: Restore .build
+        id: restore
+        if: github.ref != 'refs/heads/master'
+        uses: actions/cache/restore@v6
+        with:
+          path: .build
+          key: ${{ steps.build-cache.outputs.prefix }}${{ hashFiles('Package.swift', 'Sources/**', 'Tests/**') }}
+          restore-keys: ${{ steps.build-cache.outputs.prefix }}
+
       - name: Build
         run: swift build
 
@@ -57,6 +90,13 @@ jobs:
           scripts/conformance.sh
           git add -N conformance
           git diff --exit-code --stat -- conformance
+
+      - name: Save .build
+        if: steps.restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .build
+          key: ${{ steps.build-cache.outputs.prefix }}${{ hashFiles('Package.swift', 'Sources/**', 'Tests/**') }}
 
   linux:
     runs-on: ubuntu-latest

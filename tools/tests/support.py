@@ -76,7 +76,7 @@ def git(cwd: Path, *args: str) -> str:
     env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     command = ["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "-c", "init.defaultBranch=main",
                "-c", "tag.gpgSign=false", "-c", "commit.gpgSign=false", "-c", "protocol.file.allow=always", *args]
-    return subprocess.run(command, cwd=cwd, env=env, check=True, capture_output=True, text=True).stdout.strip()
+    return subprocess.run(command, cwd=cwd, env=env, check=True, capture_output=True, encoding="utf8").stdout.strip()
 
 
 def quiet(function, *args):

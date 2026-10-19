@@ -69,12 +69,33 @@ jobs:
       - name: Testing tests (mocks, conformance helpers, fixtures)
         run: dotnet test dotnet/Laching.Testing.Tests/Laching.Testing.Tests.csproj -c Release --no-build
 
+  # No NuGet cache (measured in #150): here restoring the 1 GB cache took 19 s against about 27 s of downloads, and
+  # the job billed the same minutes; on Linux the restore takes a second.
   windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
 
+      # setup-dotnet downloads the newest .NET 10 SDK (300 MB, 30-odd seconds) whenever the image is a patch behind. The
+      # image's own SDK does when it is in the newest feature band: the latitude web/global.json's latestPatch gives.
+      - name: The image's .NET SDK
+        id: sdk
+        shell: pwsh
+        run: |
+          $band = { param($v) if ($v -match '^10\.0\.(\d)\d\d$') { $Matches[1] } }
+          $image = dotnet --version 2>$null
+          if ($LASTEXITCODE -ne 0) { $image = $null }
+          $index = 'https://builds.dotnet.microsoft.com/dotnet/release-metadata/releases-index.json'
+          $newest = try {
+            (Invoke-RestMethod $index).'releases-index' | Where-Object 'channel-version' -eq '10.0' | ForEach-Object 'latest-sdk'
+          } catch { }
+          $use = $null -ne (& $band $image) -and (& $band $image) -eq (& $band $newest)
+          "The image's SDK: $image; the newest: $newest; using the image's: $use"
+          "use=$("$use".ToLower())" >> $env:GITHUB_OUTPUT
+          exit 0
+
       - uses: actions/setup-dotnet@v6
+        if: steps.sdk.outputs.use != 'true'
         with:
           dotnet-version: "10.0.x"
 

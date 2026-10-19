@@ -10,7 +10,8 @@
 # Path → checks:
 #   Package.swift, Sources/, Tests/     swift-format lint, swift build + test (macOS), vectors current
 #   dotnet/**, conformance/**           dotnet format whitespace, dotnet build + test
-#   tools/**, Tests/Fixtures/**         the tools' Python tests, fixture art current
+#   tools/**, Tests/Fixtures/**         the tools' Python tests (with --fast, the ones that cover the changed paths:
+#                                       tools/tests/covering.py), fixture art current
 #   tools/landing/**                    @laching/landing: types, lint, format, tests (Node 24)
 #   web/**                              dotnet format (web's solution), its tests (the Jobs tests only with PostgreSQL:
 #                                       LACHING_WEB_TEST_POSTGRES, or localhost:5432), the Tailwind sample
@@ -26,7 +27,7 @@ while [ $# -gt 0 ]; do
     --all) all=1 ;;
     --staged) mode=staged ;;
     --version) [ $# -ge 2 ] || { echo "--version needs X.Y.Z (see --help)" >&2; exit 2; }; version="$2"; shift ;;
-    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1 (see --help)" >&2; exit 2 ;;
   esac
   shift
@@ -62,6 +63,20 @@ vectors_current() {
     git status --short -- conformance
     echo "The vectors were stale and have been regenerated. Commit them with your change."
     return 1
+  fi
+}
+
+# Every tools test, or with --fast only the ones that cover the changed paths (tools/tests/covering.py), deleted ones too.
+tools_tests() {
+  local paths=() path tests
+  if [ "$fast" = 1 ] && [ "$all" = 0 ]; then
+    while read -r path; do [ -n "$path" ] && paths+=("$path"); done <<< "$(printf '%s\n' "$changed" | grep -E "$tools")"
+    tests="$(python3 tools/tests/run.py --covering "${paths[@]+"${paths[@]}"}")" || tests=all
+  fi
+  if [ "${tests:-all}" = all ]; then check "tools tests" python3 tools/tests/run.py
+  else
+    # shellcheck disable=SC2086 # the test names, one word each
+    check "tools tests ($tests)" python3 tools/tests/run.py $tests
   fi
 }
 
@@ -132,7 +147,7 @@ if touched "$web"; then
 fi
 if touched "$tools"; then
   if has python3; then
-    check "tools tests" python3 tools/tests/run.py
+    tools_tests
     check "fixture art current" scripts/fixture-art.sh --check
   else skip "tools tests: needs python3"; fi
 fi
@@ -149,23 +164,22 @@ if [ "$fast" = 0 ]; then
   fi
   if touched "$dotnet"; then
     if has dotnet; then
-      check "dotnet build + test (Core)" dotnet test dotnet/Laching.Core.Tests/Laching.Core.Tests.csproj -v q --nologo
-      check "dotnet build + test (Companion)" dotnet test dotnet/Laching.Companion.Tests/Laching.Companion.Tests.csproj -v q --nologo
-      check "dotnet build + test (Companion.Shell)" dotnet test dotnet/Laching.Companion.Shell.Tests/Laching.Companion.Shell.Tests.csproj -v q --nologo
-      check "dotnet build + test (Testing)" dotnet test dotnet/Laching.Testing.Tests/Laching.Testing.Tests.csproj -v q --nologo
+      # One restore and build for the four, their test runs side by side: about 7 s instead of about 16 s.
+      check "dotnet build + test (Core, Companion, Companion.Shell, Testing)" \
+        dotnet test dotnet/Laching.Tests.slnf -v q --nologo
     else skip "dotnet test: needs the .NET SDK"; fi
   fi
   if touched "$web"; then
     if has dotnet; then
       check "dotnet format (web)" dotnet format web/Laching.Web.sln --verify-no-changes
-      for tests in web/tests/*.Tests; do
-        name="${tests##*/}"
-        if [ "$name" = Laching.Web.Jobs.Tests ] && ! web_postgres; then
-          skip "$name: needs PostgreSQL (LACHING_WEB_TEST_POSTGRES, or docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16)"
-          continue
-        fi
-        check "dotnet build + test ($name)" dotnet test "$tests/$name.csproj" -v q --nologo
-      done
+      # The whole solution in one run, the Jobs tests filtered out (still built) when PostgreSQL isn't there.
+      if web_postgres; then
+        check "dotnet build + test (web)" dotnet test web/Laching.Web.sln -v q --nologo
+      else
+        skip "Laching.Web.Jobs.Tests: needs PostgreSQL (LACHING_WEB_TEST_POSTGRES, or docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16)"
+        check "dotnet build + test (web, without Jobs)" \
+          dotnet test web/Laching.Web.sln -v q --nologo --filter 'FullyQualifiedName!~Laching.Web.Jobs.Tests'
+      fi
       if touched "$tailwind"; then check "Tailwind sample" web/scripts/tailwind-sample.sh; fi
     else skip "dotnet test (web): needs the .NET SDK"; fi
   fi
