@@ -117,9 +117,11 @@ class VerifyFastTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name) / "laching"
-        for name in ("scripts/verify.sh", "tools/verify-lib.sh", "tools/tests/run.py", "tools/tests/covering.py",
-                     "tools/l10n.py", "tools/windows/vm.py", "Sources/LachingCore/Laching.swift", "kotlin/gradle.properties",
-                     "README.md", "site/index.html", "dotnet/Directory.Build.props", "web/Directory.Build.props"):
+        # .gitignore too: the first run's __pycache__ would otherwise be an untracked change to the second.
+        for name in (".gitignore", "scripts/verify.sh", "tools/verify-lib.sh", "tools/tests/run.py",
+                     "tools/tests/covering.py", "tools/l10n.py", "tools/windows/vm.py", "Sources/LachingCore/Laching.swift",
+                     "kotlin/gradle.properties", "README.md", "site/index.html", "dotnet/Directory.Build.props",
+                     "web/Directory.Build.props"):
             (self.root / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(REPO / name, self.root / name)
         (self.root / "scripts/fixture-art.sh").write_text("#!/usr/bin/env bash\nexit 0\n", "utf8")
