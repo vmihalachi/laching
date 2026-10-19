@@ -634,6 +634,7 @@ class Sync:
         assets (an image in the wrong one fails processing); an image that failed is deleted and uploaded again."""
         images = None  # uploaded file name -> image id ("" in a dry run), read from the library on first use
         failed = {}  # uploaded file name -> ids of the images under that name that failed processing
+        gone = set()  # placements deleted with their failed image
         category = "APP_SCREENSHOTS_AND_PREVIEWS" if placement_type == SCREENSHOT else "CREATIVE_ASSETS"
         groups_for = {}  # (width, height) -> groups
         label = reference[0].lower() + reference[1:]
@@ -643,6 +644,9 @@ class Sync:
 
         def upload(f, name):
             for image_id in failed.pop(name, []):  # its reference name would clash with the new one's
+                for p in self.api.request("GET", f"/v1/appAssetLibraryImages/{image_id}/placements")["data"]:
+                    self.api.delete("appAssetLibraryPlacements", p["id"])  # an invalid placement blocks the delete
+                    gone.add(p["id"])
                 self.api.delete("appAssetLibraryImages", image_id)
             data = f.read_bytes()
             item = self.api.create("appAssetLibraryImages", {"fileName": name, "fileSize": len(data),
@@ -710,6 +714,8 @@ class Sync:
                 if not self.apply or not localization:
                     continue
                 for placement_id, old in have:
+                    if placement_id in gone:
+                        continue
                     self.step(f"{locale}: remove the {label} {old}",
                               lambda placement_id=placement_id: self.api.delete("appAssetLibraryPlacements", placement_id))
                 for name in names:
