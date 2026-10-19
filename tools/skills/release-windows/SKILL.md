@@ -44,7 +44,7 @@ On a Windows PC with the .NET 10 SDK and the Visual Studio Build Tools C++ workl
 in Windows PowerShell or PowerShell 7, from the app's root:
 
 ```powershell
-laching/tools/windows/store-release.ps1 [-SideBySide] [-Screenshots C:\shots -Languages en,de]
+laching/tools/windows/store-release.ps1 [-SideBySide] [-Screenshots C:\shots -Languages en,de [-ScreenshotNames store]]
 ```
 
 Per platform it publishes the unsigned Native AOT package (the Store signs), checks it is native (its executable, no
@@ -53,12 +53,22 @@ Per platform it publishes the unsigned Native AOT package (the Store signs), che
 Studio Installer folder on `PATH` when `vswhere` isn't there (an ARM64 PC needs it), and refuses without Developer Mode
 (`-NoSmoke` skips the install check: only for a quick look, never for the packages you upload).
 
-- On an ARM64 PC both packages run (x64 emulated, with 60 s to open its window); on an x64 PC the ARM64 one is checked
-  native only, and the script says to start it on an ARM64 PC.
+Each publish runs in the background, its output in `<out>/logs/publish-<name>.log`, so the next platform's (and the
+screenshot-mode one) builds while the previous package's install check runs. Every line is led by `[m:ss]` since the
+start and the run ends with its total and each step's time (publish, smoke, screenshots, bundle, push), also when a step
+fails; send it to a file (`*> release.log`) and the log fills as it goes. On the ARM64 VM (mybackhurts 1.0.12.0) both
+packages are built and checked in 3.5 minutes, and with `-Screenshots -ScreenshotNames store` the run ends at 6.5
+(11 before the overlap, the window polling and the narrower screenshot run).
+
+- On an ARM64 PC both packages run (x64 emulated, with up to 60 s to open its window; the check goes on 5 s after it
+  opens); on an x64 PC the ARM64 one is checked native only, and the script says to start it on an ARM64 PC.
 - A PC with the Store copy installed: add `-SideBySide` (the test install gets its own identity, the Store copy and its
   data stay). Without it the script refuses rather than delete that copy's data.
 - `-Screenshots <folder>` (outside AppData) also opens every window in both themes under Native AOT, from a package with
   screenshot mode compiled in, in `-Languages`: look at a few shots in both themes when any window changed.
+  `-ScreenshotNames` narrows the run (all of it takes about 4.5 minutes per language): `store` for the Store listing's
+  shots (`store.microsoft.shots`, matched as prefixes, so their variants come too: 54 shots, under 2 minutes, for
+  mybackhurts), or the changed windows' names or prefixes, comma-separated (`settings,library`).
 
 **Or let CI build them:** the app's *Windows release* workflow (Actions > Run workflow; it calls Laching's reusable
 `windows-release.yml`) publishes both platforms from the pushed commit, smoke-tests them, uploads the bundle as the run's

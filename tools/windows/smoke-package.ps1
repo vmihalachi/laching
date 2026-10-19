@@ -4,15 +4,15 @@ package that crashes at launch never reaches the Store (mybackhurts' 1.0.1-1.0.3
 first launch while Debug runs were fine). Run it on every package before uploading; the app's windows.yml runs it too.
 Everything app-specific comes from the package's own manifest (its identity, its executable), so it works for any app.
 
-Usage: laching/tools/windows/smoke-package.ps1 -Package <path to .msix> [-Seconds 20] [-SideBySide] [-Keep]
+Usage: laching/tools/windows/smoke-package.ps1 -Package <path to .msix> [-Seconds 20] [-Hold 5] [-SideBySide] [-Keep]
        laching/tools/windows/smoke-package.ps1 -Package <path to .msix> -CheckOnly
        laching/tools/windows/smoke-package.ps1 -Package <.msix published with -p:ScreenshotMode=true> -Screenshots <folder>
-                                               [-Language fr] [-SideBySide]
+                                               [-Language fr] [-ScreenshotNames all] [-SideBySide]
 
 -CheckOnly installs nothing: it fails unless the package holds its executable and no runtimeconfig.json (a Native AOT
 package needs no .NET runtime; a runtimeconfig.json means the packaging took the JIT build's files).
-Plain mode launches the app from Start, waits, and fails unless it is still running with a window open (onboarding, on
-a fresh install) and Windows logged no crash. Needs Developer Mode (the package is unsigned). Installs the Windows App
+Plain mode launches the app from Start, waits up to -Seconds for its window (onboarding, on a fresh install), then
+-Hold seconds more, and fails unless it is still running with that window open and Windows logged no crash. Needs Developer Mode (the package is unsigned). Installs the Windows App
 Runtime packages found next to the .msix (Dependencies\<arch>) when they're missing. Removes the test install afterwards
 unless -Keep (for the hand checks a package needs: the startup task, a notification click after the app quit). Refuses
 to touch a copy installed from the Store, so it never deletes real data; -SideBySide tests next to that copy instead, the
@@ -20,7 +20,8 @@ test install getting its own identity (the package name plus .SmokeTest) and its
 -Screenshots runs the app's screenshot run (ScreenshotCapture) in the installed package instead of starting it plainly:
 every window in both themes, from the Native AOT build that ships with only screenshot mode compiled in (a Release
 publish with -p:ScreenshotMode=true, the SCREENSHOTS constant every Debug build has). The run's settings arrive as
-arguments (LACHING_SCREENSHOT_DIR=<folder> and so on), in -Language (en unless given). It fails on a crash, when the run
+arguments (LACHING_SCREENSHOT_DIR=<folder> and so on), in -Language (en unless given), of -ScreenshotNames (the shots
+whose names start with one of them, comma-separated; all unless given). It fails on a crash, when the run
 renders nothing or stops before its end (a non-zero exit), or on a problem it reports (problems.txt next to the shots: a
 window that didn't open, text that doesn't fit). The folder must be outside AppData, where a packaged app's new files go
 to its own private copy.
@@ -29,11 +30,13 @@ store-release.ps1 runs every mode of it on the packages it builds.
 param(
     [Parameter(Mandatory)][string]$Package,
     [int]$Seconds = 20,
+    [int]$Hold = 5,
     [switch]$SideBySide,
     [switch]$Keep,
     [switch]$CheckOnly,
     [string]$Screenshots,
-    [string]$Language = 'en'
+    [string]$Language = 'en',
+    [string]$ScreenshotNames = 'all'
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -45,6 +48,8 @@ if ($Screenshots) {
             throw "-Screenshots $Screenshots is under $appData, where a packaged app writes to its own private copy: pick a folder outside AppData."
         }
     }
+    # One argument on the app's command line: no spaces or quotes.
+    if ($ScreenshotNames -notmatch '^[A-Za-z0-9._,-]+$') { throw "-ScreenshotNames $ScreenshotNames`: shot names and prefixes, comma-separated." }
 }
 
 function Read-Manifest([string]$path) {
@@ -125,7 +130,7 @@ try {
         Remove-Item (Join-Path $Screenshots 'problems.txt') -ErrorAction SilentlyContinue
         # NAME="value" stays one argument, quotes removed, as Windows splits a command line.
         $null = Invoke-CommandInDesktopPackage -PackageFamilyName $installed.PackageFamilyName -AppId $application.Id -Command $exe `
-            -Args "LACHING_SCREENSHOT_MODE=all LACHING_SCREENSHOT_DIR=`"$Screenshots`" LACHING_SCREENSHOT_LANGUAGE=$Language"
+            -Args "LACHING_SCREENSHOT_MODE=$ScreenshotNames LACHING_SCREENSHOT_DIR=`"$Screenshots`" LACHING_SCREENSHOT_LANGUAGE=$Language"
     }
     else {
         Start-Process "shell:AppsFolder\$($installed.PackageFamilyName)!$($application.Id)"
@@ -149,11 +154,23 @@ try {
         }
     }
     else {
-        Start-Sleep -Seconds $Seconds
-        $process.Refresh()
-        if ($process.HasExited) { $failure = "The app quit within $Seconds seconds." }
+        # Polled rather than slept: an emulated x64 package gets a minute, but its window is up much sooner.
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        while (-not $process.HasExited -and $process.MainWindowHandle -eq 0 -and $watch.Elapsed.TotalSeconds -lt $Seconds) {
+            Start-Sleep -Milliseconds 250
+            $process.Refresh()
+        }
+        $opened = [math]::Round($watch.Elapsed.TotalSeconds, 1)
+        if ($process.HasExited) { $failure = "The app quit after $opened seconds, before showing a window." }
         elseif ($process.MainWindowHandle -eq 0) { $failure = "The app is running but shows no window after $Seconds seconds." }
-        else { "Running after $Seconds seconds, window: $($process.MainWindowTitle)" }
+        else {
+            # A short hold, so a crash right after the window opens still fails the check.
+            Start-Sleep -Seconds $Hold
+            $process.Refresh()
+            if ($process.HasExited) { $failure = "The app quit $Hold seconds after opening its window." }
+            elseif ($process.MainWindowHandle -eq 0) { $failure = "The app closed its window within $Hold seconds of opening it." }
+            else { "Window after $opened seconds, still running $Hold seconds later: $($process.MainWindowTitle)" }
+        }
     }
 
     # Windows logs a crash in the Application log even when the process is already gone.
