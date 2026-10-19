@@ -12,6 +12,16 @@ app's `.agents/notes/release-windows.md`. Read it first.
 Store builds are **Release + Native AOT**: they behave differently from the Debug app run day to day (mybackhurts' 1.0.1
 to 1.0.3 all crashed at launch while every Debug run was fine). Never upload a package that hasn't passed step 4.
 
+## Go-ahead
+
+Running this skill is the owner's go-ahead for the whole release: build and upload, apply the store push
+(`push-microsoft.py prepare --apply`, `store-release.ps1 -Store draft`), write the notes for certification, push the
+release commits and tag, and run the release workflow without stopping to ask. Read each dry run and stop only when it
+shows something unexpected (images being replaced, a pending submission, a visibility or publish mode that changed).
+Still the owner's: new Store screenshots (ask first), credentials (never handle them), and sending the submission to
+certification (`push-microsoft.py commit`, `-Store submit`, **Submit**). When another session's unpushed commits sit
+on top, push only the release's own: `git push origin <sha>:refs/heads/master`.
+
 ## 1. Version
 
 `<windows.dir>/<windows.app>/Package.appxmanifest`, `Identity Version="1.0.N.0"`: higher than anything uploaded before,
@@ -66,7 +76,7 @@ python3 laching/tools/store-screenshots.py --canvas microsoft             # the 
 python3 laching/tools/store-screenshots.py --canvas microsoft --lang all  # every language: ask first
 ```
 
-Show the source language's images to the user before rendering the rest. `python3 laching/tools/store/check.py` checks
+Show the source language's images to the owner and render the rest once they OK them. `python3 laching/tools/store/check.py` checks
 the `ms.*` fields against the Store's limits.
 
 ## 7. Partner Center
@@ -78,7 +88,7 @@ reach the app: the notification area icon, no sign-in needed), then:
 ```sh
 python3 laching/tools/store/push-microsoft.py prepare --bundle <.msixbundle> --notes <notes.txt> [--only package,text,screenshots,art]
 python3 laching/tools/store/push-microsoft.py prepare ... --apply   # creates the submission, uploads, saves; doesn't send it
-python3 laching/tools/store/push-microsoft.py commit                # sends it to certification: ask first unless told to go ahead
+python3 laching/tools/store/push-microsoft.py commit                # sends it to certification: the owner's call
 python3 laching/tools/store/push-microsoft.py status                # progress, errors, certification reports
 ```
 
@@ -96,5 +106,6 @@ certification). Check every section says complete, then **Submit** (ask first un
 
 Commit the version bump (and the source language's Store screenshots, if step 6 rendered them). Tag the commit once the
 upload went through: `store-release.ps1` asks after its own push, `store-release.ps1 -TagOnly` tags after an upload by
-hand, and the release workflow tags by itself. Push only when the user says so. Record the version, what was uploaded
+hand, and the release workflow tags by itself; answer yes to `store-release.ps1`'s tag prompt. Push the release's
+commits and the tag (only the release's own, see *Go-ahead*). Record the version, what was uploaded
 and the certification status where the app's notes say.
