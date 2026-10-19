@@ -73,7 +73,8 @@ iPad match what ships, and that purchase UI is only where the app's rules allow.
    build), then `python3 <store.dir>/check.py`. Commit it.
 2. **Screenshots: skip by default**, as for the Mac: render new ones only when a screen they show changed visibly. When
    unsure, ask the owner. Render the source language first (all three devices; the app's notes name the command), and
-   every language (slow) once the owner has OK'd them. The devices: iPhone 6.9" (1320×2868, `store.apple.ios.iphoneScreenshots`),
+   every language (slow) once the owner has OK'd them. Start a render in the background as soon as the release commit
+   is made, so it runs while the archive uploads and the build processes rather than after. The devices: iPhone 6.9" (1320×2868, `store.apple.ios.iphoneScreenshots`),
    iPad 13" (2064×2752, `ios.ipadScreenshots`) and **iPhone Duo** (1398×2034 or 2007×2853; the `iPhone-Duo`
    simulator captures at either scale; `ios.duoScreenshots`, `<store.dir>/apple/duo/<lang>/` by default). Smaller
    iPhones and iPads scale from these; the Duo doesn't, so without its own set its tab stays empty. App Store Connect
