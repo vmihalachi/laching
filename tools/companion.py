@@ -656,9 +656,14 @@ def resolve_packages(config: Config) -> str:
 
 def npm_versions(package: str) -> list[str]:
     """Every version of `package` on npm."""
-    if not shutil.which("npm"):
+    # The path `which` found: on Windows npm is npm.cmd, which the bare name doesn't start.
+    npm = shutil.which("npm")
+    if not npm:
         raise PinError("npm isn't installed")
-    result = subprocess.run(["npm", "view", package, "versions", "--json"], capture_output=True, text=True, timeout=120)
+    try:
+        result = subprocess.run([npm, "view", package, "versions", "--json"], capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise PinError(f"couldn't run npm: {error}") from error
     if result.returncode:
         raise PinError(f"npm didn't answer:\n{_tail(result, 5)}")
     versions = json.loads(result.stdout)

@@ -288,6 +288,22 @@ class BumpTests(PinsTestCase):
         self.assertNotIn("== app-worktree", result.stdout)
 
 
+class NpmVersionsTests(unittest.TestCase):
+    def test_npm_runs_from_the_path_which_finds(self):
+        # On Windows that's npm.cmd, which subprocess can't start by its bare name.
+        found = str(Path("C:/Program Files/nodejs/npm.cmd"))
+        answer = subprocess.CompletedProcess([], 0, stdout='["0.19.8", "0.19.9"]', stderr="")
+        with mock.patch.object(companion.shutil, "which", return_value=found),                 mock.patch.object(companion.subprocess, "run", return_value=answer) as run:
+            self.assertEqual(companion.npm_versions("@laching/landing"), ["0.19.8", "0.19.9"])
+        self.assertEqual(run.call_args.args[0][0], found)
+
+    def test_a_missing_or_broken_npm_is_a_pin_error(self):
+        with mock.patch.object(companion.shutil, "which", return_value=None):
+            self.assertRaisesRegex(companion.PinError, "isn't installed", companion.npm_versions, "@laching/landing")
+        with mock.patch.object(companion.shutil, "which", return_value="npm"),                 mock.patch.object(companion.subprocess, "run", side_effect=FileNotFoundError(2, "not found")):
+            self.assertRaisesRegex(companion.PinError, "couldn't run npm", companion.npm_versions, "@laching/landing")
+
+
 class LinkTests(PinsTestCase):
     """The app is a git repository (committed) and the Laching checkout sits next to it, at ../laching."""
 
