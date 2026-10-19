@@ -92,6 +92,9 @@ The short form; the full rules with their examples are in `docs/conventions.md`.
 - **Package code never names an app** and ships no strings: apps inject their bank, defaults, skins, palette,
   voices and every label (`Text`, string or copy struct); `tools/` reads everything app-specific from `companion.json`.
 - **No permission prompts, no network.**
+- **No migrations for renamed persisted keys:** when a rename changes a settings, cache or preference key
+  (`deskling.*` → `laching.*`), the old value is dropped; mention it in one line at most, with no shim, pull request or
+  release note unless the owner asks.
 - **Behavior changes are additive and vector-tested:** a config field whose default keeps every vector
   byte-identical, a unit test, a vector case and the C# port in the same change. `conformance/companion` pins
   mechanism over fixtures; each app pins its own content.
