@@ -185,6 +185,12 @@ class ApiError(Exception):
     pass
 
 
+# A network failure (timeout, reset, DNS) rather than an answer from the server; HTTPError is a URLError too, so it is
+# caught first. Seconds before a request that gets no answer fails.
+NETWORK_ERRORS = (urllib.error.URLError, TimeoutError, ConnectionError)
+TIMEOUT = 120
+
+
 class Client:
     def __init__(self):
         key_id, issuer = os.environ.get("ASC_KEY_ID"), os.environ.get("ASC_ISSUER_ID")
@@ -208,7 +214,7 @@ class Client:
             req = urllib.request.Request(url, data=data, method=method, headers={
                 "Authorization": f"Bearer {self.token}", "Content-Type": "application/json"})
             try:
-                with urllib.request.urlopen(req) as response:
+                with urllib.request.urlopen(req, timeout=TIMEOUT) as response:
                     raw = response.read()
                     return json.loads(raw) if raw else None
             except urllib.error.HTTPError as e:
@@ -221,6 +227,12 @@ class Client:
                 except (ValueError, KeyError, TypeError):
                     pass
                 raise ApiError(f"{method} {url.removeprefix(API)}: {e.code} {detail}") from None
+            except NETWORK_ERRORS as e:
+                # A POST that timed out may have gone through, so only the requests that are safe to repeat are.
+                if method != "POST" and attempt < 4:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise ApiError(f"{method} {url.removeprefix(API)}: {e}") from None
 
     def get_all(self, path):
         query = path.partition("?")[2]
@@ -247,9 +259,15 @@ class Client:
         for op in operations:
             chunk = data[op["offset"]:op["offset"] + op["length"]]
             headers = {h["name"]: h["value"] for h in op.get("requestHeaders", [])}
-            req = urllib.request.Request(op["url"], data=chunk, method=op["method"], headers=headers)
-            with urllib.request.urlopen(req):
-                pass
+            for attempt in range(5):  # each operation puts one chunk at its own URL: safe to repeat
+                req = urllib.request.Request(op["url"], data=chunk, method=op["method"], headers=headers)
+                try:
+                    with urllib.request.urlopen(req, timeout=TIMEOUT):
+                        break
+                except NETWORK_ERRORS as e:
+                    if attempt == 4 or isinstance(e, urllib.error.HTTPError) and e.code not in (429, 500, 502, 503):
+                        raise ApiError(f"upload of bytes {op['offset']}+{op['length']}: {e}") from None
+                    time.sleep(2 ** attempt)
 
 
 STARTED = time.monotonic()
