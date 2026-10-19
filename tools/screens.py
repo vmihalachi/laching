@@ -21,18 +21,22 @@ name or its capture kind (mac, windows, ios, android), null where it has none. E
     baselines/<NAME>.json, changes.json       the accepted run's perceptual hashes, and what differs from them
 
 `capture` builds each platform once and runs them side by side: the Mac through `screens.platforms.<p>.script` (or
-Laching's screenshots.sh), hidden, the languages `--jobs` at a time (LAYOUT_JOBS, 3); Windows in the Parallels VM
-through `windows/vm.sh check-layout` (or `vm.sh screenshots` once per language with `"vm": "screenshots"`); iOS on
-simulators of its own, one per device ("<name> screens <platform>", made once with its defaults written, so it boots
-once), side by side, each language one launch of the app in screenshot mode (`mac.screenshotEnv`, as
-check-layout-ios.py runs it), which draws its window without the status bar; shots with an `env` of their own get a
-launch of their own; `--jobs` is also the iOS simulators in all, at least one per device: a device given more runs its
-languages side by side on clones of its simulator (sim.py's `on_clones`, deleted at the end); Android on headless
-emulators (`avd`, one per platform, side by side; avd.py), each language one launch with Laching's intent extras
-(`LACHING_SCREENSHOT_MODE`, `LACHING_SCREENS`, `LACHING_LANG`, `LACHING_REGION`; a shot's `env` adds extras, `camera`
-gives the emulator the host's webcam), the status bar in demo mode at 09:41, each emulator quick-booting from the
-snapshot its first run saved (`--cold` boots them cold and saves new ones). Every platform checks that text fits (its
-problems.txt) and reports a screen it didn't capture. Exits 1 when there are problems, 3 when no platform could run.
+Laching's screenshots.sh), hidden, its languages side by side; Windows in the Parallels VM through
+`windows/vm.sh check-layout` (or `vm.sh screenshots` once per language with `"vm": "screenshots"`); iOS on simulators
+of its own, one per device ("<name> screens <platform>", made once with its defaults written, so it boots once), side
+by side, each language one launch of the app in screenshot mode (`mac.screenshotEnv`, as check-layout-ios.py runs
+it), which draws its window without the status bar; shots with an `env` of their own get a launch of their own; a
+device given more than one simulator runs its languages side by side on clones of its simulator (sim.py's `on_clones`,
+deleted at the end); Android on headless emulators (`avd`, one per platform; avd.py), each language one launch with
+Laching's intent extras (`LACHING_SCREENSHOT_MODE`, `LACHING_SCREENS`, `LACHING_LANG`, `LACHING_REGION`; a shot's `env`
+adds extras, `camera` gives the emulator the host's webcam), the status bar in demo mode at 09:41, each emulator
+quick-booting from the snapshot its first run saved (`--cold` boots them cold and saves new ones). `--jobs`
+(LAYOUT_JOBS, 3) is the whole run's budget: the Mac and Windows app processes, iOS simulators and Android emulators at
+once in all, shared among the platforms in proportion to their runs (sim.py's `shares`), at least one each, so a
+capture of every platform no longer runs `--jobs` of each at once. `--themes` reaches every launch
+(`LACHING_SCREENSHOT_THEMES`), so a capture of one theme never draws the other. Every platform checks that text fits
+(its problems.txt) and reports a screen it didn't capture. Exits 1 when there are problems, 3 when no platform could
+run.
 
 `--only` takes canonical screen names; `--platforms` platform names or capture kinds. A sheet leaves out platforms
 without the screen and the ones not captured in that language. `diff` keeps a 256-bit difference hash per image, so a
@@ -266,15 +270,16 @@ class Capture:
 
     def run(self) -> int:
         groups = {kind: [p for p in self.platforms if p.capture == kind] for kind in KINDS}
+        jobs = self.shares(groups)
         threads = []
         for platform in groups["mac"]:
-            threads.append(threading.Thread(target=self.mac, args=(platform,)))
+            threads.append(threading.Thread(target=self.mac, args=(platform, jobs[platform.name])))
         for platform in groups["windows"]:
-            threads.append(threading.Thread(target=self.windows, args=(platform,)))
+            threads.append(threading.Thread(target=self.windows, args=(platform, jobs[platform.name])))
         if groups["ios"]:
-            threads.append(threading.Thread(target=self.ios, args=(groups["ios"],)))
+            threads.append(threading.Thread(target=self.ios, args=(groups["ios"], jobs["ios"])))
         if groups["android"]:
-            threads.append(threading.Thread(target=self.android, args=(groups["android"],)))
+            threads.append(threading.Thread(target=self.android, args=(groups["android"], jobs["android"])))
         started = time.monotonic()
         for thread in threads:
             thread.start()
@@ -284,6 +289,17 @@ class Capture:
         if not self.ran:
             return VM_UNAVAILABLE
         return 1 if self.problems else 0
+
+    def shares(self, groups: dict[str, list[Platform]]) -> dict[str, int]:
+        """`jobs` at once in all, shared among the platforms in proportion to their runs, at least one each: a Mac or
+        Windows platform's languages (by its name), the iOS devices times the languages ("ios"), the Android emulators
+        ("android")."""
+        runs = {platform.name: len(self.languages) for kind in ("mac", "windows") for platform in groups[kind]}
+        if groups["ios"]:
+            runs["ios"] = len(groups["ios"]) * len(self.languages)
+        if groups["android"]:
+            runs["android"] = len(groups["android"])
+        return sim.shares(self.jobs, runs) if runs else {}
 
     def write_problems(self, seconds: float) -> None:
         """problems.txt: this run's problems, in place of the lines of the platforms and languages it captured."""
@@ -314,9 +330,10 @@ class Capture:
         if kept:
             print(f"{len(kept)} more from earlier runs of other platforms or languages stay in it")
 
-    # The Mac: one build, then each language hidden, `jobs` at a time.
+    # The Mac: one build, then each language hidden, `jobs` at a time (the platform's share of the budget).
 
-    def mac(self, platform: Platform) -> None:
+    def mac(self, platform: Platform, jobs: int | None = None) -> None:
+        jobs = self.jobs if jobs is None else jobs
         wanted = self.wanted(platform)
         if not wanted:
             return
@@ -331,24 +348,27 @@ class Capture:
                     self.problem(platform, language, f"the build failed; see {log}")
                 return
         only = ",".join(dict.fromkeys(shot.name for _, shot in wanted))
+        themes = ",".join(self.themes)
 
         def one(language: str) -> None:
             raw = self.screens.out / "raw" / platform.name / language
             shutil.rmtree(raw, ignore_errors=True)
             lang_log = self.log(f"{platform.name}-{language}")
             lang_log.write_text("", "utf8")
-            code = self.sh([script, "--only", only, "--hidden", "--no-build", raw, language], lang_log)
+            code = self.sh([script, "--only", only, "--hidden", "--themes", themes, "--no-build", raw, language],
+                           lang_log)
             self.problems_from(platform, language, raw, code, lang_log)
             count = self.collect(platform, language, raw)
             self.ran.add(platform.name)
             self.say(f"{platform.name} {language}: {count} shots")
 
-        with ThreadPoolExecutor(max_workers=max(1, self.jobs)) as pool:
+        with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
             list(pool.map(one, self.languages))
 
     # Windows, in the Parallels VM.
 
-    def windows(self, platform: Platform) -> None:
+    def windows(self, platform: Platform, jobs: int | None = None) -> None:
+        jobs = self.jobs if jobs is None else jobs
         wanted = self.wanted(platform)
         if not wanted:
             return
@@ -356,9 +376,11 @@ class Capture:
         log = self.log(platform.name)
         log.write_text("", "utf8")
         only = ",".join(dict.fromkeys(shot.name for _, shot in wanted))
+        themes = ",".join(self.themes)
         self.say(f"{platform.name}: in the VM ({log})")
         if platform.settings.get("vm", "check-layout") == "check-layout":
-            code = self.sh([vm, "check-layout", *self.languages, "--", "-Only", only, "-Jobs", str(self.jobs)], log)
+            code = self.sh([vm, "check-layout", *self.languages, "--", "-Only", only, "-Themes", themes, "-Jobs", str(jobs)],
+                           log)
             if code == VM_UNAVAILABLE:
                 self.unavailable(platform, log)
                 return
@@ -372,7 +394,7 @@ class Capture:
         for language in self.languages:
             raw = self.screens.out / "raw" / platform.name / language
             shutil.rmtree(raw, ignore_errors=True)
-            code = self.sh([vm, "screenshots", raw, "--", "-Language", language, "-Only", only], log)
+            code = self.sh([vm, "screenshots", raw, "--", "-Language", language, "-Only", only, "-Themes", themes], log)
             if code == VM_UNAVAILABLE:
                 self.unavailable(platform, log)
                 return
@@ -390,7 +412,8 @@ class Capture:
 
     # iOS: one build, then a simulator of its own per device, side by side; with more than one language, clones of it.
 
-    def ios(self, platforms: list[Platform]) -> None:
+    def ios(self, platforms: list[Platform], jobs: int | None = None) -> None:
+        jobs = self.jobs if jobs is None else jobs
         log = self.log("ios")
         log.write_text("", "utf8")
         config = self.screens.config
@@ -409,7 +432,7 @@ class Capture:
         bundle = plistlib.loads((app / "Info.plist").read_bytes())["CFBundleIdentifier"]
         platforms = [platform for platform in platforms if self.wanted(platform)]
         # `jobs` simulators in all, at least one per device: a device with more runs its languages on clones.
-        workers = sim.shares(self.jobs, {platform.name: len(self.languages) for platform in platforms})
+        workers = sim.shares(jobs, {platform.name: len(self.languages) for platform in platforms})
         threads = [threading.Thread(target=self.device, args=(platform, app, bundle)) for platform in platforms
                    if workers[platform.name] == 1]
         cloned = [platform for platform in platforms if workers[platform.name] > 1]
@@ -477,8 +500,8 @@ class Capture:
                       note=lambda line: self.say(f"ios: {line}"))
 
     def on_simulator(self, phone: sim.Simulator, platform: Platform, bundle: str, language: str) -> None:
-        """One language on a booted simulator with the app installed: one launch draws every shot asked for, and a shot
-        with an env of its own gets a launch with it."""
+        """One language on a booted simulator with the app installed: one launch draws every shot asked for (in the
+        themes asked for, `LACHING_SCREENSHOT_THEMES`), and a shot with an env of its own gets a launch with it."""
         launches: dict[tuple, list[tuple[str, Shot]]] = {}
         for screen, shot in self.wanted(platform):
             launches.setdefault(shot.env, []).append((screen, shot))
@@ -489,7 +512,7 @@ class Capture:
             raw = self.screens.out / "raw" / platform.name / language / str(number)
             try:
                 phone.run(bundle, language, {mode: ",".join(dict.fromkeys(shot.name for _, shot in wanted)),
-                                             **dict(env)}, raw)
+                                             "LACHING_SCREENSHOT_THEMES": ",".join(self.themes), **dict(env)}, raw)
             except RuntimeError as error:
                 self.problem(platform, language, f"{error}; see {phone.log}")
                 continue
@@ -498,7 +521,8 @@ class Capture:
         self.ran.add(platform.name)
         self.say(f"{platform.name} {language}: {count} shots, {time.monotonic() - began:.0f} s")
 
-    def android(self, platforms: list[Platform]) -> None:
+    def android(self, platforms: list[Platform], jobs: int | None = None) -> None:
+        jobs = self.jobs if jobs is None else jobs
         log = self.log("android")
         log.write_text("", "utf8")
         config = self.screens.config
@@ -514,7 +538,13 @@ class Capture:
                 for language in self.languages:
                     self.problem(platform, language, str(error))
             return
-        threads = [threading.Thread(target=self.emulator, args=(platform, apk, app_id, index))
+        running = threading.BoundedSemaphore(max(1, jobs))  # emulators at once: the budget's share
+
+        def bounded(platform: Platform, index: int) -> None:
+            with running:
+                self.emulator(platform, apk, app_id, index)
+
+        threads = [threading.Thread(target=bounded, args=(platform, index))
                    for index, platform in enumerate(platforms) if self.wanted(platform)]
         for thread in threads:
             thread.start()
@@ -929,9 +959,10 @@ def main(argv: list[str]) -> int:
                          help="platform names or capture kinds (mac, windows, ios, android), comma-separated")
     capture.add_argument("--langs", help="languages, comma-separated, or all (default: the source language)")
     capture.add_argument("--only", help="canonical screen names, comma-separated (default: every one)")
-    capture.add_argument("--themes", default="light,dark", help="light, dark or both (default)")
+    capture.add_argument("--themes", default="light,dark", help="light, dark or both (default), in that order")
     capture.add_argument("--jobs", type=int, default=int(os.environ.get("LAYOUT_JOBS", 3)),
-                         help="Mac and Windows languages at a time, iOS simulators in all (LAYOUT_JOBS, 3)")
+                         help="app processes, simulators and emulators at once in all, shared among the platforms, "
+                              "at least one each (LAYOUT_JOBS, 3)")
     capture.add_argument("--no-build", action="store_true", help="run the last builds")
     capture.add_argument("--cold", action="store_true", help="cold-boot the Android emulators and save their snapshots anew")
     sheets = commands.add_parser("compare", help="one sheet per screen, language and theme, and index.html")

@@ -5,7 +5,7 @@ settings. Windows only. Reads companion.json (found from the current folder up, 
 $env:COMPANION_ROOT) for the app's project (windows.dir + windows.app) and where the shots go (windows.screenshots).
 
 Usage: laching/tools/windows/screenshots.ps1 [-Only name,name] [-Hidden|-Front] [-Out folder] [-Language tag]
-                                              [-Skin id] [-Contrast] [-Platform x64|ARM64]
+                                              [-Skin id] [-Themes light,dark] [-Contrast] [-Platform x64|ARM64]
                                               [-Configuration Debug|Release] [-NoBuild|-BuildOnly]
                                               [-Project path\to\App.csproj]
   -Only           just the shots whose file names start with one of the names (home, settings, onboarding, …), for
@@ -19,6 +19,8 @@ Usage: laching/tools/windows/screenshots.ps1 [-Only name,name] [-Hidden|-Front] 
   -Language       the language to shoot in ("it"); the app's own choice otherwise.
   -Skin           the skin the run wears (a skin id: auguste), owning in the sample store whatever unlocks it; the app's
                   default skin otherwise. Pair it with an -Out of its own: the file names don't carry the skin.
+  -Themes         the themes to shoot, in that order (light, dark; both by default): a run asked for one never draws
+                  the other. Ignored while Windows is in a contrast theme, which the run shoots alone.
   -Contrast       also the contrast theme (<name>-contrast.png), which an app can't turn on for itself: after the light and
                   dark run, Windows' contrast theme is turned on (the one last used; Settings > Accessibility > Contrast
                   themes picks it), the app runs again, and the theme is turned off, whatever happens. That repaints the
@@ -47,6 +49,7 @@ param(
     [string] $Out = "",
     [string] $Language = "",
     [string] $Skin = "",
+    [string] $Themes = "",
     [ValidateSet("x64", "ARM64")][string] $Platform = $(if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq "Arm64") { "ARM64" } else { "x64" }),
     [ValidateSet("Debug", "Release")][string] $Configuration = "Debug",
     [string] $Project = "",
@@ -155,6 +158,7 @@ $settings = [ordered]@{
     LACHING_SCREENSHOT_LANGUAGE = $Language
     LACHING_SCREENSHOT_HIDDEN   = if ($hide) { "1" } else { "0" }
     LACHING_SCREENSHOT_SKIN     = $Skin
+    LACHING_SCREENSHOT_THEMES   = $Themes
 }
 if ($packaged) {
     # A copy already running from this build would take the launch (an app is usually single-instance), and the

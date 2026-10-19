@@ -72,10 +72,11 @@
         public func post(line: String) {}
     }
 
-    /// A screenshot run over an app's model: each shot in light, then in dark, saved as `<name>-<light|dark>.png` in
-    /// `ScreenshotCapture.outputDirectory`, skipping the ones `ScreenshotCapture.wants` doesn't ask for. The app gives
-    /// the shots in order (its windows, views at a size, views at their fitting size, the supporter sequence, its own)
-    /// and wraps every view in its window root. Debug only, by the app's choice; quits when done.
+    /// A screenshot run over an app's model: each shot in light, then in dark (`ScreenshotCapture.themes`), from one
+    /// opening of its window, saved as `<name>-<light|dark>.png` in `ScreenshotCapture.outputDirectory`, skipping the
+    /// ones `ScreenshotCapture.wants` doesn't ask for. The app gives the shots in order (its windows, views at a size,
+    /// views at their fitting size, the supporter sequence, its own) and wraps every view in its window root. Debug
+    /// only, by the app's choice; quits when done.
     @MainActor
     public struct ScreenshotScript<Window: WindowID & RawRepresentable, Settings: CompanionSettings> where Window.RawValue == String {
         /// One picture (two, with the appearances).
@@ -91,7 +92,7 @@
             /// tips); ownership is back to what it was afterwards. A run that already owns `product` (it wears a skin the
             /// product unlocks) can't buy it again, so it shoots only `supporter`.
             case supporterSequence(window: Window, product: String, thanks: String, supporter: String)
-            /// Anything else: the app writes the picture to the URL it's given.
+            /// Anything else: the app writes the picture to the URL it's given, in the appearance the app is in.
             case custom(name: String, (URL) async -> Void)
         }
 
@@ -112,7 +113,7 @@
         }
 
         /// The whole run: keeps the app regular between windows, empties the output folder, loads the sample prices,
-        /// lets the app `prepare` (a line in the bubble), takes `shots` in both appearances and quits
+        /// lets the app `prepare` (a line in the bubble), takes `shots` in each appearance and quits
         /// (`ScreenshotCapture.finish()`).
         public func run(prepare: @escaping @MainActor () async -> Void, shots: [Shot]) {
             if ScreenshotCapture.isHidden {
@@ -130,52 +131,51 @@
             }
         }
 
-        /// Takes `shots` in light, then in dark, into `ScreenshotCapture.outputDirectory`.
+        /// Takes `shots` into `ScreenshotCapture.outputDirectory`, each in every appearance the run wants
+        /// (`ScreenshotCapture.appearances`: light, then dark) from one opening of its window.
         public func take(_ shots: [Shot]) async {
             let directory = ScreenshotCapture.outputDirectory
-            for (appearance, name) in [(NSAppearance.Name.aqua, "light"), (.darkAqua, "dark")] {
-                NSApplication.shared.appearance = NSAppearance(named: appearance)
-                for shot in shots {
-                    await take(shot, appearance: name, in: directory)
-                }
+            for shot in shots {
+                await take(shot, in: directory)
             }
         }
 
-        private func take(_ shot: Shot, appearance: String, in directory: URL) async {
-            func url(_ name: String) -> URL { directory.appendingPathComponent("\(name)-\(appearance).png") }
+        private func take(_ shot: Shot, in directory: URL) async {
+            func urls(_ name: String) -> [(appearance: NSAppearance.Name, url: URL)] {
+                ScreenshotCapture.appearances.map { ($0.appearance, directory.appendingPathComponent("\(name)-\($0.name).png")) }
+            }
             switch shot {
             case .window(let id):
                 guard ScreenshotCapture.wants(id.rawValue) else { return }
                 model.windows.show(id)
-                try? await Task.sleep(for: .seconds(1.2))
                 if let window = model.windows.window(for: id) {
-                    await ScreenshotCapture.capture(window, to: url(id.rawValue))
+                    await ScreenshotCapture.capture(window, to: urls(id.rawValue))
                 } else {
-                    ScreenshotCapture.report("\(id.rawValue)-\(appearance).png: the window didn't open")
+                    for shot in urls(id.rawValue) { ScreenshotCapture.report("\(shot.url.lastPathComponent): the window didn't open") }
                 }
                 model.windows.close(id)
             case .view(let name, let view, let size):
                 guard ScreenshotCapture.wants(name) else { return }
-                await ScreenshotCapture.captureWindow(root(view), size: size, background: paper, to: url(name))
+                await ScreenshotCapture.captureWindow(root(view), size: size, background: paper, to: urls(name))
             case .fitting(let name, let view):
                 guard ScreenshotCapture.wants(name) else { return }
-                await ScreenshotCapture.captureFitting(root(view), to: url(name))
+                await ScreenshotCapture.captureFitting(root(view), to: urls(name))
             case .supporterSequence(let id, let product, let thanks, let supporter):
                 let owned = backend.owned
                 let names = owned.contains(product) ? [supporter] : [thanks, supporter]
                 guard names.contains(where: { ScreenshotCapture.wants($0) }) else { return }
                 model.windows.show(id)
-                try? await Task.sleep(for: .seconds(0.6))
+                if let window = model.windows.window(for: id) { _ = await ScreenshotCapture.settle(window) }  // open before the purchase
                 backend.owned = owned.union([product])
                 await model.purchases.refreshEntitlements()
-                try? await Task.sleep(for: .seconds(1.2))
-                for name in names {
-                    if ScreenshotCapture.wants(name), let window = model.windows.window(for: id) {
-                        await ScreenshotCapture.capture(window, to: url(name))
+                for (index, name) in names.enumerated() {
+                    if index > 0 {  // opened again, as a supporter
+                        model.windows.close(id)
+                        model.windows.show(id)
                     }
-                    model.windows.close(id)
-                    model.windows.show(id)
-                    try? await Task.sleep(for: .seconds(1.2))
+                    if ScreenshotCapture.wants(name), let window = model.windows.window(for: id) {
+                        await ScreenshotCapture.capture(window, to: urls(name))
+                    }
                 }
                 model.windows.close(id)
                 if backend.owned != owned {
@@ -184,7 +184,10 @@
                 }
             case .custom(let name, let capture):
                 guard ScreenshotCapture.wants(name) else { return }
-                await capture(url(name))
+                for shot in urls(name) {
+                    ScreenshotCapture.apply(shot.appearance)
+                    await capture(shot.url)
+                }
             }
         }
     }

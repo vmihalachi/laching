@@ -43,6 +43,15 @@
             try? FileManager.default.removeItem(at: directory)
         }
 
+        func testTheThemesAskedForAreShotInOrderAndBothWhenUnset() {
+            XCTAssertEqual(ScreenshotCapture.themes(nil), ["light", "dark"])
+            XCTAssertEqual(ScreenshotCapture.themes(""), ["light", "dark"])
+            XCTAssertEqual(ScreenshotCapture.themes("dark"), ["dark"])
+            XCTAssertEqual(ScreenshotCapture.themes("dark, light"), ["dark", "light"])
+            XCTAssertEqual(ScreenshotCapture.themes("contrast"), ["light", "dark"])
+            XCTAssertEqual(ScreenshotCapture.appearances.map(\.appearance), [.aqua, .darkAqua])
+        }
+
         func testTheSeedIsTheSameEveryRunAndOnEverySide() {
             let first = ScreenshotCapture.SampleEnvironment(prices: [:])
             let second = ScreenshotCapture.SampleEnvironment(prices: [:])

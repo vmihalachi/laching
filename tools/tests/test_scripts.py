@@ -116,7 +116,7 @@ mkdir -p "$app"
 cat > "$app/Fixture" <<'APP'
 #!/bin/sh
 out=$(mktemp -d)
-echo "$LACHING_SCREENSHOT_MODE hidden=$LACHING_SCREENSHOT_HIDDEN skin=$LACHING_SCREENSHOT_SKIN $*" >> "{self.root / 'runs.log'}"
+echo "$LACHING_SCREENSHOT_MODE hidden=$LACHING_SCREENSHOT_HIDDEN skin=$LACHING_SCREENSHOT_SKIN themes=$LACHING_SCREENSHOT_THEMES $*" >> "{self.root / 'runs.log'}"
 printf png > "$out/panel-light.png"
 printf png > "$out/demo-light.png"
 echo "$out"
@@ -129,14 +129,17 @@ chmod +x "$app/Fixture"
         self.assertIn("-project Fixture.xcodeproj -scheme Fixture -configuration Debug", self.log.read_text())
         self.assertEqual(sorted(p.name for p in out.iterdir()), ["panel-light.png"], "only the shots asked for")
         self.assertIn("1 screenshots in", result.stdout)
-        # --only runs hidden unless --front; a full run comes forward; --skin wears one; --build-only doesn't run the app.
+        # --only runs hidden unless --front; a full run comes forward; --skin wears one; --themes names the appearances;
+        # --build-only doesn't run the app.
         self.run_script("screenshots.sh", "--only", "panel", "--front", str(out), "it")
         self.run_script("screenshots.sh", str(out), "it")
         self.run_script("screenshots.sh", "--skin", "auguste", str(out), "it")
+        self.run_script("screenshots.sh", "--only", "panel", "--themes", "dark,light", str(out), "it")
         self.run_script("screenshots.sh", "--build-only")
         runs = (self.root / "runs.log").read_text().splitlines()
         self.assertEqual([line.split(" -Apple")[0] for line in runs],
-                         ["panel hidden=1 skin=", "panel hidden=0 skin=", "all hidden=0 skin=", "all hidden=0 skin=auguste"])
+                         ["panel hidden=1 skin= themes=", "panel hidden=0 skin= themes=", "all hidden=0 skin= themes=",
+                          "all hidden=0 skin=auguste themes=", "panel hidden=1 skin= themes=dark,light"])
 
     def test_screenshots_build_with_the_shared_compilation_cache_unless_turned_off(self):
         self.fake("xcodebuild", f'echo "$*" > "{self.log}"\n')

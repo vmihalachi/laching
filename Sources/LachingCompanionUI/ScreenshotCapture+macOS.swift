@@ -4,23 +4,67 @@
     import SwiftUI
 
     extension ScreenshotCapture {
+        // MARK: Appearances
+
+        /// The appearances a run shoots, in order (`themes`): light, then dark, as `NSAppearance` names.
+        public static var appearances: [(name: String, appearance: NSAppearance.Name)] {
+            themes.map { ($0, $0 == "dark" ? NSAppearance.Name.darkAqua : .aqua) }
+        }
+
+        /// Switches the app, its open windows included, to `appearance`; they redraw, which `settle` waits for.
+        public static func apply(_ appearance: NSAppearance.Name) {
+            NSApplication.shared.appearance = NSAppearance(named: appearance)
+        }
+
         // MARK: Capture
 
-        /// Draws the whole window (title bar included) once it is key (unless `isHidden`), so it looks as it does in use,
-        /// then checks that its content fits (`LayoutCheck`). A hidden window waits as long as a key one does after
-        /// coming forward, so its first tasks (a scroll to a row) land before it is drawn.
+        /// Waits for `window` to be drawn and still, as iOS's `settle` does: draws its content every 100 ms (the first
+        /// after 250 ms, so a view's first tasks, a scroll to a row, land) until three drawings in a row are alike, and
+        /// returns the last. Nil when the window can't be drawn. Content that keeps moving gets `timeout`, then what it
+        /// drew last.
+        public static func settle(_ window: NSWindow, timeout: Duration = .seconds(5)) async -> NSBitmapImageRep? {
+            guard let view = window.contentView?.superview ?? window.contentView else { return nil }
+            let clock = ContinuousClock()
+            let deadline = clock.now + timeout
+            try? await Task.sleep(for: .milliseconds(250))
+            var last: NSBitmapImageRep?
+            var alike = 0
+            while true {
+                view.displayIfNeeded()
+                guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
+                view.cacheDisplay(in: view.bounds, to: rep)
+                alike = last.map { same($0, rep) } == true ? alike + 1 : 0
+                last = rep
+                if alike >= 2 || clock.now >= deadline { return rep }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+
+        /// Whether two drawings have the same pixels.
+        private static func same(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep) -> Bool {
+            guard a.pixelsWide == b.pixelsWide, a.pixelsHigh == b.pixelsHigh, a.bytesPerRow == b.bytesPerRow,
+                let aData = a.bitmapData, let bData = b.bitmapData
+            else { return false }
+            return memcmp(aData, bData, a.bytesPerRow * a.pixelsHigh) == 0
+        }
+
+        /// Draws the whole window (title bar included) once it is key (unless `isHidden`) and still (`settle`), so it
+        /// looks as it does in use, then checks that its content fits (`LayoutCheck`).
         public static func capture(_ window: NSWindow, to url: URL) async {
             let shot = url.lastPathComponent
             await makeKey(window, for: shot)
-            if isHidden { try? await Task.sleep(for: .seconds(0.5)) }
-            guard let view = window.contentView?.superview ?? window.contentView,
-                let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)
-            else { return report("\(shot): the window couldn't be drawn") }
             window.makeFirstResponder(nil)  // no focus ring in the shot
-            view.displayIfNeeded()
-            view.cacheDisplay(in: view.bounds, to: rep)
+            guard let rep = await settle(window) else { return report("\(shot): the window couldn't be drawn") }
             write(rep, to: url)
             if let overflow = LayoutCheck.overflow(in: window) { report("\(shot): \(overflow)") }
+        }
+
+        /// The window in each appearance of `shots`, from one opening: light, then dark, each once it has redrawn.
+        public static func capture(_ window: NSWindow, to shots: [(appearance: NSAppearance.Name, url: URL)]) async {
+            for shot in shots {
+                apply(shot.appearance)
+                await capture(window, to: shot.url)
+            }
         }
 
         /// Saves a drawn shot, reporting it when that fails.
@@ -34,8 +78,10 @@
         }
 
         /// `view` in a titled window built the way `WindowManager` builds one, for states a real window can't be told
-        /// to open in (a later onboarding page).
-        public static func captureWindow(_ view: some View, size: NSSize, background: NSColor, to url: URL) async {
+        /// to open in (a later onboarding page), in each appearance of `shots`.
+        public static func captureWindow(
+            _ view: some View, size: NSSize, background: NSColor, to shots: [(appearance: NSAppearance.Name, url: URL)]
+        ) async {
             let window = NSWindow(
                 contentRect: NSRect(origin: .zero, size: size),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered,
@@ -47,23 +93,24 @@
             window.contentViewController = NSHostingController(rootView: view)
             window.setContentSize(size)
             window.center()
-            await capture(window, to: url)
+            await capture(window, to: shots)
             window.close()
         }
 
-        /// `view` on its own (a panel, a sheet of poses) at its fitting size.
-        public static func captureFitting(_ view: some View, to url: URL) async {
+        /// `view` on its own (a panel, a sheet of poses) at its fitting size, in each appearance of `shots`.
+        public static func captureFitting(_ view: some View, to shots: [(appearance: NSAppearance.Name, url: URL)]) async {
             let host = NSHostingView(rootView: view)
             host.frame.size = host.fittingSize
             let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false  // ARC owns it; AppKit's extra release on close crashes
             window.contentView = host
-            try? await Task.sleep(for: .seconds(0.5))
-            if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
-                host.cacheDisplay(in: host.bounds, to: rep)
-                write(rep, to: url)
-            } else {
-                report("\(url.lastPathComponent): the view couldn't be drawn")
+            for shot in shots {
+                apply(shot.appearance)
+                if let rep = await settle(window) {
+                    write(rep, to: shot.url)
+                } else {
+                    report("\(shot.url.lastPathComponent): the view couldn't be drawn")
+                }
             }
             window.close()
         }
@@ -87,7 +134,6 @@
                 window.makeKeyAndOrderFront(nil)
                 try? await Task.sleep(for: .milliseconds(100))
                 tries += 1
-                if NSApp.isActive && window.isKeyWindow { try? await Task.sleep(for: .seconds(0.5)) }
             }
         }
     }
