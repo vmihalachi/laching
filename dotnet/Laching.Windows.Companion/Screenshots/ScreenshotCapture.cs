@@ -85,6 +85,12 @@ public static class ScreenshotCapture
     /// </summary>
     public const string SkinVariable = "LACHING_SCREENSHOT_SKIN";
 
+    /// <summary>
+    /// The appearances to shoot, comma-separated in the run's order (<c>light</c>, <c>dark</c>; both when unset), so a
+    /// run asked for one doesn't draw the other. <c>tools/screens.py --themes</c> sets it.
+    /// </summary>
+    public const string ThemesVariable = "LACHING_SCREENSHOT_THEMES";
+
     public static bool IsEnabled => Setting(ModeVariable) is not null;
 
     /// <summary>
@@ -138,11 +144,24 @@ public static class ScreenshotCapture
     public static IReadOnlyList<string> Problems => Found;
 
     /// <summary>
-    /// The appearances a run shoots: light and dark, or the contrast theme alone while Windows is in one (an app can't
-    /// turn a contrast theme on or off for itself, so run it again with one on for those shots).
+    /// The appearances a run shoots, in order: light, then dark (<see cref="Themes"/>), or the contrast theme alone while
+    /// Windows is in one (an app can't turn a contrast theme on or off for itself, so run it again with one on for
+    /// those shots).
     /// </summary>
     public static IReadOnlyList<(string Name, ElementTheme Theme)> Appearances =>
-        CompanionPalette.ContrastThemeIsOn ? [("contrast", ElementTheme.Default)] : [("light", ElementTheme.Light), ("dark", ElementTheme.Dark)];
+        CompanionPalette.ContrastThemeIsOn
+            ? [("contrast", ElementTheme.Default)]
+            : [.. Themes.Select(theme => (theme, theme == "dark" ? ElementTheme.Dark : ElementTheme.Light))];
+
+    /// <summary>The appearance names asked for (<see cref="ThemesVariable"/>): <c>light</c> and <c>dark</c>, in the order given; both when unset.</summary>
+    public static IReadOnlyList<string> Themes => ThemesFrom(Setting(ThemesVariable));
+
+    /// <summary><see cref="Themes"/> as read from <paramref name="raw"/>: the names it lists among <c>light</c> and <c>dark</c>, else both.</summary>
+    public static IReadOnlyList<string> ThemesFrom(string? raw)
+    {
+        var named = (raw ?? "").Split(',').Select(theme => theme.Trim()).Where(theme => theme is "light" or "dark").ToList();
+        return named.Count > 0 ? named : ["light", "dark"];
+    }
 
     /// <summary>Records a problem (once), for example a window the app expected to open and didn't, and prints it to standard error.</summary>
     public static void Report(string problem)
@@ -203,28 +222,43 @@ public static class ScreenshotCapture
 
     /// <summary>
     /// <paramref name="view"/> in a window built the way the app's are (<see cref="Shell.WindowFrame"/>: the view under the
-    /// caption buttons' band on the look's paper),
-    /// <paramref name="size"/> DIPs of content, in <paramref name="theme"/>: for states a real window can't be told to open in.
+    /// caption buttons' band on the look's paper), <paramref name="size"/> DIPs of content, in each theme of
+    /// <paramref name="shots"/> from one opening: for states a real window can't be told to open in.
     /// </summary>
-    public static async Task CaptureWindow(UIElement view, XamlSize size, ElementTheme theme, string path)
+    public static async Task CaptureWindow(UIElement view, XamlSize size, IReadOnlyList<(ElementTheme Theme, string Path)> shots)
     {
         var root = Shell.WindowFrame.Make(view);
-        root.RequestedTheme = theme;
         var window = new Window { Content = root, ExtendsContentIntoTitleBar = true };
-        window.AppWindow.TitleBar.PreferredTheme = theme == ElementTheme.Dark ? TitleBarTheme.Dark : TitleBarTheme.Light;
         var scale = Shell.NativeMethods.Scale(Win32Interop.GetWindowFromWindowId(window.AppWindow.Id));
         // Not ResizeClient, which adds a caption's height (3.3's outcome).
         Shell.NativeMethods.SetClientSize(window.AppWindow, new SizeInt32((int)Math.Round(size.Width * scale), (int)Math.Round(size.Height * scale)));
-        Present(window);
-        await Drawn(window);
-        await Capture(window, path);
+        var presented = false;
+        foreach (var (theme, path) in shots)
+        {
+            Apply(window, root, theme);
+            if (!presented)
+                Present(window);
+            presented = true;
+            await Drawn(window);
+            await Capture(window, path);
+        }
         window.Close();
     }
 
-    /// <summary><paramref name="view"/> on its own at its fitting size (the panel, the desktop character), on the look's paper, in <paramref name="theme"/>.</summary>
-    public static async Task CaptureFitting(FrameworkElement view, ElementTheme theme, string path)
+    /// <summary>Switches a built window to <paramref name="theme"/>, as <c>WindowManager</c> does the app's: its content and its caption buttons.</summary>
+    private static void Apply(Window window, FrameworkElement root, ElementTheme theme)
     {
-        var root = new Grid { RequestedTheme = theme, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top };
+        root.RequestedTheme = theme;
+        window.AppWindow.TitleBar.PreferredTheme = theme == ElementTheme.Dark ? TitleBarTheme.Dark : TitleBarTheme.Light;
+    }
+
+    /// <summary>
+    /// <paramref name="view"/> on its own at its fitting size (the panel, the desktop character), on the look's paper, in
+    /// each theme of <paramref name="shots"/> from one opening.
+    /// </summary>
+    public static async Task CaptureFitting(FrameworkElement view, IReadOnlyList<(ElementTheme Theme, string Path)> shots)
+    {
+        var root = new Grid { HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top };
         LookBinding.Keep(root, () => root.Background = LookBinding.Brush(root, p => p.Paper));
         root.Children.Add(view);
         var window = new Window { Content = root };
@@ -241,13 +275,22 @@ public static class ScreenshotCapture
             var fit = root.DesiredSize;
             Shell.NativeMethods.SetClientSize(window.AppWindow, new SizeInt32((int)Math.Ceiling(fit.Width * scale), (int)Math.Ceiling(fit.Height * scale)));
         }
-        Fit();
-        Present(window);
-        await Drawn(window);
-        // What x:Bind sets arrives once the view has loaded, so it can be taller now than when it was first measured.
-        Fit();
-        await Drawn(window, TimeSpan.FromSeconds(0.3));
-        await Capture(window, path);
+        var presented = false;
+        foreach (var (theme, path) in shots)
+        {
+            root.RequestedTheme = theme;
+            if (!presented)
+            {
+                Fit();
+                Present(window);
+                await Drawn(window);
+                // What x:Bind sets arrives once the view has loaded, so it can be taller now than when it was first measured.
+                Fit();
+            }
+            presented = true;
+            await Drawn(window, TimeSpan.FromSeconds(0.3));
+            await Capture(window, path);
+        }
         window.Close();
     }
 

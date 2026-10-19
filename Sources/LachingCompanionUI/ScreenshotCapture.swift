@@ -38,6 +38,10 @@
         /// `tools/screenshots.sh --skin` sets it.
         public static let skinVariable = "LACHING_SCREENSHOT_SKIN"
 
+        /// The appearances to shoot, comma-separated in the run's order (`light`, `dark`; both when unset), so a run
+        /// asked for one doesn't draw the other. `tools/screens.py --themes` sets it.
+        public static let themesVariable = "LACHING_SCREENSHOT_THEMES"
+
         public static var isEnabled: Bool { ProcessInfo.processInfo.environment[modeVariable] != nil }
 
         public static var isHidden: Bool { ProcessInfo.processInfo.environment[hiddenVariable] == "1" }
@@ -58,6 +62,16 @@
         public static func wants(_ shot: String) -> Bool {
             let wanted = wanted
             return wanted.isEmpty || wanted.contains { shot.hasPrefix($0) }
+        }
+
+        /// The appearance names asked for (`themesVariable`): `light` and `dark`, in the order given; both when unset.
+        public static var themes: [String] { themes(ProcessInfo.processInfo.environment[themesVariable]) }
+
+        /// `themes` as read from `raw`: the names it lists among `light` and `dark`, else both.
+        public static func themes(_ raw: String?) -> [String] {
+            let named = (raw ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { $0 == "light" || $0 == "dark" }
+            return named.isEmpty ? ["light", "dark"] : named
         }
 
         public static var outputDirectory: URL {

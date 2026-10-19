@@ -354,6 +354,28 @@ class ManifestTests(FixtureAppTestCase):
             "windows it: panel: cut off",
         ])
 
+    def test_the_jobs_are_shared_among_the_platforms_and_the_themes_reach_every_run(self):
+        capture = screens.Capture(self.screens, [self.mac, self.windows, self.phone], ["en", "it", "de"], ["home"],
+                                  ["dark"], 6, False)
+        groups = {"mac": [self.mac], "windows": [self.windows], "ios": [self.phone], "android": []}
+        self.assertEqual(capture.shares(groups), {"mac": 2, "windows": 2, "ios": 2}, "six in all, two each")
+        with mock.patch.object(capture, "mac") as mac, mock.patch.object(capture, "windows") as windows, \
+                mock.patch.object(capture, "ios") as ios, redirect_stdout(io.StringIO()):
+            capture.run()
+        mac.assert_called_once_with(self.mac, 2)
+        windows.assert_called_once_with(self.windows, 2)
+        ios.assert_called_once_with([self.phone], 2)
+        commands = []
+        with mock.patch.object(capture, "sh", side_effect=lambda command, *_, **__: commands.append(command) or 0), \
+                redirect_stdout(io.StringIO()):
+            capture.mac(self.mac, 1)
+            capture.windows(self.windows, 2)
+        mac_runs = [c for c in commands if str(c[0]).endswith("screenshots.sh")]
+        self.assertEqual([c[1:6] for c in mac_runs], [["--only", "home", "--hidden", "--themes", "dark"]] * 3)
+        self.assertEqual([c[-1] for c in mac_runs], ["en", "it", "de"])
+        self.assertEqual([c[1:] for c in commands if str(c[0]).endswith("vm.sh")],
+                         [["check-layout", "en", "it", "de", "--", "-Only", "home", "-Themes", "dark", "-Jobs", "2"]])
+
     def test_usage_mistakes_exit_2(self):
         for args, words in ((["capture", "--platforms", "linux"], "unknown platform"),
                             (["compare", "--themes", "sepia"], "--themes"),

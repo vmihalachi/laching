@@ -10,8 +10,9 @@ using XamlSize = Windows.Foundation.Size;
 namespace Laching.Windows.Companion.Screenshots;
 
 /// <summary>
-/// A screenshot run over an app's model (Swift's <c>ScreenshotScript</c>): each shot in light, then in dark (or in the
-/// contrast theme alone while Windows is in one), saved as <c>&lt;name&gt;-&lt;appearance&gt;.png</c> in
+/// A screenshot run over an app's model (Swift's <c>ScreenshotScript</c>): each shot in light, then in dark
+/// (<see cref="ScreenshotCapture.Themes"/>; or in the contrast theme alone while Windows is in one), from one opening of
+/// its window, saved as <c>&lt;name&gt;-&lt;appearance&gt;.png</c> in
 /// <see cref="ScreenshotCapture.OutputDirectory"/>, skipping the ones <see cref="ScreenshotCapture.Wants"/> doesn't ask
 /// for. The app gives the shots in order: its windows, views at a size, views at their fitting size, the supporter
 /// sequence, its own. Quits when done. The model is never launched: no tray icon or desktop character.
@@ -47,13 +48,13 @@ public sealed class ScreenshotScript<TWindow, TSettings>(
         /// </summary>
         public sealed record SupporterSequence(TWindow Id, string Product, string Thanks, string Supporter) : Shot;
 
-        /// <summary>Anything else: the app writes the picture to the path it's given, in the appearance's theme.</summary>
+        /// <summary>Anything else: the app writes the picture to the path it's given, in the theme the app is in.</summary>
         public sealed record Custom(string Name, Func<string, ElementTheme, Task> Capture) : Shot;
     }
 
     /// <summary>
     /// The whole run: empties the output folder, loads the sample prices, lets the app <paramref name="prepare"/> (a line
-    /// in the bubble), takes <paramref name="shots"/> in each appearance and quits.
+    /// in the bubble), takes <paramref name="shots"/>, each in every appearance from one opening of its window, and quits.
     /// </summary>
     public async void Run(Func<Task> prepare, IReadOnlyList<Shot> shots)
     {
@@ -63,19 +64,8 @@ public sealed class ScreenshotScript<TWindow, TSettings>(
             ScreenshotCapture.PrepareOutputDirectory();
             await model.Purchases.LoadProductsAsync();
             await prepare();
-            foreach (var (name, theme) in ScreenshotCapture.Appearances)
-            {
-                host.ApplyAppearance(
-                    theme switch
-                    {
-                        ElementTheme.Light => AppearanceSetting.Light,
-                        ElementTheme.Dark => AppearanceSetting.Dark,
-                        _ => AppearanceSetting.System,
-                    }
-                );
-                foreach (var shot in shots)
-                    await Take(shot, name, theme);
-            }
+            foreach (var shot in shots)
+                await Take(shot);
         }
         catch (Exception e)
         {
@@ -84,25 +74,46 @@ public sealed class ScreenshotScript<TWindow, TSettings>(
         ScreenshotCapture.Finish();
     }
 
-    private async Task Take(Shot shot, string appearance, ElementTheme theme)
+    /// <summary>Switches the app, its open windows included, to <paramref name="theme"/> (<see cref="WindowsCompanionHost{TWindow}.ApplyAppearance"/>).</summary>
+    private void Apply(ElementTheme theme) =>
+        host.ApplyAppearance(
+            theme switch
+            {
+                ElementTheme.Light => AppearanceSetting.Light,
+                ElementTheme.Dark => AppearanceSetting.Dark,
+                _ => AppearanceSetting.System,
+            }
+        );
+
+    private async Task Take(Shot shot)
     {
-        string Path(string name) => IOPath.Combine(ScreenshotCapture.OutputDirectory, $"{name}-{appearance}.png");
+        static IReadOnlyList<(ElementTheme Theme, string Path)> Paths(string name) =>
+            [
+                .. ScreenshotCapture.Appearances.Select(appearance =>
+                    (appearance.Theme, IOPath.Combine(ScreenshotCapture.OutputDirectory, $"{name}-{appearance.Name}.png"))
+                ),
+            ];
         switch (shot)
         {
             case Shot.Window(var id):
                 var name = windowName(id);
                 if (!ScreenshotCapture.Wants(name))
                     return;
-                await Open(id, Path(name));
+                host.Windows.Show(id);
+                if (host.Windows.Find(id) is { } window)
+                    await Capture(window, id, Paths(name));
+                else
+                    foreach (var (_, path) in Paths(name))
+                        ScreenshotCapture.Report($"{IOPath.GetFileName(path)}: the window didn't open");
                 host.Windows.Close(id);
                 break;
             case Shot.View view:
                 if (ScreenshotCapture.Wants(view.Name))
-                    await ScreenshotCapture.CaptureWindow(view.Make(), view.Size, theme, Path(view.Name));
+                    await ScreenshotCapture.CaptureWindow(view.Make(), view.Size, Paths(view.Name));
                 break;
             case Shot.Fitting fitting:
                 if (ScreenshotCapture.Wants(fitting.Name))
-                    await ScreenshotCapture.CaptureFitting(fitting.Make(), theme, Path(fitting.Name));
+                    await ScreenshotCapture.CaptureFitting(fitting.Make(), Paths(fitting.Name));
                 break;
             case Shot.SupporterSequence sequence:
                 var owned = backend.Owned.ToHashSet();
@@ -110,16 +121,18 @@ public sealed class ScreenshotScript<TWindow, TSettings>(
                 if (!names.Any(name => ScreenshotCapture.Wants(name)))
                     return;
                 host.Windows.Show(sequence.Id);
-                await Drawn(sequence.Id, TimeSpan.FromSeconds(0.6));
+                await Drawn(sequence.Id, TimeSpan.FromSeconds(0.6)); // open before the purchase
                 backend.Owned = [.. owned, sequence.Product];
                 await model.Purchases.RefreshEntitlementsAsync();
-                foreach (var shotName in names)
+                for (var index = 0; index < names.Length; index++)
                 {
-                    await Drawn(sequence.Id, ScreenshotCapture.Settle);
-                    if (ScreenshotCapture.Wants(shotName) && host.Windows.Find(sequence.Id) is { } window)
-                        await ScreenshotCapture.Capture(window, Path(shotName));
-                    host.Windows.Close(sequence.Id);
-                    host.Windows.Show(sequence.Id);
+                    if (index > 0) // opened again, as a supporter
+                    {
+                        host.Windows.Close(sequence.Id);
+                        host.Windows.Show(sequence.Id);
+                    }
+                    if (ScreenshotCapture.Wants(names[index]) && host.Windows.Find(sequence.Id) is { } open)
+                        await Capture(open, sequence.Id, Paths(names[index]));
                 }
                 host.Windows.Close(sequence.Id);
                 if (!backend.Owned.SetEquals(owned))
@@ -130,19 +143,24 @@ public sealed class ScreenshotScript<TWindow, TSettings>(
                 break;
             case Shot.Custom custom:
                 if (ScreenshotCapture.Wants(custom.Name))
-                    await custom.Capture(Path(custom.Name), theme);
+                    foreach (var (theme, path) in Paths(custom.Name))
+                    {
+                        Apply(theme);
+                        await custom.Capture(path, theme);
+                    }
                 break;
         }
     }
 
-    private async Task Open(TWindow id, string path)
+    /// <summary>The open <paramref name="window"/> in each theme of <paramref name="shots"/>: the app switched to it, the window drawn again, captured.</summary>
+    private async Task Capture(Microsoft.UI.Xaml.Window window, TWindow id, IReadOnlyList<(ElementTheme Theme, string Path)> shots)
     {
-        host.Windows.Show(id);
-        await Drawn(id, ScreenshotCapture.Settle);
-        if (host.Windows.Find(id) is { } window)
+        foreach (var (theme, path) in shots)
+        {
+            Apply(theme);
+            await Drawn(id, ScreenshotCapture.Settle);
             await ScreenshotCapture.Capture(window, path);
-        else
-            ScreenshotCapture.Report($"{IOPath.GetFileName(path)}: the window didn't open");
+        }
     }
 
     /// <summary>The open window's wait to draw (<see cref="ScreenshotCapture.Drawn(Microsoft.UI.Xaml.Window, TimeSpan)"/>), or <paramref name="wait"/> when it isn't open.</summary>

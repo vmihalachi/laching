@@ -15,6 +15,15 @@ public sealed class ScreenshotCaptureTests
         Assert.Equal(wanted, ScreenshotCapture.Wants(shot, mode));
 
     [Theory]
+    [InlineData(null, "light,dark")]
+    [InlineData("", "light,dark")]
+    [InlineData("dark", "dark")]
+    [InlineData("dark, light", "dark,light")]
+    [InlineData("contrast", "light,dark")]
+    public void TheThemesAskedForAreShotInOrderAndBothWhenUnset(string? raw, string themes) =>
+        Assert.Equal(themes, string.Join(",", ScreenshotCapture.ThemesFrom(raw)));
+
+    [Theory]
     [InlineData("1", true)]
     [InlineData("0", false)]
     [InlineData("", false)]

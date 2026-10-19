@@ -4,18 +4,20 @@ Renders the WinUI app's windows in each language and fails when one has a proble
 (the checks screenshots.ps1 fails on). Longer translations are where text runs out of room, so run it after changing text or a window's layout.
 Windows only; the Mac's is check-layout.sh.
 
-Usage: laching/tools/windows/check-layout.ps1 [-Only name,name] [-Jobs n] [-Platform x64|ARM64] [-Project path] [-Out folder]
-                                                [language ...]
+Usage: laching/tools/windows/check-layout.ps1 [-Only name,name] [-Themes light,dark] [-Jobs n] [-Platform x64|ARM64]
+                                                [-Project path] [-Out folder] [language ...]
        (default: every language in companion.json's languages.all)
 Shots go to <windows.dir>\build\layout-check\<language> (with -Project, <name>-layout-check\<language> in the temporary
 folder; with -Out, <folder>\<language>), with the language's problems.txt when it has problems, to look at what
 failed. It builds once, then runs the languages side by side (-Jobs at a time: $env:LAYOUT_JOBS, default 4; a packaged
 app's one at a time, since it runs one copy) with the windows hidden (screenshots.ps1 -Hidden): you can keep working
-meanwhile, and the shots show the windows inactive.
+meanwhile, and the shots show the windows inactive. -Themes (light, dark; both by default) passes through to
+screenshots.ps1, so a check of one theme never draws the other.
 #>
 [CmdletBinding(PositionalBinding = $false)]
 param(
     [string[]] $Only = @(),
+    [string] $Themes = "",
     [int] $Jobs = $(if ($env:LAYOUT_JOBS) { [int]$env:LAYOUT_JOBS } else { 4 }),
     [ValidateSet("x64", "ARM64")][string] $Platform = $(if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq "Arm64") { "ARM64" } else { "x64" }),
     [string] $Project = "",
@@ -84,6 +86,7 @@ function Start-Language([string] $language) {
     $arguments = @("-NoProfile", "-NonInteractive", "-File", $screenshots, "-NoBuild", "-Hidden", "-Project", $Project,
         "-Platform", $Platform, "-Language", $language, "-Out", (Join-Path $Out $language))
     if ($Only) { $arguments += @("-Only", ($Only -join ",")) }
+    if ($Themes) { $arguments += @("-Themes", $Themes) }
     $info = New-Object Diagnostics.ProcessStartInfo $shell
     $info.Arguments = ($arguments | ForEach-Object { Quote $_ }) -join " "
     $info.UseShellExecute = $false
