@@ -630,8 +630,11 @@ class Sync:
         whose images all match (the uploaded file's name carries its MD5) is left alone; otherwise its placements are
         replaced. Each file is uploaded to the app's Asset Library once, however many languages and runs use it: an
         image already there under that file name is reused, and each upload's reference name (unique in a library) is
-        the label plus the file name."""
+        the label plus the file name. Screenshots go in the library's screenshots category, the rest in its creative
+        assets (an image in the wrong one fails processing); an image that failed is deleted and uploaded again."""
         images = None  # uploaded file name -> image id ("" in a dry run), read from the library on first use
+        failed = {}  # uploaded file name -> ids of the images under that name that failed processing
+        category = "APP_SCREENSHOTS_AND_PREVIEWS" if placement_type == SCREENSHOT else "CREATIVE_ASSETS"
         groups_for = {}  # (width, height) -> groups
         label = reference[0].lower() + reference[1:]
 
@@ -639,9 +642,11 @@ class Sync:
             return self.api.request("GET", f"/v1/apps/{self.listing.app_id}/assetLibrary")["data"]["id"]
 
         def upload(f, name):
+            for image_id in failed.pop(name, []):  # its reference name would clash with the new one's
+                self.api.delete("appAssetLibraryImages", image_id)
             data = f.read_bytes()
             item = self.api.create("appAssetLibraryImages", {"fileName": name, "fileSize": len(data),
-                                                             "category": "CREATIVE_ASSETS",
+                                                             "category": category,
                                                              "referenceName": f"{reference} {name}"},
                                    {"assetLibrary": ("appAssetLibraries", library())})
             self.api.upload(item["attributes"]["uploadOperations"], data)
@@ -686,8 +691,13 @@ class Sync:
                 if sorted(n for _, n in have) == sorted(names):
                     continue
                 if images is None:
-                    images = {i["attributes"].get("fileName"): i["id"]
-                              for i in self.api.get_all(f"/v1/appAssetLibraries/{library()}/images")}
+                    images = {}
+                    for i in self.api.get_all(f"/v1/appAssetLibraries/{library()}/images"):
+                        file_name = i["attributes"].get("fileName")
+                        if i["attributes"].get("state") == "FAILED":
+                            failed.setdefault(file_name, []).append(i["id"])
+                        else:
+                            images[file_name] = i["id"]
                 for f, name in zip(files, names):
                     if name not in images:
                         item = self.step(f"upload {f.name} ({prefix}) to the asset library",
