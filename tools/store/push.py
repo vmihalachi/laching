@@ -5,6 +5,7 @@ Usage (from the app's root):
   python3 laching/tools/store/push.py --version 1.0 --status        # read only: what App Store Connect has, what's missing
   python3 laching/tools/store/push.py --version 1.0 [--create] [--build 4] [--only text,iap,screenshots] [lang ...]
   ... --apply        to write; without it nothing changes and the script prints what it would do.
+A push's lines are led by the minutes and seconds since it started, and print as they happen when sent to a file.
 
 What it syncs, per language (companion.json's `store.apple` names the app, its locales and in-app purchases):
   text         App Information (name, subtitle, privacy URL) and the version page (description, keywords,
@@ -251,11 +252,25 @@ class Client:
                 pass
 
 
+STARTED = time.monotonic()
+
+
+def elapsed():
+    seconds = int(time.monotonic() - STARTED)
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def log(message=""):
+    """Prints a line led by the minutes and seconds since the run started, so a slow step shows in the log."""
+    body = message.lstrip("\n")
+    print(message[:len(message) - len(body)] + f"[{elapsed()}] {body}" if body else message)
+
+
 # --- sync -------------------------------------------------------------------------------------------
 
 
 class Sync:
-    def __init__(self, listing: Listing, client, apply, log=print):
+    def __init__(self, listing: Listing, client, apply, log=log):
         self.listing, self.api, self.apply, self.log = listing, client, apply, log
         self.problems = []
         self.mac = mac_page(listing)
@@ -507,7 +522,7 @@ class Sync:
             self.step(f"{locale}: upload {f.name}", upload)
 
     def review(self, version, page=None):
-        print(("" if page is None or page == self.mac else f"{page.name} ") + "App Review")
+        self.log(("" if page is None or page == self.mac else f"{page.name} ") + "App Review")
         if not self.listing.review_notes.exists():
             self.log(f"  no {self.listing.review_notes.name} in {self.listing.dir.name}/: the notes are left alone")
             return
@@ -799,7 +814,7 @@ def main():
 
     sync = Sync(listing, Client(), args.apply)
     if not args.apply:
-        print("Dry run: nothing is written. Add --apply to push.\n")
+        log("Dry run: nothing is written. Add --apply to push.\n")
     # Each platform's version only when one of its parts asks for it: the Mac and iOS apps have their own version
     # numbers, so a push for one must not create the other's version of that number. `review` goes with the platform
     # whose parts are asked for, or with both when it's alone.
@@ -812,47 +827,47 @@ def main():
             sys.exit("\n".join(sync.problems))
     localizations = {}
     if parts & {"text", "screenshots", "previews"}:
-        print("Text")
+        log("Text")
         localizations = sync.text(args.langs, version, args.extra_locales, write="text" in parts)
     if "iap" in parts:
         sync.iaps(args.langs, args.extra_locales)
     if "review" in parts and mac:
         sync.review(version)
     if "screenshots" in parts:
-        print("Screenshots")
+        log("Screenshots")
         sync.screenshots(localizations)
     if "previews" in parts:
-        print("Previews")
+        log("Previews")
         sync.previews(localizations)
     if ios:
-        print("iOS")
+        log("iOS")
         ios_version = sync.version(args.version, args.create, args.build, sync.ios)
         if ios_version is None:
             sys.exit("\n".join(sync.problems))
         if "review" in parts:
             sync.review(ios_version, sync.ios)
     if ios_parts:
-        print("iOS text")
+        log("iOS text")
         ios_localizations = sync.text(args.langs, ios_version, args.extra_locales, write="ios-text" in parts,
                                       page=sync.ios)
         if "ios-screenshots" in parts:
-            print("iOS screenshots")
+            log("iOS screenshots")
             sync.screenshots(ios_localizations, sync.ios)
             if listing.duo_screenshots.exists():
                 sync.duo_screenshots(ios_localizations)
         if "ios-header" in parts:
-            print("iOS header")
+            log("iOS header")
             sync.header(ios_localizations)
         if "ios-search" in parts:
-            print("iOS search results")
+            log("iOS search results")
             sync.search_results(ios_localizations)
     if sync.problems:
-        print("\nProblems:\n" + "\n".join(f"  {p}" for p in sync.problems))
+        log("\nProblems:\n" + "\n".join(f"  {p}" for p in sync.problems))
         sys.exit(1)
-    print("\nDone." if args.apply else "\nDry run done.")
+    log(f"\nDone in {elapsed()}." if args.apply else f"\nDry run done in {elapsed()}.")
 
 
 if __name__ == "__main__":
     for stream in (sys.stdout, sys.stderr):  # UTF-8 on a cp1252 Windows console too (companion.utf8_console)
-        stream.reconfigure(encoding="utf-8", errors="replace")
+        stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)  # a file gets each line at once
     main()
