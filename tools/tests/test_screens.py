@@ -193,6 +193,7 @@ class ManifestTests(FixtureAppTestCase):
         devices = [{"name": "fixture screens phone", "udid": "PHONE", "isAvailable": True, "state": "Booted"},
                    {"name": "fixture screens phone clone #1 (999999999)", "udid": "STALE", "isAvailable": True}]
         calls, launches = [], []
+        second = screens.threading.Event()  # the first launch waits for one on the other clone: none takes them all
 
         def run(command, env=None, **_):
             with lock:
@@ -206,6 +207,10 @@ class ManifestTests(FixtureAppTestCase):
                     return subprocess.CompletedProcess(command, 0, "", "")
                 launches.append((command[5], command[-3].strip("()")))
                 folder = drawn / str(len(launches))
+            if folder.name == "1":
+                second.wait(10)
+            elif folder.name == "2":
+                second.set()
             folder.mkdir(parents=True)
             (folder / "today-light.png").write_bytes(b"png")
             return subprocess.CompletedProcess(command, 0, f"{folder}\r\n", "")
