@@ -2,12 +2,15 @@ package laching.android
 
 import android.app.Activity
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.Choreographer
 import android.view.PixelCopy
 import android.view.View
 import android.view.ViewGroup
+import android.view.inspector.WindowInspector
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.File
@@ -16,10 +19,10 @@ import kotlin.coroutines.resume
 /**
  * The Android `ScreenshotCapture`: when the app was launched with [LaunchContext.screens], [run] shows each screen
  * in light then dark (the app's [Screens] does the showing), copies the window through [PixelCopy] into
- * `filesDir/screens/<screen>-<theme>.png`, lists layout problems in `problems.txt` (content taller than the
- * viewport outside a scroll container, found here in the view tree; text with `hasVisualOverflow`, which the app's
- * Compose text reports through [report]), writes `done` and finishes the activity. Laching's `screens.py` launches
- * the app with the extras and pulls the folder.
+ * `filesDir/screens/<screen>-<theme>.png` with the app's other windows over it ([overlayWindows]), lists layout
+ * problems in `problems.txt` (content taller than the viewport outside a scroll container, found here in the view
+ * tree; text with `hasVisualOverflow`, which the app's Compose text reports through [report]), writes `done` and
+ * finishes the activity. Laching's `screens.py` launches the app with the extras and pulls the folder.
  */
 public class ScreenshotRun(
     private val activity: Activity,
@@ -95,7 +98,49 @@ public class ScreenshotRun(
             report("PixelCopy failed with $code")
             return
         }
+        overlayWindows(bitmap, view)
         file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
+    /**
+     * The app's other windows drawn over the activity's, where the screen shows them: a Compose `ModalBottomSheet`
+     * or `Dialog` is a window of its own, which the copy of the activity's window leaves out. A window is copied
+     * through [PixelCopy.Request] from Android 14; before it, a shot with a window over the activity is reported.
+     */
+    private suspend fun overlayWindows(
+        bitmap: Bitmap,
+        decor: View,
+    ) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val windows =
+            WindowInspector.getGlobalWindowViews().filter {
+                it !== decor && it.isAttachedToWindow && it.isShown && it.width > 0 && it.height > 0
+            }
+        if (windows.isEmpty()) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            report("${windows.size} window(s) over the activity are left out: copying one needs Android 14")
+            return
+        }
+        val canvas = Canvas(bitmap)
+        val origin = IntArray(2).also(decor::getLocationOnScreen)
+        val at = IntArray(2)
+        val main = activity.mainExecutor
+        for (root in windows) {
+            val request =
+                PixelCopy.Request.Builder
+                    .ofWindow(root)
+                    .build()
+            val result =
+                suspendCancellableCoroutine { continuation ->
+                    PixelCopy.request(request, main, continuation::resume)
+                }
+            if (result.status != PixelCopy.SUCCESS) {
+                report("PixelCopy of a window over the activity failed with ${result.status}")
+                continue
+            }
+            root.getLocationOnScreen(at)
+            canvas.drawBitmap(result.bitmap, (at[0] - origin[0]).toFloat(), (at[1] - origin[1]).toFloat(), null)
+        }
     }
 
     /** Classic views whose bottom lies below the viewport with no scrolling ancestor; Compose reports its own. */

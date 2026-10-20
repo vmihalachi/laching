@@ -14,8 +14,9 @@ public object ResourceNames {
     public const val MAX_LENGTH: Int = 240
     public const val PREFIX_LENGTH: Int = 200
 
+    // Every brace escaped: Android's ICU regex refuses a bare `}`, which the JVM's accepts.
     private val specifier = Regex("""%%|%(?:(\d+)\$)?(?:lld|ld|d|@)""")
-    private val placeholder = Regex("""\{\{|}}|\{(\d+)}""")
+    private val placeholder = Regex("""\{\{|\}\}|\{(\d+)\}""")
 
     /** The `.resw` name of [key]. */
     public fun reswName(key: String): String {
