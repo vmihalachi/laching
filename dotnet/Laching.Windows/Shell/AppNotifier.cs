@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
+using System.Xml.Linq;
 using Microsoft.Windows.AppLifecycle;
 using Microsoft.Windows.AppNotifications;
-using Microsoft.Windows.AppNotifications.Builder;
 
 namespace Laching.Windows.Shell;
 
@@ -74,6 +74,58 @@ public static class AppNotifier
     /// the running copy would take as the user opening the app, and show Home for; dropping it loses the click instead.
     /// </summary>
     internal static bool IsClick(ExtendedActivationKind kind) => kind == ExtendedActivationKind.AppNotification;
+
+    /// <summary>
+    /// The notification's XML, in <c>AppNotificationBuilder</c>'s shape but escaped throughout: Windows App SDK 2.5's
+    /// <c>AppNotificationButton</c> writes its title into the XML as it is, so one with an apostrophe ("Shh per
+    /// un'ora"), an ampersand or a <c>&lt;</c> made the notification unbuildable.
+    /// </summary>
+    /// <param name="actionKey">The argument each click carries its action key under.</param>
+    /// <param name="bannerAction">The action key of a click on the notification itself.</param>
+    internal static string Payload(
+        string actionKey,
+        string bannerAction,
+        string title,
+        string body,
+        IReadOnlyList<NotificationButton> buttons,
+        bool sound
+    )
+    {
+        if (buttons.Count > MaxButtons)
+            throw new ArgumentException($"A notification takes up to {MaxButtons} buttons.", nameof(buttons));
+        var binding = new XElement("binding", new XAttribute("template", "ToastGeneric"), new XElement("text", title));
+        if (body.Length > 0)
+            binding.Add(new XElement("text", body));
+        var toast = new XElement("toast", new XAttribute("launch", Argument(actionKey, bannerAction)), new XElement("visual", binding));
+        if (!sound)
+            toast.Add(new XElement("audio", new XAttribute("silent", "true")));
+        if (buttons.Count > 0)
+        {
+            toast.Add(
+                new XElement(
+                    "actions",
+                    buttons.Select(button =>
+                        new XElement(
+                            "action",
+                            new XAttribute("content", button.Title),
+                            new XAttribute("arguments", Argument(actionKey, button.Action))
+                        )
+                    )
+                )
+            );
+        }
+        return toast.ToString(SaveOptions.DisableFormatting);
+    }
+
+    /// <summary>
+    /// One <c>key=value</c> argument as <c>AppNotificationActivatedEventArgs.Arguments</c> reads it back: <c>%</c>,
+    /// <c>;</c> and <c>=</c> percent-encoded, as the builder writes them.
+    /// </summary>
+    internal static string Argument(string key, string value) => Encode(key) + "=" + Encode(value);
+
+    private const int MaxButtons = 5;
+
+    private static string Encode(string text) => text.Replace("%", "%25").Replace(";", "%3B").Replace("=", "%3D");
 }
 
 /// <summary>
@@ -159,19 +211,8 @@ public sealed class AppNotifier<TAction> : IDisposable
         DateTimeOffset? expiration = null
     )
     {
-        var builder = new AppNotificationBuilder()
-            .AddArgument(ActionKey, defaultAction)
-            .SetTag(tag)
-            .SetGroup(group)
-            .AddText(title);
-        if (body.Length > 0)
-            builder.AddText(body);
-        foreach (var button in buttons)
-            builder.AddButton(new AppNotificationButton(button.Title).AddArgument(ActionKey, button.Action));
-        if (!sound)
-            builder.MuteAudio();
-
-        var notification = builder.BuildNotification();
+        var payload = AppNotifier.Payload(ActionKey, defaultAction, title, body, buttons, sound);
+        var notification = new AppNotification(payload) { Tag = tag, Group = group };
         if (expiration is { } expires)
             notification.Expiration = expires;
         await RemoveAsync();
