@@ -82,8 +82,10 @@
 
         /// Draws `window` (the key window when nil) at the screen's scale once it has settled (`settle(_:timeout:)`),
         /// then checks that its content fits (`LayoutCheck.problems(in:)`). A screen still moving at the timeout, such
-        /// as one with a running timer, is drawn as it is then. Returns whether it had settled, so the next shot of a
-        /// screen that never does (the same one in dark) can wait less.
+        /// as one with a running timer, is drawn as it is then. A window that still looks exactly like the previous
+        /// shot gets up to `changeTimeout` to change first, since a slow Simulator may not have drawn the screen or
+        /// theme just asked for; if it never changes, the shot is reported. Returns whether it had settled, so the
+        /// next shot of a screen that never does (the same one in dark) can wait less.
         @discardableResult
         public static func capture(_ window: UIWindow? = nil, to url: URL, timeout: Duration = .seconds(4)) async -> Bool {
             let shot = url.lastPathComponent
@@ -91,11 +93,24 @@
                 report("\(shot): there is no window to draw")
                 return false
             }
-            let settled = await settle(window, timeout: timeout)
+            var settled = await settle(window, timeout: timeout)
+            if let previous = lastShot, thumbnail(of: window) == previous.thumbnail {
+                let clock = ContinuousClock()
+                let deadline = clock.now + changeTimeout
+                while thumbnail(of: window) == previous.thumbnail, clock.now < deadline {
+                    try? await Task.sleep(for: .milliseconds(80))
+                }
+                if thumbnail(of: window) == previous.thumbnail {
+                    report("\(shot): drawn the same as \(previous.name); the screen or theme asked for never showed")
+                } else {
+                    settled = await settle(window, timeout: timeout)
+                }
+            }
+            lastShot = thumbnail(of: window).map { (shot, $0) }
             let format = UIGraphicsImageRendererFormat(for: window.traitCollection)
             format.opaque = true
             let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
-                _ = window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
+                _ = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
             }
             do {
                 guard let png = image.pngData() else { throw CocoaError(.fileWriteUnknown) }
@@ -146,10 +161,17 @@
             }
         }
 
+        /// How long a shot that looks exactly like the previous one waits for the window to change (`capture`).
+        public static let changeTimeout = Duration.seconds(2)
+
+        /// The previous shot's file name and thumbnail, for `capture`'s check that the window changed in between.
+        private static var lastShot: (name: String, thumbnail: Data)?
+
         /// Waits until `window` has stopped changing: a presentation finished sliding in, an image loaded, text laid
         /// out. It compares small drawings of the window a frame apart and returns once they stay alike for a few
         /// frames, false when they still differ at `timeout`. Waits a moment first, so a change the app has just
-        /// asked for has started.
+        /// asked for has started. Every drawing takes in the updates the app has committed but the screen may not
+        /// show yet (`afterScreenUpdates`), so a starved Simulator's last frame can't pass for the new one.
         @discardableResult
         public static func settle(_ window: UIWindow, timeout: Duration = .seconds(4)) async -> Bool {
             let clock = ContinuousClock()
@@ -174,7 +196,7 @@
             format.scale = 1
             format.opaque = true
             let image = UIGraphicsImageRenderer(size: size, format: format).image { _ in
-                _ = window.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: false)
+                _ = window.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true)
             }
             return image.cgImage?.dataProvider?.data as Data?
         }

@@ -18,12 +18,17 @@
         /// these count as fitting: a label its `inputLabels` leave out (an element read as a sentence while it draws a
         /// short tag says so with a concise input label, `accessibilityInputLabels`, the text Voice Control users
         /// see and say), text the font has no glyphs for (Japanese in a Latin font is drawn in a fallback font) and an
-        /// element too narrow for a letter and "…" (an icon labeled for VoiceOver, not text).
+        /// element too narrow for a letter and "…" (an icon labeled for VoiceOver, not text). Text shrunk to fit
+        /// (`minimumScaleFactor`) draws its line in a smaller font than the one accessibility names, so an element
+        /// shorter than a line of `font` is measured in the font at the size it was drawn: a word shrunk to fit its
+        /// line fits, one that needed more than its least scale still doesn't.
         public static func isCut(_ label: String, inputLabels: [String] = [], font: PlatformFont, in size: CGSize) -> Bool {
             guard inputLabels.isEmpty || inputLabels.contains(label), covers(font, label) else { return false }
             let least = (String(label.prefix(1)) + "…" as NSString).size(withAttributes: [.font: font]).width
             guard size.width >= least else { return false }
-            return textHeight(of: label, font: font, width: size.width) > size.height + lineHeight(of: font) / 2
+            let line = lineHeight(of: font)
+            let drawn = size.height < line * 0.9 ? font.withSize(font.pointSize * size.height / line) : font
+            return textHeight(of: label, font: drawn, width: size.width) > size.height + lineHeight(of: drawn) / 2
         }
 
         /// The height `text` needs in `font`, wrapped at `width`.

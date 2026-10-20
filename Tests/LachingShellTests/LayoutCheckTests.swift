@@ -97,5 +97,17 @@
             XCTAssertFalse(LayoutCheck.isCut(sentence, font: font, in: CGSize(width: 6, height: 24)))  // an icon
             XCTAssertFalse(LayoutCheck.isCut("カメラを上げて、頭も映るようにしてください", font: font, in: tag))  // a fallback font
         }
+
+        /// Text shrunk to fit (`minimumScaleFactor`): one word drawn smaller than its font so it fits its line, its
+        /// element shorter than a line of the font, fits; shrunk as far as it may and still too wide, it's cut short.
+        func testTextShrunkToFitIsMeasuredAtTheSizeDrawn() {
+            let font = NSFont.boldSystemFont(ofSize: 38)
+            let word = "SPEEDRUN!"
+            let width = (word as NSString).size(withAttributes: [.font: font]).width
+            let line = font.ascender - font.descender + font.leading
+            XCTAssertFalse(LayoutCheck.isCut(word, font: font, in: CGSize(width: width * 0.72, height: line * 0.72)))
+            XCTAssertTrue(LayoutCheck.isCut(word, font: font, in: CGSize(width: width * 0.5, height: line * 0.72)))
+            XCTAssertTrue(LayoutCheck.isCut(word, font: font, in: CGSize(width: width * 0.72, height: line)))  // "SPEED…"
+        }
     }
 #endif
