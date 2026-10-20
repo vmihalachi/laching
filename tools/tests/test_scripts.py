@@ -309,6 +309,9 @@ def log(line):
 command = args[0]
 if command == "install":
     log("install " + Path(args[-1]).name)
+elif command == "emu" and args[1:2] == ["posture"]:
+    log("posture " + args[2])
+    print("OK")
 elif command == "emu" and args[1:4] == ["avd", "snapshot", "save"]:
     (state / "snapshots").mkdir(exist_ok=True)
     shutil.copy(ram, state / "snapshots" / args[4])
@@ -331,6 +334,12 @@ elif command == "shell":
         ram.write_text(json.dumps({{**json.loads(ram.read_text()), words[1]: words[2]}}))
     elif words[:3] == ["settings", "put", "system"]:
         log(" ".join(words[3:]))
+    elif words[:2] == ["wm", "user-rotation"]:
+        log(" ".join(words[1:]))
+    elif words[:2] == ["wm", "size"]:
+        print("Physical size: 2560x1600")
+    elif words[:2] == ["cmd", "device_state"]:
+        print("Committed state: DeviceState{{identifier=2, name='OPENED', app_accessible=true}}")
     elif words[:2] == ["cmd", "package"]:
         print("priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true")
         print("app.fixture.dev/.Main")
@@ -378,7 +387,7 @@ while not (state / "killed").exists():
         env = {"ANDROID_AVD_HOME": str(avds)}
 
         result = self.run_script("check-layout-android.py", "--apk", str(apk), "--devices", "Pixel_8", "--font-scale", "2.0",
-                                 "en", "de", env=env)
+                                 "--posture", "open", "--orientation", "portrait", "en", "de", env=env)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertEqual([line for line in result.stdout.splitlines() if line.startswith("==")],
                          ["== android-Pixel_8 en", "== android-Pixel_8 de"])
@@ -395,10 +404,12 @@ while not (state / "killed").exists():
         self.assertEqual([line for line in lines if line.startswith("emulator ")], [
             "emulator -avd Pixel_8 -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot-load -no-snapshot-save "
             "-gpu swiftshader_indirect"])
-        self.assertEqual([line for line in lines if line.startswith(("start", "install", "font_scale", "kill", "save"))], [
-            "save laching-screens", "install app-debug.apk", "font_scale 2.0",
+        self.assertEqual([line for line in lines if line.startswith(
+            ("start", "install", "font_scale", "posture", "user-rotation", "kill", "save"))], [
+            "save laching-screens", "install app-debug.apk", "font_scale 2.0", "posture 3",
+            "user-rotation lock 1",  # portrait on a display that is landscape at rest
             "start en US screens today", "start en US two settings", "start de DE screens today", "start de DE two settings",
-            "font_scale 1.0", "kill",
+            "font_scale 1.0", "user-rotation free", "kill",
         ])
 
         self.log.unlink()

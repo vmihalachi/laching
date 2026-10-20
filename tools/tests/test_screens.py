@@ -236,7 +236,7 @@ class ManifestTests(FixtureAppTestCase):
         path = self.root / "companion.json"
         data = json.loads(path.read_text("utf8"))
         data["android"] = {"dir": "android"}
-        data["screens"]["platforms"]["droid"] = {"capture": "android", "avd": "Pixel_8"}
+        data["screens"]["platforms"]["droid"] = {"capture": "android", "avd": "Pixel_8", "posture": "open"}
         data["screens"]["list"]["home"]["android"] = "today"
         data["screens"]["list"]["settings"]["droid"] = {
             "shot": "settings", "env": {"LACHING_SCREENSHOT_MODE": "two"}, "camera": True}
@@ -265,6 +265,12 @@ class ManifestTests(FixtureAppTestCase):
             def launcher(self, app_id):
                 return f"{app_id}/.Main"
 
+            def posture(self, name):
+                calls.append(("posture", name))
+
+            def orientation(self, landscape):
+                calls.append(("orientation", landscape))
+
             def run(self, app_id, component, language, region, shots, extras, raw):
                 calls.append(("run", component, language, region, shots, extras))
                 raw.mkdir(parents=True)
@@ -282,7 +288,7 @@ class ManifestTests(FixtureAppTestCase):
             code = capture.run()
         self.assertEqual(code, 1)
         self.assertEqual(calls, [
-            ("boot", "Pixel_8", 0, True, True, "droid.log"), ("install", "app-debug.apk"),
+            ("boot", "Pixel_8", 0, True, True, "droid.log"), ("install", "app-debug.apk"), ("posture", "open"),
             ("run", "app.fixture.dev/.Main", "en", "US", ["today"], {}),
             ("run", "app.fixture.dev/.Main", "en", "US", ["settings"], {"LACHING_SCREENSHOT_MODE": "two"}),
             ("run", "app.fixture.dev/.Main", "de", "DE", ["today"], {}),

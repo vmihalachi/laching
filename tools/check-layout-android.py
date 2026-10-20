@@ -4,7 +4,8 @@ taller than the screen outside a scroll view, text cut short or pushed off the s
 (ScreenshotRun's checks, `laching.android`). The Android twin of check-layout-ios.py.
 
     python3 laching/tools/check-layout-android.py [--devices AVD,AVD] [--only shot,shot] [--jobs N]
-        [--font-scale 2.0] [--mode MODE] [--apk PATH] [--cold] [--out DIR] [language ...]
+        [--font-scale 2.0] [--orientation portrait|landscape] [--posture closed|half-open|open] [--mode MODE]
+        [--apk PATH] [--cold] [--out DIR] [language ...]
 
 Defaults: the AVDs of the `screens.platforms` entries captured on android (their `avd`), every language in
 languages.all, LAYOUT_JOBS (else 2) emulators at a time. Shots and problems go to <work dir>/layout-check/
@@ -15,7 +16,10 @@ screenshot mode with Laching's intent extras (`LACHING_SCREENSHOT_MODE`, `LACHIN
 `LACHING_REGION`): no reboot between languages. The shots are the ones `screens.list` names for the AVD's platform,
 each with its `env` (--only names other shots, in one launch); --mode is the screenshot mode of shots whose env sets
 none ("screens"). --font-scale sets the system font scale for the run (`settings put system font_scale`; 2.0 is the
-largest a user can pick) to see what the largest text breaks. The emulators are killed at the end.
+largest a user can pick) to see what the largest text breaks. --posture folds a foldable AVD (the console's `posture`)
+and --orientation turns the screen, auto-rotate off; without them each AVD takes its platform's `posture` and
+`orientation` when it sets them, else stays as it boots. A run in another posture or orientation writes over the
+same folder. The emulators are killed at the end.
 """
 
 from __future__ import annotations
@@ -72,6 +76,14 @@ def launches(config: companion.Config, device: str, only: list[str], mode: str) 
              any(shot.camera for shot in shots)) for env, shots in grouped.items()]
 
 
+def turns(config: companion.Config, device: str, posture: str | None,
+          orientation: str | None) -> tuple[str | None, str | None]:
+    """(posture, orientation) to put the AVD in: the flags', else its platform's, else None (as it boots)."""
+    platform = next((p for p in android_platforms(config) if p.settings.get("avd") == device), None)
+    settings = platform.settings if platform else {}
+    return posture or settings.get("posture"), orientation or settings.get("orientation")
+
+
 def problems_in(out: Path, shots: list[str]) -> list[str]:
     """The run's problems.txt lines, plus the shots it didn't draw."""
     listed = out / "problems.txt"
@@ -90,6 +102,10 @@ def main() -> int:
     parser.add_argument("--only", default="", help="just these shots (comma-separated), in one launch")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("LAYOUT_JOBS", "2")), help="emulators at a time")
     parser.add_argument("--font-scale", type=float, help="the system font scale for the run, e.g. 2.0")
+    parser.add_argument("--orientation", choices=("portrait", "landscape"),
+                        help="turn the screen, auto-rotate off; default: the AVD's platform's orientation")
+    parser.add_argument("--posture", choices=tuple(avd.POSTURES),
+                        help="fold a foldable AVD; default: the AVD's platform's posture")
     parser.add_argument("--mode", default=avd.DEFAULT_MODE, help="LACHING_SCREENSHOT_MODE for shots whose env sets none")
     parser.add_argument("--apk", type=Path, help="a Debug APK to run instead of building one")
     parser.add_argument("--cold", action="store_true", help="cold-boot each AVD and save its snapshot anew")
@@ -108,6 +124,7 @@ def main() -> int:
     apk = args.apk.resolve() if args.apk else build(config)
     app_id = avd.app_id(config)
     plan = {device: launches(config, device, only, args.mode) for device in devices}
+    turned = {device: turns(config, device, args.posture, args.orientation) for device in devices}
 
     results: dict[tuple[str, str], list[str]] = {}
     slots = threading.Semaphore(max(1, args.jobs))
@@ -126,6 +143,11 @@ def main() -> int:
                 component = emulator.launcher(app_id)
                 if args.font_scale:
                     emulator.font_scale(args.font_scale)
+                posture, orientation = turned[device]
+                if posture:
+                    emulator.posture(posture)
+                if orientation:
+                    emulator.orientation(orientation == "landscape")
             except (RuntimeError, OSError) as error:
                 log(f"check-layout-android: {device} didn't start ({error})")
                 for language in languages:
@@ -150,6 +172,8 @@ def main() -> int:
             finally:
                 if args.font_scale:
                     emulator.font_scale(None)
+                if turned[device][1]:
+                    emulator.orientation(None)
                 emulator.kill()
 
     threads = [threading.Thread(target=worker, args=(index, device), daemon=True) for index, device in enumerate(devices)]
