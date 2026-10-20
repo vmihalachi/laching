@@ -25,7 +25,8 @@
         /// or is read as something other than what it draws: SwiftUI doesn't say what an element draws, only what it's
         /// read as, so one that draws a short tag but reads a whole sentence says so with a concise input label
         /// (`accessibilityInputLabels`). Errs towards fitting: a label read differently from how it's drawn
-        /// (upper-cased, spaced out) measures shorter. Text shrunk to fit (`minimumScaleFactor`) may be reported.
+        /// (upper-cased, spaced out) measures shorter. Text shrunk to fit (`minimumScaleFactor`) is measured at the size
+        /// it was drawn.
         public static func truncatedText(in window: UIWindow) -> [String] {
             let debug = ProcessInfo.processInfo.environment["LACHING_LAYOUT_DEBUG"] == "1"
             var found: [String] = []
