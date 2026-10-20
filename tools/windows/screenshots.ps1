@@ -244,7 +244,8 @@ function Set-ContrastTheme([bool] $on) {
 }
 
 # The other screenshot runs on this PC that a contrast theme would reach: PowerShell running screenshots.ps1 or
-# check-layout.ps1 (by -File, or in an -EncodedCommand, as vm.sh starts them), apart from this one and its parents.
+# check-layout.ps1 (by -File, from a script that runs them, as vm.sh starts them, or in an -EncodedCommand), apart from
+# this one and its parents.
 function Get-OtherRuns {
     $processes = @(Get-CimInstance Win32_Process)
     $mine = @()
@@ -253,6 +254,9 @@ function Get-OtherRuns {
         $line = "$($_.CommandLine)"
         if ($line -match '-(?:e|ec|enc|encodedcommand)\s+(\S+)') {
             try { $line += [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($Matches[1])) } catch { }
+        }
+        elseif ($line -match '-(?:f|fi|fil|file)\s+(?:"([^"]+)"|(\S+))') {
+            try { $line += Get-Content -Raw -LiteralPath "$($Matches[1])$($Matches[2])" } catch { }
         }
         $line -match '(screenshots|check-layout)\.ps1'
     }
