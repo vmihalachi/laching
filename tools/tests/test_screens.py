@@ -354,6 +354,18 @@ class ManifestTests(FixtureAppTestCase):
             "windows it: panel: cut off",
         ])
 
+    def test_a_run_without_a_shot_keeps_the_last_one(self):
+        folder = self.screens.folder(self.mac, "en")
+        folder.mkdir(parents=True)
+        (folder / "home-light.png").write_bytes(b"last")
+        raw = self.root / "raw"
+        raw.mkdir()
+        capture = screens.Capture(self.screens, [self.mac], ["en"], ["home"], ["light", "dark"], 1, False)
+        self.assertEqual(capture.collect(self.mac, "en", raw), 0)
+        self.assertEqual((folder / "home-light.png").read_bytes(), b"last", "a failed run leaves the last shot")
+        self.assertEqual([text for _, _, text in capture.problems],
+                         ["no home-light.png for home; kept the last one", "no home-dark.png for home"])
+
     def test_the_jobs_are_shared_among_the_platforms_and_the_themes_reach_every_run(self):
         capture = screens.Capture(self.screens, [self.mac, self.windows, self.phone], ["en", "it", "de"], ["home"],
                                   ["dark"], 6, False)

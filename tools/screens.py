@@ -236,20 +236,21 @@ class Capture:
 
     def collect(self, platform: Platform, language: str, raw: Path,
                 wanted: list[tuple[str, Shot]] | None = None) -> int:
-        """Copies a run's shots (`<shot>-<theme>.png` in `raw`) to the canonical names; reports the missing ones. Only
-        `wanted`'s when given (the shots of one iOS launch)."""
+        """Copies a run's shots (`<shot>-<theme>.png` in `raw`) to the canonical names; reports the missing ones, whose
+        last shot stays (a failed run leaves the set it found). Only `wanted`'s when given (the shots of one iOS
+        launch)."""
         folder = self.screens.folder(platform, language)
         folder.mkdir(parents=True, exist_ok=True)
         count = 0
         for screen, shot in self.wanted(platform) if wanted is None else wanted:
             for theme in self.themes:
                 source, target = raw / f"{shot.name}-{theme}.png", folder / f"{screen}-{theme}.png"
-                target.unlink(missing_ok=True)
                 if source.is_file():
                     store(source, target, platform.settings.get("crop", False))
                     count += 1
                 else:
-                    self.problem(platform, language, f"no {source.name} for {screen}")
+                    kept = "; kept the last one" if target.is_file() else ""
+                    self.problem(platform, language, f"no {source.name} for {screen}{kept}")
         return count
 
     def problems_from(self, platform: Platform, language: str, raw: Path, code: int, log: Path) -> None:
