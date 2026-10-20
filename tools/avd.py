@@ -288,7 +288,7 @@ class Emulator:
     def posture(self, name: str) -> None:
         """Folds or unfolds a foldable AVD (`closed`, `half-open` or `open`: the console's `posture`, as the
         emulator's own posture buttons do), then waits for the system to commit that device state
-        (`cmd device_state state`) and move its windows to the display."""
+        (`cmd device_state state`) and move its windows to the display, and dismisses the lock screen folding brings."""
         if name not in POSTURES:
             raise RuntimeError(f"unknown posture {name!r} (one of {', '.join(POSTURES)})")
         posture, state = POSTURES[name]
@@ -302,6 +302,14 @@ class Emulator:
             time.sleep(0.5)
         self.note(f"(device state {state})")
         time.sleep(POSTURE_SETTLE)
+        # Folded shut, the cover screen shows the lock screen ("Swipe up to continue", the system's default fold
+        # behaviour), and an app launched under it has no surface to draw on.
+        deadline = time.monotonic() + POSTURE_TIMEOUT
+        while "isKeyguardShowing=true" in self.shell("dumpsys", "window", "displays", quiet=True):
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"{self.avd}'s lock screen didn't go after folding to {name}")
+            self.shell("wm", "dismiss-keyguard", quiet=True)
+            time.sleep(0.5)
 
     def orientation(self, landscape: bool | None) -> None:
         """Locks the screen in landscape or portrait (`wm user-rotation lock`, turned from the display's natural
