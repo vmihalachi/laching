@@ -61,12 +61,12 @@ internal sealed class LanguagePick(string startedIn, LanguageSetting? setting)
     internal static LanguagePick Start(LanguageSetting setting, string currentOverride, Func<string, bool> apply) =>
         new(setting.Stored is { } tag && apply(tag) ? tag : currentOverride, setting);
 
-    /// <summary>The override in effect, <c>""</c> for none or when it can't be read.</summary>
+    /// <summary>The override in effect (<see cref="Loc.Override"/>), <c>""</c> for none or when it can't be read.</summary>
     public static string CurrentOverride()
     {
         try
         {
-            return ApplicationLanguages.PrimaryLanguageOverride ?? "";
+            return Loc.Override;
         }
         catch (COMException)
         {

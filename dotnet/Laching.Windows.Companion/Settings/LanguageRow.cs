@@ -7,7 +7,6 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using AppInstance = Microsoft.Windows.AppLifecycle.AppInstance;
-using ApplicationLanguages = Microsoft.Windows.Globalization.ApplicationLanguages;
 
 namespace Laching.Windows.Companion.Settings;
 
@@ -17,7 +16,7 @@ namespace Laching.Windows.Companion.Settings;
 /// app's in its own words ("Deutsch", "Português (Brasil)"). A new language applies at the next start, so a note and a
 /// restart button show while the pick differs from the language this run started in (Narrator hears the note as it
 /// appears, and again as the button's help text), and a Settings window opened again shows the pick. With package
-/// identity the pick is the Windows App SDK's <c>ApplicationLanguages.PrimaryLanguageOverride</c>, which Windows keeps.
+/// identity the pick is Windows' <c>ApplicationLanguages.PrimaryLanguageOverride</c> (<see cref="Loc.Override"/>), which Windows keeps.
 /// Without one that override lasts only for the process, so the pick goes into the app's settings instead (the
 /// <see cref="LanguageSetting"/> the app passed to <see cref="CompanionApp.Start"/>, which sets it again at the next
 /// start); an app that passes none comes back in Windows' language after a restart. The words are the app's; the button
@@ -149,10 +148,10 @@ public sealed partial class LanguageRow : UserControl
         {
             try
             {
-                ApplicationLanguages.PrimaryLanguageOverride = tag;
+                Loc.Override = tag;
             }
             // Without a package "" (Windows' language) is refused; the row shows the pick either way.
-            catch (COMException) { }
+            catch (Exception e) when (e is ArgumentException or COMException) { }
         }
         UpdateRestart();
     }

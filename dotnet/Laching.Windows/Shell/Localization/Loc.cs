@@ -58,11 +58,32 @@ public static class Loc
     /// <see cref="UseLanguage"/>.
     /// </summary>
     public static string Choose(IReadOnlyList<string> languages) =>
-        LanguageMatch.Choose(
-            languages,
-            Microsoft.Windows.Globalization.ApplicationLanguages.PrimaryLanguageOverride,
-            global::Windows.System.UserProfile.GlobalizationPreferences.Languages
-        );
+        LanguageMatch.Choose(languages, Override, global::Windows.System.UserProfile.GlobalizationPreferences.Languages);
+
+    /// <summary>
+    /// The language picked in the app, <c>""</c> for none (Windows' languages). With package identity it is Windows'
+    /// <c>ApplicationLanguages.PrimaryLanguageOverride</c>, kept for the package, read and set there: the Windows App SDK's
+    /// getter only returns what this process set, so a pick made before a restart read as none, and its setter refuses
+    /// <c>""</c>. Without one it is the Windows App SDK's, which lasts for the process and refuses <c>""</c> (an
+    /// <see cref="ArgumentException"/>). The set applies at the next start: this run keeps the language
+    /// <see cref="UseLanguage"/> gave it.
+    /// </summary>
+    public static string Override
+    {
+        get =>
+            (
+                PackageIdentity.IsPackaged
+                    ? global::Windows.Globalization.ApplicationLanguages.PrimaryLanguageOverride
+                    : Microsoft.Windows.Globalization.ApplicationLanguages.PrimaryLanguageOverride
+            ) ?? "";
+        set
+        {
+            if (PackageIdentity.IsPackaged)
+                global::Windows.Globalization.ApplicationLanguages.PrimaryLanguageOverride = value;
+            else
+                Microsoft.Windows.Globalization.ApplicationLanguages.PrimaryLanguageOverride = value;
+        }
+    }
 
     public static string Get(string key) => Table.Get(key);
 
