@@ -112,7 +112,10 @@ public class ScreenshotRun(
         file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
-    /** [copy]'s result, copied again a frame later while it times out, as a busy emulator's copy sometimes does. */
+    /**
+     * [copy]'s result, copied again a moment and a frame later while it times out, as a busy emulator's copy sometimes
+     * does (most often in the first launch after a boot, while the system is still compiling the app).
+     */
     private suspend fun <T> retryingTimeouts(
         status: (T) -> Int,
         copy: suspend () -> T,
@@ -120,6 +123,7 @@ public class ScreenshotRun(
         var result = copy()
         repeat(COPY_RETRIES) {
             if (status(result) != PixelCopy.ERROR_TIMEOUT) return result
+            delay(COPY_PAUSE_MILLIS)
             awaitFrame()
             result = copy()
         }
@@ -211,7 +215,8 @@ public class ScreenshotRun(
     }
 
     private companion object {
-        /** How many times a copy that timed out is made again. */
-        const val COPY_RETRIES = 2
+        /** How many times a copy that timed out is made again, and the pause before each. */
+        const val COPY_RETRIES = 4
+        const val COPY_PAUSE_MILLIS = 300L
     }
 }

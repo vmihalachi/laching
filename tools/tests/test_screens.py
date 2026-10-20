@@ -752,6 +752,65 @@ class SnapshotTests(unittest.TestCase):
                                  ("dumpsys", "window", "displays")])
 
 
+
+class RunTests(unittest.TestCase):
+    """avd.Emulator.run against a faked device whose app draws `today` at once: `files` is its files/screens, `fails`
+    the commands (by their last word) that fail with `adb: device offline`, each time or `once`."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        patch = mock.patch.object(avd, "sdk_tool", return_value="adb")
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def run_app(self, files: dict[str, bytes], fails: set[str], once: bool) -> list:
+        """Runs the app on the faked device; the adb commands it took, in order."""
+        calls = []
+
+        class Fake(avd.Emulator):
+            def adb(self, *args, timeout=120, binary=False, quiet=False):
+                calls.append(args)
+                out, code = "", 0
+                if args[-1] in fails:
+                    if once:
+                        fails.discard(args[-1])
+                    error = "adb: device offline"
+                    return subprocess.CompletedProcess(args, 1, b"" if binary else "", error.encode() if binary else error)
+                if args[-1] == "files/screens" and args[-2] == "-rf":
+                    files.clear()
+                elif args[1:3] == ("am", "start"):
+                    files.update({"today-light.png": b"png", "today-dark.png": b"png", "done": b""})
+                elif args[-2:] == ("ls", "files/screens/done"):
+                    code = 0 if "done" in files else 1
+                elif args[-2:] == ("ls", "files/screens"):
+                    out = "\n".join(sorted(files))
+                elif args[0] == "exec-out":
+                    return subprocess.CompletedProcess(args, 0, files[args[-1].rpartition("/")[2]], b"")
+                return subprocess.CompletedProcess(args, code, out, "")
+
+        Fake("Pixel_8", 0, self.root / "emulator.log").run("app.dev", "app.dev/.Main", "de", "DE", ["today"], {},
+                                                            self.root / "raw")
+        return calls
+
+    def test_an_emulator_that_drops_offline_is_waited_for_and_asked_again(self):
+        files = {"old-light.png": b"old", "done": b""}  # the last run's, which this one mustn't take for its own
+        calls = self.run_app(files, {"files/screens", "files/screens/today-dark.png"}, once=True)
+        self.assertEqual(sorted(p.name for p in (self.root / "raw").iterdir()), ["today-dark.png", "today-light.png"])
+        self.assertEqual((self.root / "raw" / "today-dark.png").read_bytes(), b"png")
+        self.assertEqual(calls.count(("wait-for-device",)), 2, "after the failed rm and the failed copy")
+        self.assertEqual(calls[calls.index(("wait-for-device",)) - 1][-3:], ("rm", "-rf", "files/screens"))
+
+    def test_a_copy_that_fails_again_fails_the_run_instead_of_leaving_an_empty_shot(self):
+        with self.assertRaisesRegex(RuntimeError, "^couldn't copy today-dark.png: adb: device offline$"):
+            self.run_app({}, {"files/screens/today-dark.png"}, once=False)
+        self.assertFalse((self.root / "raw" / "today-dark.png").exists())
+
+    def test_a_launch_that_fails_again_fails_the_run(self):
+        with self.assertRaisesRegex(RuntimeError, "^couldn't launch the app: adb: device offline$"):
+            self.run_app({}, {"DE"}, once=False)
+
 class LayoutReportTests(unittest.TestCase):
     def report(self, results):
         out, err = io.StringIO(), io.StringIO()

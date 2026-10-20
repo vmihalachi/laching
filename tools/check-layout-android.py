@@ -85,12 +85,12 @@ def turns(config: companion.Config, device: str, posture: str | None,
 
 
 def problems_in(out: Path, shots: list[str]) -> list[str]:
-    """The run's problems.txt lines, plus the shots it didn't draw."""
+    """The run's problems.txt lines, plus the shots it didn't draw (missing or empty)."""
     listed = out / "problems.txt"
     problems = [line.strip() for line in listed.read_text("utf8").splitlines() if line.strip()] if listed.is_file() else []
     for shot in shots:
         for theme in ("light", "dark"):
-            if not (out / f"{shot}-{theme}.png").is_file():
+            if not (png := out / f"{shot}-{theme}.png").is_file() or png.stat().st_size == 0:
                 problems.append(f"{shot}-{theme}.png: not drawn")
     return problems
 
