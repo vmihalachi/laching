@@ -4,7 +4,7 @@ Renders a companion app's windows to PNGs, in light and dark (or in the contrast
 settings. Windows only. Reads companion.json (found from the current folder up, then from this script's, or
 $env:COMPANION_ROOT) for the app's project (windows.dir + windows.app) and where the shots go (windows.screenshots).
 
-Usage: laching/tools/windows/screenshots.ps1 [-Only name,name] [-Hidden|-Front] [-Out folder] [-Language tag]
+Usage: laching/tools/windows/screenshots.ps1 [-Only name,name] [-Hidden|-Front] [-Out folder] [-Language tag,tag]
                                               [-Skin id] [-Themes light,dark] [-Contrast] [-Platform x64|ARM64]
                                               [-Configuration Debug|Release] [-NoBuild|-BuildOnly]
                                               [-Project path\to\App.csproj]
@@ -16,7 +16,9 @@ Usage: laching/tools/windows/screenshots.ps1 [-Only name,name] [-Hidden|-Front] 
                   inactive (grey caption buttons). For checks, never the committed shots. An app on a Laching.Windows.Companion
                   older than 0.10.5 opens its windows in front, as before.
   -Front          the windows come forward and are shot active, as in use (the default without -Only); leave the PC alone.
-  -Language       the language to shoot in ("it"); the app's own choice otherwise.
+  -Language       the language to shoot in ("it"); the app's own choice otherwise. Several (it,de) go to <Out>\<language>
+                  each, from one launch of the app when its Laching.Windows.Companion takes several
+                  (LACHING_SCREENSHOT_LANGUAGES, which the run looks for in it), else from a launch each.
   -Skin           the skin the run wears (a skin id: auguste), owning in the sample store whatever unlocks it; the app's
                   default skin otherwise. Pair it with an -Out of its own: the file names don't carry the skin.
   -Themes         the themes to shoot, in that order (light, dark; both by default): a run asked for one never draws
@@ -47,7 +49,7 @@ so some windows have no shot). check-layout.ps1 runs it per language.
 param(
     [string[]] $Only = @(),
     [string] $Out = "",
-    [string] $Language = "",
+    [string[]] $Language = @(),
     [string] $Skin = "",
     [string[]] $Themes = @(),
     [ValidateSet("x64", "ARM64")][string] $Platform = $(if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq "Arm64") { "ARM64" } else { "x64" }),
@@ -63,6 +65,8 @@ $ErrorActionPreference = "Stop"
 # -Only home,settings and -Themes light,dark arrive as two strings each.
 $Only = @($Only | Where-Object { $_ }) -join ","
 $Themes = @($Themes | Where-Object { $_ }) -join ","
+# -Language it,de arrives as one string or two.
+$Languages = @($Language | ForEach-Object { $_ -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
 
 # companion.json as a dictionary: Windows PowerShell's ConvertFrom-Json refuses keys that differ only in case (a
 # character's glyph table has them), PowerShell 7's keeps only one of them without -AsHashtable.
@@ -153,14 +157,32 @@ if ($BuildOnly) { exit 0 }
 # A folder per run, so runs in several languages at once (check-layout.ps1) don't share one; removed once copied. A
 # packaged app's new files under AppData go to its own private copy, so its run writes under the project's obj\ instead.
 $work = if ($packaged) { Join-Path (Split-Path $Project) "obj\screenshots-$PID.run" } else { Join-Path ([IO.Path]::GetTempPath()) "$name-screenshots-$PID.run" }
+# Invoke-Run sets the folder and the languages for each launch.
 $settings = [ordered]@{
-    LACHING_SCREENSHOT_MODE     = if ($Only) { $Only } else { "all" }
-    LACHING_SCREENSHOT_DIR      = $work
-    LACHING_SCREENSHOT_LANGUAGE = $Language
-    LACHING_SCREENSHOT_HIDDEN   = if ($hide) { "1" } else { "0" }
-    LACHING_SCREENSHOT_SKIN     = $Skin
-    LACHING_SCREENSHOT_THEMES   = $Themes
+    LACHING_SCREENSHOT_MODE      = if ($Only) { $Only } else { "all" }
+    LACHING_SCREENSHOT_DIR       = ""
+    LACHING_SCREENSHOT_LANGUAGE  = ""
+    LACHING_SCREENSHOT_LANGUAGES = ""
+    LACHING_SCREENSHOT_HIDDEN    = if ($hide) { "1" } else { "0" }
+    LACHING_SCREENSHOT_SKIN      = $Skin
+    LACHING_SCREENSHOT_THEMES    = $Themes
 }
+
+# Whether the app shoots several languages in one launch: its Laching names LACHING_SCREENSHOT_LANGUAGES, in
+# Laching.Windows.Companion.dll or, published with Native AOT, in the exe (.NET keeps its strings in UTF-16).
+function Test-SeveralLanguages {
+    $library = Join-Path $folder "Laching.Windows.Companion.dll"
+    $file = if (Test-Path $library) { $library } else { $exe }
+    $needle = -join ("LACHING_SCREENSHOT_LANGUAGES".ToCharArray() | ForEach-Object { "$_`0" })
+    [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($file)).Contains($needle)
+}
+
+# The app's launches: every language in one when it takes several, else one per language (or one, in the app's own).
+$passes = @(
+    if ($Languages.Count -gt 1 -and (Test-SeveralLanguages)) { @{ Languages = $Languages } }
+    elseif ($Languages.Count -gt 0) { foreach ($one in $Languages) { @{ Languages = @($one) } } }
+    else { @{ Languages = @() } }
+)
 if ($packaged) {
     # A copy already running from this build would take the launch (an app is usually single-instance), and the
     # registration below would close it.
@@ -177,8 +199,13 @@ if ($packaged) {
     $package = Get-AppxPackage -Name $identity | Where-Object IsDevelopmentMode | Select-Object -First 1
 }
 
-# One run of the app into $work: its process, once it has exited.
-function Invoke-Run {
+# One launch of the app into $into, shooting $languages (several into a folder each): its process, once it has exited.
+function Invoke-Run([string] $into, [string[]] $languages) {
+    $settings.LACHING_SCREENSHOT_DIR = $into
+    # The first alone too, which an app on an older Laching reads instead.
+    $settings.LACHING_SCREENSHOT_LANGUAGE = if ($languages.Count) { $languages[0] } else { "" }
+    $settings.LACHING_SCREENSHOT_LANGUAGES = if ($languages.Count -gt 1) { $languages -join "," } else { "" }
+    $minutes = 10 * [Math]::Max(1, $languages.Count)
     if ($packaged) {
         # NAME="value" stays one argument, quotes removed, as Windows splits a command line.
         $arguments = ($settings.GetEnumerator() | ForEach-Object { "$($_.Key)=`"$($_.Value)`"" }) -join " "
@@ -188,19 +215,24 @@ function Invoke-Run {
             (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
         if (-not $run) { throw "The app didn't start in its package." }
         $null = $run.Handle # held, so its exit code can be read once it has exited
-        if (-not $run.WaitForExit(600000)) { $run.Kill(); throw "The screenshot run didn't finish in 10 minutes." }
+        if (-not $run.WaitForExit($minutes * 60000)) { $run.Kill(); throw "The screenshot run didn't finish in $minutes minutes." }
     }
     else {
         foreach ($setting in $settings.GetEnumerator()) { [Environment]::SetEnvironmentVariable($setting.Key, $setting.Value) }
         try {
             $run = Start-Process $exe -PassThru
-            if (-not $run.WaitForExit(600000)) { $run.Kill(); throw "The screenshot run didn't finish in 10 minutes." }
+            if (-not $run.WaitForExit($minutes * 60000)) { $run.Kill(); throw "The screenshot run didn't finish in $minutes minutes." }
         }
         finally {
             $settings.Keys | ForEach-Object { [Environment]::SetEnvironmentVariable($_, $null) }
         }
     }
-    $run
+    @{ Work = $into; Languages = $languages; Run = $run }
+}
+
+# Every launch, into a folder of its own under $work: $kind is "run", or "contrast" for the contrast theme's.
+function Invoke-Passes([string] $kind) {
+    for ($index = 0; $index -lt $passes.Count; $index++) { Invoke-Run (Join-Path $work "$kind-$index") $passes[$index].Languages }
 }
 
 # Windows' contrast theme, on and off as Settings does it (SPI_SETHIGHCONTRAST, the scheme last used), and the window
@@ -263,7 +295,7 @@ function Get-OtherRuns {
     }
 }
 
-$runs = @(@{ Work = $work; Run = (Invoke-Run) })
+$runs = @(Invoke-Passes "run")
 $noContrast = $null # why a -Contrast run has no contrast shots
 if ($Contrast) {
     Use-ContrastApi
@@ -286,10 +318,8 @@ if ($Contrast) {
                     }
                 }
                 if (-not $noContrast) {
-                    $contrastWork = "$work-contrast"
-                    $settings.LACHING_SCREENSHOT_DIR = $contrastWork
                     Set-ContrastTheme $true
-                    try { $runs += @{ Work = $contrastWork; Run = (Invoke-Run) } }
+                    try { $runs += @(Invoke-Passes "contrast") }
                     finally { Set-ContrastTheme $false }
                 }
             }
@@ -298,32 +328,44 @@ if ($Contrast) {
     }
 }
 
-# An app may render more than it was asked for (all of a demo's shots in one go): keep only those.
-$shots = @($runs | ForEach-Object { Get-ChildItem $_.Work -Filter *.png -ErrorAction SilentlyContinue } | Where-Object {
-        $shot = $_.Name
-        -not $Only -or @($Only -split "," | Where-Object { $shot.StartsWith($_.Trim(), [StringComparison]::Ordinal) }).Count -gt 0
-    })
-if ($shots.Count -eq 0) {
-    $runs | ForEach-Object { Remove-Item -LiteralPath $_.Work -Recurse -Force -ErrorAction SilentlyContinue }
-    throw "No screenshots were rendered (exit code $(($runs | ForEach-Object { $_.Run.ExitCode }) -join ', '))."
+# Where each launch's shots go: <Out>\<language> for several languages, else <Out>; a launch of several wrote each
+# language's into its own folder.
+$targets = [ordered]@{}
+foreach ($run in $runs) {
+    # $tongue, not $language: PowerShell names ignore case, and $Language is the [string[]] parameter.
+    foreach ($tongue in $(if ($run.Languages.Count) { $run.Languages } else { @("") })) {
+        $from = if ($run.Languages.Count -gt 1) { Join-Path $run.Work $tongue } else { $run.Work }
+        $to = if ($Languages.Count -gt 1) { Join-Path $Out $tongue } else { $Out }
+        if (-not $targets.Contains($to)) { $targets[$to] = @{ Language = $tongue; From = @() } }
+        $targets[$to].From += $from
+    }
 }
-New-Item -ItemType Directory -Force $Out | Out-Null
-Remove-Item (Join-Path $Out "problems.txt") -ErrorAction SilentlyContinue
-foreach ($shot in $shots) {
-    Copy-Item $shot.FullName $Out -Force
+$failed = $false
+foreach ($to in $targets.Keys) {
+    $target = $targets[$to]
+    # An app may render more than it was asked for (all of a demo's shots in one go): keep only those.
+    $shots = @($target.From | ForEach-Object { Get-ChildItem $_ -Filter *.png -ErrorAction SilentlyContinue } | Where-Object {
+            $shot = $_.Name
+            -not $Only -or @($Only -split "," | Where-Object { $shot.StartsWith($_.Trim(), [StringComparison]::Ordinal) }).Count -gt 0
+        })
+    New-Item -ItemType Directory -Force $to | Out-Null
+    Remove-Item (Join-Path $to "problems.txt") -ErrorAction SilentlyContinue
+    foreach ($shot in $shots) { Copy-Item $shot.FullName $to -Force }
+    "$($shots.Count) screenshots in $to"
+    $found = @(foreach ($from in $target.From) {
+            $problems = Join-Path $from "problems.txt"
+            if (Test-Path $problems) { Get-Content $problems -Encoding UTF8 }
+        })
+    if ($shots.Count -eq 0) { $found += "No screenshots were rendered (exit code $(($runs | ForEach-Object { $_.Run.ExitCode }) -join ', '))." }
+    if ($found.Count -gt 0) {
+        $failed = $true
+        $found | Set-Content (Join-Path $to "problems.txt") -Encoding UTF8
+        [Console]::Error.WriteLine("Problems$(if ($target.Language) { " ($($target.Language))" }):")
+        $found | ForEach-Object { [Console]::Error.WriteLine("  $_") }
+    }
 }
-"$($shots.Count) screenshots in $Out"
-$found = @(foreach ($run in $runs) {
-        $problems = Join-Path $run.Work "problems.txt"
-        if (Test-Path $problems) { Get-Content $problems -Encoding UTF8 }
-        Remove-Item -LiteralPath $run.Work -Recurse -Force -ErrorAction SilentlyContinue
-    })
-if ($found.Count -gt 0) {
-    $found | Set-Content (Join-Path $Out "problems.txt") -Encoding UTF8
-    [Console]::Error.WriteLine("Problems$(if ($Language) { " ($Language)" }):")
-    $found | ForEach-Object { [Console]::Error.WriteLine("  $_") }
-    exit 1
-}
+Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+if ($failed) { exit 1 }
 if ($noContrast) {
     [Console]::Error.WriteLine($noContrast)
     exit 1

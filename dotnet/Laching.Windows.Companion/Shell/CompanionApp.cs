@@ -91,11 +91,16 @@ public abstract class CompanionApp : Application
     /// </summary>
     protected abstract ICompanionLaunching MakeCompanion();
 
-    /// <summary>Runs a screenshot session instead of launching, when the app is in one; true when it took over.</summary>
+    /// <summary>
+    /// Runs a screenshot session instead of launching, when the app is in one; true when it took over. Called again for
+    /// each further language of a run of several (<see cref="ScreenshotCapture.Languages"/>), so it makes its model,
+    /// host and views anew each time, in <see cref="ScreenshotCapture.Language"/>.
+    /// </summary>
     protected virtual bool RunScreenshots() => false;
 
     protected sealed override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        ScreenshotCapture.RunAgain = () => RunScreenshots();
         if (RunScreenshots())
             return;
         // Made before the activation is read: its notifier registers as it's made, and a launch for a notification click
