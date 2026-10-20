@@ -49,7 +49,7 @@ param(
     [string] $Out = "",
     [string] $Language = "",
     [string] $Skin = "",
-    [string] $Themes = "",
+    [string[]] $Themes = @(),
     [ValidateSet("x64", "ARM64")][string] $Platform = $(if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq "Arm64") { "ARM64" } else { "x64" }),
     [ValidateSet("Debug", "Release")][string] $Configuration = "Debug",
     [string] $Project = "",
@@ -60,8 +60,9 @@ param(
     [switch] $BuildOnly
 )
 $ErrorActionPreference = "Stop"
-# -Only home,settings arrives as two strings.
+# -Only home,settings and -Themes light,dark arrive as two strings each.
 $Only = @($Only | Where-Object { $_ }) -join ","
+$Themes = @($Themes | Where-Object { $_ }) -join ","
 
 # companion.json as a dictionary: Windows PowerShell's ConvertFrom-Json refuses keys that differ only in case (a
 # character's glyph table has them), PowerShell 7's keeps only one of them without -AsHashtable.
