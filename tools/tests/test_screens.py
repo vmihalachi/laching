@@ -727,6 +727,30 @@ class SnapshotTests(unittest.TestCase):
             with mock.patch.dict(avd.os.environ, {"ANDROID_USER_HOME": "/u"}):
                 self.assertEqual(avd.avd_folder("Other"), Path("/u/avd/Other.avd"))
 
+    def test_folding_shut_dismisses_the_lock_screen_the_cover_screen_shows(self):
+        calls = []
+
+        class Fake(avd.Emulator):
+            locked = True
+
+            def adb(self, *args, timeout=120, binary=False, quiet=False):
+                calls.append(args)
+                return subprocess.CompletedProcess(args, 0, "OK\n", "")
+
+            def shell(self, *args, timeout=120, quiet=False):
+                calls.append(args)
+                if args[:2] == ("wm", "dismiss-keyguard"):
+                    self.locked = False
+                if args[:2] == ("cmd", "device_state"):
+                    return "Committed state: DeviceState{identifier=0, name='CLOSED', app_accessible=true}"
+                return f"  mHasSurface=true isKeyguardShowing={str(self.locked).lower()}" if args[0] == "dumpsys" else ""
+
+        with mock.patch.object(avd.time, "sleep"):
+            Fake("Pixel_8", 1, self.log).posture("closed")
+        self.assertEqual(calls, [("emu", "posture", "1"), ("cmd", "device_state", "state"),
+                                 ("dumpsys", "window", "displays"), ("wm", "dismiss-keyguard"),
+                                 ("dumpsys", "window", "displays")])
+
 
 class LayoutReportTests(unittest.TestCase):
     def report(self, results):

@@ -90,16 +90,39 @@ public class ScreenshotRun(
             return
         }
         val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
-        val code =
-            suspendCancellableCoroutine { continuation ->
-                PixelCopy.request(activity.window, bitmap, { continuation.resume(it) }, Handler(Looper.getMainLooper()))
+        try {
+            val code =
+                retryingTimeouts({ it }) {
+                    suspendCancellableCoroutine { continuation ->
+                        PixelCopy.request(activity.window, bitmap, { continuation.resume(it) }, Handler(Looper.getMainLooper()))
+                    }
+                }
+            if (code != PixelCopy.SUCCESS) {
+                report("PixelCopy failed with $code")
+                return
             }
-        if (code != PixelCopy.SUCCESS) {
-            report("PixelCopy failed with $code")
+            overlayWindows(bitmap, view)
+        } catch (error: IllegalArgumentException) {
+            // PixelCopy throws for a window with no surface: the activity isn't on a screen that's on, as under the
+            // lock screen a foldable shows when it's folded shut.
+            report("the window has no surface to copy (${error.message}): is the screen locked or off?")
             return
         }
-        overlayWindows(bitmap, view)
         file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
+    /** [copy]'s result, copied again a frame later while it times out, as a busy emulator's copy sometimes does. */
+    private suspend fun <T> retryingTimeouts(
+        status: (T) -> Int,
+        copy: suspend () -> T,
+    ): T {
+        var result = copy()
+        repeat(COPY_RETRIES) {
+            if (status(result) != PixelCopy.ERROR_TIMEOUT) return result
+            awaitFrame()
+            result = copy()
+        }
+        return result
     }
 
     /**
@@ -126,13 +149,15 @@ public class ScreenshotRun(
         val at = IntArray(2)
         val main = activity.mainExecutor
         for (root in windows) {
-            val request =
-                PixelCopy.Request.Builder
-                    .ofWindow(root)
-                    .build()
             val result =
-                suspendCancellableCoroutine { continuation ->
-                    PixelCopy.request(request, main, continuation::resume)
+                retryingTimeouts({ it.status }) {
+                    val request =
+                        PixelCopy.Request.Builder
+                            .ofWindow(root)
+                            .build()
+                    suspendCancellableCoroutine { continuation ->
+                        PixelCopy.request(request, main, continuation::resume)
+                    }
                 }
             if (result.status != PixelCopy.SUCCESS) {
                 report("PixelCopy of a window over the activity failed with ${result.status}")
@@ -182,5 +207,10 @@ public class ScreenshotRun(
                 null
             }
         return if (id != null) "$name #$id" else name
+    }
+
+    private companion object {
+        /** How many times a copy that timed out is made again. */
+        const val COPY_RETRIES = 2
     }
 }
