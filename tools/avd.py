@@ -19,7 +19,9 @@ launch (the app's own mode names; "screens" when the shot's env names none), `LA
 `LACHING_LANG` and `LACHING_REGION` give the locale, so no reboot between languages; the app writes
 `files/screens/<shot>-<theme>.png`, `problems.txt` and `done`, then finishes. The files come back through
 `adb exec-out run-as <app> cat`, which works on every debuggable build (adb pull can't read an app's private files).
-Each command goes to the log with the seconds it took, as do the boot and each run.
+A run's adb commands that fail (an emulator on a busy host drops offline for a moment) are tried once more after
+`adb wait-for-device`, and the run fails if they fail again, rather than taking the last run's files or an empty copy
+for this run's. Each command goes to the log with the seconds it took, as do the boot and each run.
 
 Needs the Android SDK: `emulator` and `adb` on PATH or under $ANDROID_HOME ($ANDROID_SDK_ROOT, else
 ~/Library/Android/sdk, ~/Android/Sdk, or Android/Sdk under %LOCALAPPDATA% on Windows). The Debug APK comes from
@@ -45,6 +47,7 @@ DEFAULT_MODE = "screens"
 BOOT_TIMEOUT = 300  # seconds for the AVD to boot
 CLOCK_TIMEOUT = 30  # seconds for a loaded snapshot's clock to catch up with the host's
 LAUNCH_TIMEOUT = 600  # seconds for one run of the app
+OFFLINE_TIMEOUT = 60  # seconds for an emulator that dropped offline during a run to come back
 FIRST_PORT = 5554  # adb's emulator ports: 5554, 5556, … (each AVD takes a console and an adb port)
 SNAPSHOT = "laching-screens"  # the AVD snapshot a cold boot saves and later runs load
 SETUP = 1  # what a snapshot holds (demo_mode): bump it when that changes, so every AVD saves a new one
@@ -173,6 +176,20 @@ class Emulator:
 
     def shell(self, *args: str, timeout: float = 120, quiet: bool = False) -> str:
         return self.adb("shell", *args, timeout=timeout, quiet=quiet).stdout.strip()
+
+    def checked(self, *args: str, doing: str, binary: bool = False, quiet: bool = False) -> subprocess.CompletedProcess:
+        """`adb *args`, tried once more after `wait-for-device` when it fails; raises when it fails again."""
+        done = self.adb(*args, binary=binary, quiet=quiet)
+        if done.returncode != 0:
+            try:
+                self.adb("wait-for-device", timeout=OFFLINE_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                pass
+            done = self.adb(*args, binary=binary, quiet=quiet)
+        if done.returncode != 0:
+            error = done.stderr.decode("utf8", "replace") if binary else done.stderr
+            raise RuntimeError(f"couldn't {doing}: {error.strip() or f'adb exited with {done.returncode}'}")
+        return done
 
     def boot(self) -> None:
         """Starts the emulator and waits for Android to come up in demo mode: from the AVD's snapshot when its marker
@@ -342,13 +359,13 @@ class Emulator:
         """One launch in screenshot mode: the shots and problems.txt land in `raw` (emptied first, unless `clear` is
         False: then the new problems.txt lines follow the old ones). Raises when the run doesn't finish in time."""
         self.shell("am", "force-stop", app_id)
-        self.shell("run-as", app_id, "rm", "-rf", "files/screens")
+        self.checked("shell", "run-as", app_id, "rm", "-rf", "files/screens", doing="clear the last run's files")
         command = ["am", "start", "-W", "-n", component, "--es", MODE, extras.get(MODE, DEFAULT_MODE),
                    "--es", SCREENS, ",".join(shots), "--es", LANG, language, "--es", REGION, region]
         for name, value in extras.items():
             if name != MODE:
                 command += ["--es", name, value]
-        self.shell(*command)
+        self.checked("shell", *command, doing="launch the app")
         began = time.monotonic()
         deadline = began + timeout
         while self.adb("shell", "run-as", app_id, "ls", "files/screens/done", quiet=True).returncode != 0:
@@ -360,10 +377,12 @@ class Emulator:
         if clear:
             shutil.rmtree(raw, ignore_errors=True)
         raw.mkdir(parents=True, exist_ok=True)
-        for name in self.shell("run-as", app_id, "ls", "files/screens").split():
+        listed = self.checked("shell", "run-as", app_id, "ls", "files/screens", doing="list the run's files").stdout
+        for name in listed.split():
             if name == "done":
                 continue
-            data = self.adb("exec-out", "run-as", app_id, "cat", f"files/screens/{name}", binary=True, quiet=True).stdout
+            data = self.checked("exec-out", "run-as", app_id, "cat", f"files/screens/{name}", doing=f"copy {name}",
+                                binary=True, quiet=True).stdout
             if name == "problems.txt" and not clear and (raw / name).is_file():
                 data = (raw / name).read_bytes() + data
             (raw / name).write_bytes(data)

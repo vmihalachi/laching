@@ -444,6 +444,15 @@ while not (state / "killed").exists():
         self.assertEqual(result.returncode, 1)
         self.assertIn("no AVD: --devices NAME", result.stderr)
 
+    def test_check_layout_android_counts_an_empty_shot_as_not_drawn(self):
+        spec = importlib.util.spec_from_file_location("check_layout_android", TOOLS / "check-layout-android.py")
+        tool = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tool)
+        (self.root / "today-light.png").write_bytes(b"png")
+        (self.root / "today-dark.png").write_bytes(b"")
+        self.assertEqual(tool.problems_in(self.root, ["today", "help"]),
+                         ["today-dark.png: not drawn", "help-light.png: not drawn", "help-dark.png: not drawn"])
+
     @unittest.skipIf(WINDOWS, "the fakes are sh scripts")
     def test_verify_runs_the_kotlin_checks(self):
         self.android_config(extra_shot=False)
