@@ -6,7 +6,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <!-- One version for every NuGet package: the release they last shipped in. scripts/release.sh bump moves it only
          when they changed since, so it can trail the tag. -->
-    <LachingVersion Condition="'$(LachingVersion)' == ''">0.18.0</LachingVersion>
+    <LachingVersion Condition="'$(LachingVersion)' == ''">0.19.11</LachingVersion>
     <Version>$(LachingVersion)</Version>
     <Authors>Vlad Mihalachi</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
