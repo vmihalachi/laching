@@ -90,11 +90,12 @@ public class ScreenshotRun(
             return
         }
         val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+        val main = Handler(Looper.getMainLooper())
         try {
             val code =
                 retryingTimeouts({ it }) {
                     suspendCancellableCoroutine { continuation ->
-                        PixelCopy.request(activity.window, bitmap, { continuation.resume(it) }, Handler(Looper.getMainLooper()))
+                        PixelCopy.request(activity.window, bitmap, { continuation.resume(it) }, main)
                     }
                 }
             if (code != PixelCopy.SUCCESS) {
