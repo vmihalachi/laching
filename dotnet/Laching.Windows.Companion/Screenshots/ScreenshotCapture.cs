@@ -71,6 +71,25 @@ public static class ScreenshotCapture
     public const string LanguageVariable = "LACHING_SCREENSHOT_LANGUAGE";
 
     /// <summary>
+    /// The languages one run shoots, one after the other, comma-separated (<c>it,de</c>): each into a folder of its own
+    /// under <see cref="DirectoryVariable"/> (<c>&lt;dir&gt;\it</c>), its model and windows made again in it
+    /// (<see cref="Finish"/> runs the app's screenshot run again), so a run of every language launches the app once. Read
+    /// before <see cref="LanguageVariable"/>, which the scripts set to the first of them: an app on an older Laching
+    /// shoots only that one, flat in the folder, which is how the scripts tell it can't take the rest.
+    /// </summary>
+    public const string LanguagesVariable = "LACHING_SCREENSHOT_LANGUAGES";
+
+    /// <summary>Which of <see cref="Languages"/> the run is shooting.</summary>
+    private static int languageIndex;
+
+    /// <summary>
+    /// Runs the app's screenshot run again, for the next of <see cref="Languages"/>: set by <c>CompanionApp</c>, which
+    /// calls the app's <c>RunScreenshots</c>; null in an app that runs its shots otherwise, which then shoots only the
+    /// first language.
+    /// </summary>
+    internal static Action? RunAgain { get; set; }
+
+    /// <summary>
     /// <c>1</c>: the run opens its windows hidden (<see cref="Shell.WindowManager{TWindow}.OpensHidden"/>), drawn and
     /// captured but never on screen and never taking the focus, so it leaves the PC to whoever is using it, and shoots each
     /// once it has drawn instead of after <see cref="Settle"/>; the shots show the windows inactive. The scripts set it
@@ -109,11 +128,21 @@ public static class ScreenshotCapture
     public static bool IsHidden => Setting(HiddenVariable) == "1";
 
     /// <summary>
-    /// The language asked for (<see cref="LanguageVariable"/>), else null. An app passes it to <c>Loc.UseLanguage</c>
+    /// The language being shot (one of <see cref="Languages"/>), else null. An app passes it to <c>Loc.UseLanguage</c>
     /// instead of <c>Loc.Choose</c>'s pick, so one machine shoots every language without changing its own.
     /// </summary>
-    public static string? Language =>
-        IsEnabled && Setting(LanguageVariable) is { Length: > 0 } language ? language : null;
+    public static string? Language => Languages is { Count: > 0 } languages ? languages[Math.Min(languageIndex, languages.Count - 1)] : null;
+
+    /// <summary>
+    /// The languages asked for, in order: <see cref="LanguagesVariable"/>'s, else <see cref="LanguageVariable"/>'s one;
+    /// empty when neither is set. <see cref="Language"/> is the one being shot.
+    /// </summary>
+    public static IReadOnlyList<string> Languages =>
+        IsEnabled ? LanguagesFrom(Setting(LanguagesVariable)) is { Count: > 0 } several ? several : LanguagesFrom(Setting(LanguageVariable)) : [];
+
+    /// <summary>The language tags in <paramref name="raw"/>, comma-separated, each once, in order.</summary>
+    public static IReadOnlyList<string> LanguagesFrom(string? raw) =>
+        [.. (raw ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Distinct(StringComparer.OrdinalIgnoreCase)];
 
     /// <summary>The skin asked for (<see cref="SkinVariable"/>), else null.</summary>
     public static SkinId? Skin => IsEnabled && Setting(SkinVariable) is { Length: > 0 } skin ? new SkinId(skin) : (SkinId?)null;
@@ -133,12 +162,14 @@ public static class ScreenshotCapture
 
     /// <summary>
     /// <see cref="DirectoryVariable"/>, else a folder per process in the temporary directory (<c>screenshots-&lt;pid&gt;</c>),
-    /// so runs in several languages at once (the layout check) don't share it.
+    /// so runs in several languages at once (the layout check) don't share it; in a run of several
+    /// <see cref="Languages"/>, the <see cref="Language"/>'s folder in it.
     /// </summary>
     public static string OutputDirectory =>
-        Setting(DirectoryVariable) is { Length: > 0 } dir
-            ? dir
-            : Path.Combine(Path.GetTempPath(), $"screenshots-{Environment.ProcessId}");
+        Path.Combine(
+            Setting(DirectoryVariable) is { Length: > 0 } dir ? dir : Path.Combine(Path.GetTempPath(), $"screenshots-{Environment.ProcessId}"),
+            Languages.Count > 1 ? Language! : ""
+        );
 
     /// <summary>What the run found wrong so far, one line each, starting with the shot's file name.</summary>
     public static IReadOnlyList<string> Problems => Found;
@@ -184,12 +215,23 @@ public static class ScreenshotCapture
         Directory.CreateDirectory(OutputDirectory);
     }
 
-    /// <summary>Writes the problems found (<see cref="ProblemsFile"/>), prints the output folder (the run script reads the last line) and quits.</summary>
+    /// <summary>
+    /// Writes the problems found (<see cref="ProblemsFile"/>) and prints the output folder (the run script reads the last
+    /// line), then runs the app's screenshot run again in the next of <see cref="Languages"/>, or quits after the last.
+    /// </summary>
     public static void Finish()
     {
         if (Found.Count > 0)
             File.WriteAllLines(Path.Combine(OutputDirectory, ProblemsFile), Found);
         Console.WriteLine(OutputDirectory);
+        if (languageIndex + 1 < Languages.Count && RunAgain is { } runAgain)
+        {
+            languageIndex++;
+            Found.Clear();
+            // Once this run's last window has closed and its stack unwound.
+            Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread().TryEnqueue(() => runAgain());
+            return;
+        }
         Application.Current.Exit();
     }
 

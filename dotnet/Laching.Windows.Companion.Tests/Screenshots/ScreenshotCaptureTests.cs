@@ -24,6 +24,46 @@ public sealed class ScreenshotCaptureTests
         Assert.Equal(themes, string.Join(",", ScreenshotCapture.ThemesFrom(raw)));
 
     [Theory]
+    [InlineData(null, "")]
+    [InlineData("it", "it")]
+    [InlineData("it, de,,IT", "it,de")]
+    public void TheLanguagesAskedForAreShotInOrderEachOnce(string? raw, string languages) =>
+        Assert.Equal(languages, string.Join(",", ScreenshotCapture.LanguagesFrom(raw)));
+
+    [Fact]
+    public void ARunOfSeveralLanguagesShootsEachIntoAFolderOfItsOwn()
+    {
+        string[] names =
+        [
+            ScreenshotCapture.ModeVariable,
+            ScreenshotCapture.DirectoryVariable,
+            ScreenshotCapture.LanguageVariable,
+            ScreenshotCapture.LanguagesVariable,
+        ];
+        var before = names.ToDictionary(name => name, Environment.GetEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(ScreenshotCapture.ModeVariable, "all");
+            Environment.SetEnvironmentVariable(ScreenshotCapture.DirectoryVariable, @"C:\shots");
+            // The scripts set the one to the first of the several, for an app on an older Laching.
+            Environment.SetEnvironmentVariable(ScreenshotCapture.LanguageVariable, "it");
+            Environment.SetEnvironmentVariable(ScreenshotCapture.LanguagesVariable, "it,de");
+            Assert.Equal(["it", "de"], ScreenshotCapture.Languages);
+            Assert.Equal("it", ScreenshotCapture.Language);
+            Assert.Equal(@"C:\shots\it", ScreenshotCapture.OutputDirectory);
+
+            Environment.SetEnvironmentVariable(ScreenshotCapture.LanguagesVariable, null);
+            Assert.Equal(["it"], ScreenshotCapture.Languages);
+            Assert.Equal(@"C:\shots", ScreenshotCapture.OutputDirectory);
+        }
+        finally
+        {
+            foreach (var (name, value) in before)
+                Environment.SetEnvironmentVariable(name, value);
+        }
+    }
+
+    [Theory]
     [InlineData("1", true)]
     [InlineData("0", false)]
     [InlineData("", false)]

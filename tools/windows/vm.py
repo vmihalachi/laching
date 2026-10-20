@@ -9,6 +9,7 @@ in the app's Windows workflow. `vm.sh` runs this file.
     laching/tools/windows/vm.sh build [x64|ARM64…] [-- ARGS]   # the WinUI app (windows.app), Debug; both platforms
     laching/tools/windows/vm.sh test [-- ARGS]                 # windows.coreTests and windows.appTests
     laching/tools/windows/vm.sh screenshots DIR [-- ARGS]      # the screenshot script; the PNGs land in DIR on the Mac
+                                                                # (DIR/<LANG> for -Language it,de)
     laching/tools/windows/vm.sh check-layout [LANG…] [-- ARGS] # check-layout.ps1: one build, the languages side by side;
                                                                 # the PNGs land in <windows.dir>/build/layout-check/<LANG>
     laching/tools/windows/vm.sh smoke [x64|ARM64] [-- ARGS]    # publish the MSIX (Native AOT), then smoke-package.ps1
@@ -542,7 +543,9 @@ def screenshots_body(ctx: Context, mac_dir: Path, extra: str) -> str:
         f"$shots = Reset-GuestFolder {ps(shots)}",
         "try {",
         f"  {step(f'screenshots ({script})', f'& {ps(script)} -Out $shots {extra}'.rstrip())}",
-        f"}} finally {{ Copy-Shots $shots {ps(guest_path(mac_dir))} }}",
+        # Several languages (-Language it,de) leave a folder each.
+        f"}} finally {{ if (Get-ChildItem -LiteralPath $shots -Directory) {{ Copy-ShotFolders $shots {ps(guest_path(mac_dir))} }}"
+        f" else {{ Copy-Shots $shots {ps(guest_path(mac_dir))} }} }}",
         "Exit-Steps",
     ))
 

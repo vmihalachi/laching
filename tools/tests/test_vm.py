@@ -159,6 +159,7 @@ class BodyTests(FixtureAppTestCase):
         self.assertIn(vm.guest_path(vm.HERE / "screenshots.ps1"), body, "Laching's, through the share")
         self.assertIn("-Out $shots -Language it", body)
         self.assertIn(f"Copy-Shots $shots {vm.ps(vm.guest_path(shots))}", body)
+        self.assertIn(f"Copy-ShotFolders $shots {vm.ps(vm.guest_path(shots))}", body, "-Language it,de: a folder each")
         wrapper = self.root / "windows" / "scripts" / "screenshots.ps1"
         wrapper.parent.mkdir(parents=True, exist_ok=True)
         wrapper.write_text("& \"$PSScriptRoot/../../laching/tools/windows/screenshots.ps1\" @args\n", "utf8")
