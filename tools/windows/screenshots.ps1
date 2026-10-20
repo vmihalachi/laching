@@ -49,7 +49,7 @@ param(
     [string] $Out = "",
     [string] $Language = "",
     [string] $Skin = "",
-    [string] $Themes = "",
+    [string[]] $Themes = @(),
     [ValidateSet("x64", "ARM64")][string] $Platform = $(if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq "Arm64") { "ARM64" } else { "x64" }),
     [ValidateSet("Debug", "Release")][string] $Configuration = "Debug",
     [string] $Project = "",
@@ -60,8 +60,9 @@ param(
     [switch] $BuildOnly
 )
 $ErrorActionPreference = "Stop"
-# -Only home,settings arrives as two strings.
+# -Only home,settings and -Themes light,dark arrive as two strings each.
 $Only = @($Only | Where-Object { $_ }) -join ","
+$Themes = @($Themes | Where-Object { $_ }) -join ","
 
 # companion.json as a dictionary: Windows PowerShell's ConvertFrom-Json refuses keys that differ only in case (a
 # character's glyph table has them), PowerShell 7's keeps only one of them without -AsHashtable.
@@ -244,7 +245,8 @@ function Set-ContrastTheme([bool] $on) {
 }
 
 # The other screenshot runs on this PC that a contrast theme would reach: PowerShell running screenshots.ps1 or
-# check-layout.ps1 (by -File, or in an -EncodedCommand, as vm.sh starts them), apart from this one and its parents.
+# check-layout.ps1 (by -File, from a script that runs them, as vm.sh starts them, or in an -EncodedCommand), apart from
+# this one and its parents.
 function Get-OtherRuns {
     $processes = @(Get-CimInstance Win32_Process)
     $mine = @()
@@ -253,6 +255,9 @@ function Get-OtherRuns {
         $line = "$($_.CommandLine)"
         if ($line -match '-(?:e|ec|enc|encodedcommand)\s+(\S+)') {
             try { $line += [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($Matches[1])) } catch { }
+        }
+        elseif ($line -match '-(?:f|fi|fil|file)\s+(?:"([^"]+)"|(\S+))') {
+            try { $line += Get-Content -Raw -LiteralPath "$($Matches[1])$($Matches[2])" } catch { }
         }
         $line -match '(screenshots|check-layout)\.ps1'
     }

@@ -583,13 +583,13 @@ while not (state / "killed").exists():
         self.assertIn("skip  WinUI app: builds on Windows or in the Parallels VM (Parallels has no VM named "
                       "'Windows 11'", result.stdout, result.stderr)
         # With a VM, vm.sh builds it (this fake one runs nothing, so the copy into it fails).
-        self.fake("prlctl", f'''echo "$*" >> "{self.log}"
+        self.fake("prlctl", f'''printf '%s\\n' "$*" >> "{self.log}"
 case "$1" in status) echo "VM $2 exist running" ;; exec) [ "$3" = --current-user ] && [ "$4" = cmd ] || exit 1 ;; esac
 ''')
         result = self.run_script("verify.sh", "--", app, env={"HOME": str(self.root)})
         self.assertIn("FAIL  WinUI app builds in the VM (Fixture.App, x64 + ARM64)", result.stdout, result.stderr)
         self.assertIn("the copy into the VM failed", result.stdout)
-        self.assertIn("powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand",
+        self.assertIn("powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \\\\Mac\\AllFiles",
                       self.log.read_text())
 
     def test_verify_reads_the_submodules_under_a_git_hook(self):

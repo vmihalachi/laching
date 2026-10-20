@@ -7,7 +7,6 @@ vm-guest.ps1's Sync-Tree runs over a folder: what it unpacks, deletes, keeps and
 
 from __future__ import annotations
 
-import base64
 import io
 import json
 import os
@@ -118,10 +117,8 @@ class PathTests(unittest.TestCase):
             self.assertEqual(vm.checkout_key(one), vm.checkout_key(one))
             self.assertNotEqual(vm.checkout_key(one), vm.checkout_key(two))
 
-    def test_powershell_quoting_and_encoding(self):
+    def test_powershell_quoting(self):
         self.assertEqual(vm.ps("it's"), "'it''s'")
-        script = "Write-Output 'ciao'"
-        self.assertEqual(base64.b64decode(vm.encode(script)).decode("utf-16-le"), script)
 
     def test_platforms(self):
         self.assertEqual(vm.parse_platforms([]), [])
@@ -188,6 +185,39 @@ class BodyTests(FixtureAppTestCase):
         self.assertIn(f". {vm.ps(vm.guest_path(vm.GUEST_SCRIPT))}", script)
         self.assertIn(f"Resolve-GuestFolder '%USERPROFILE%\\laching-vm\\{self.ctx.key}'", script)
         self.assertIn("catch", script)
+
+    def test_a_long_script_runs_from_a_file_with_a_short_command_line(self):
+        # Every screen in -Only: the encoded command was past the 4 KB prlctl exec takes, which it refused.
+        names = ",".join(f"screen-{n:02}-with-a-longer-name" for n in range(120))
+        body = vm.check_layout_body(self.ctx, Path("/tmp/layout"), ["en"], f"-Only {names}")
+        seen = []
+
+        def prlctl_exec(args, capture, attempts=3):
+            script, = self.ctx.stage.glob("run-*.ps1")
+            seen.append((args, capture, script, script.read_bytes()))
+            return subprocess.CompletedProcess(args, 7, "out", "err")
+
+        with mock.patch.object(vm, "prlctl_exec", prlctl_exec):
+            done = vm.powershell(self.ctx, body, capture=True)
+        self.assertEqual((done.returncode, done.stdout, done.stderr), (7, "out", "err"), "prlctl exec's, as they are")
+        (args, capture, script, content), = seen
+        self.assertTrue(capture)
+        self.assertEqual(args[:-1], ["Windows 11", "--current-user", "powershell.exe", "-NoProfile", "-NonInteractive",
+                                     "-ExecutionPolicy", "Bypass", "-File"])
+        self.assertEqual(args[-1], vm.guest_path(script), "the stage, through the share")
+        self.assertRegex(script.name, r"^run-.+\.ps1$")
+        self.assertLess(len(" ".join(args)), vm.LONG_COMMAND)
+        self.assertTrue(content.startswith(b"\xef\xbb\xbf"), "a BOM, or Windows PowerShell reads it as ANSI")
+        self.assertEqual(content[3:].decode("utf8"), vm.guest_script(self.ctx, body))
+        self.assertIn(names, content.decode("utf8"))
+        self.assertFalse(script.exists(), "the file goes once the run ends")
+
+        def fails(args, capture, attempts=3):
+            raise KeyboardInterrupt
+
+        with mock.patch.object(vm, "prlctl_exec", fails), self.assertRaises(KeyboardInterrupt):
+            vm.powershell(self.ctx, "exit 0")
+        self.assertEqual(list(self.ctx.stage.glob("run-*")), [], "however the run ends")
 
 
 class LinkedTests(FixtureAppTestCase):
@@ -364,6 +394,26 @@ echo "ran $*"
             done = vm.prlctl_exec(["Windows 11", "cmd"], capture=True, attempts=2)
             self.assertEqual(done.returncode, 255, "gives up after the attempts")
             self.assertIn("PrlJob_GetResult", done.stderr)
+        finally:
+            os.environ["PATH"] = previous
+
+    def test_a_refused_long_command_is_put_down_to_its_length(self):
+        path = self.bin / "prlctl"
+        path.write_text('#!/bin/sh\necho "PrlVmGuest_RunProgram: Unable to open new session in this virtual machine. '
+                        'Make sure your virtual machine has finished booting." >&2\nexit 255\n', "utf8")
+        path.chmod(0o755)
+        previous = os.environ["PATH"]
+        os.environ["PATH"] = f"{self.bin}:{previous}"
+        try:
+            done = vm.prlctl_exec(["Windows 11", "--current-user", "powershell.exe", "-EncodedCommand", "A" * 5356],
+                                  capture=True)
+            self.assertEqual(done.returncode, 255)
+            self.assertIn("finished booting", done.stderr, "prlctl's own words stay")
+            self.assertRegex(done.stderr, r"refused a command line of 54\d\d characters")
+            self.assertIn("not a VM that isn't ready or signed in", done.stderr)
+            done = vm.prlctl_exec(["Windows 11", "--current-user", "cmd", "/c", "exit 0"], capture=True)
+            self.assertNotIn("command line", done.stderr, "a short one is the VM's")
+            self.assertIsNone(vm.too_long(["x" * 5000], 1, vm.NEW_SESSION), "only with prlctl's 255")
         finally:
             os.environ["PATH"] = previous
 

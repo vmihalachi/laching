@@ -46,12 +46,13 @@ Environment:
 Without prlctl or the VM (Linux, a cloud session, a Mac without Parallels) every command prints one line saying so and
 exits 3, so a caller skips instead of failing. A suspended or paused VM is resumed; a stopped one is left alone.
 Commands run as the user signed in to Windows (`prlctl exec --current-user`), who sees the shares and the desktop.
+Each one's PowerShell goes to the VM as a script file beside the run's lock files, which the VM reads through the share
+(`powershell.exe -File`), since prlctl exec refuses a command line past about 4 KB (a long `-Only`, say).
 Standard library only.
 """
 
 from __future__ import annotations
 
-import base64
 import fcntl
 import hashlib
 import json
@@ -63,6 +64,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import threading
 import time
 from contextlib import ExitStack, contextmanager
@@ -258,6 +260,19 @@ def prlctl(*args: str, capture: bool = True) -> subprocess.CompletedProcess:
 
 # What prlctl exec prints, now and then, when it loses a job in Parallels Tools: the command may not have run at all.
 LOST_JOB = re.compile(r"^PrlJob_\w+: .*$", re.M)
+# What prlctl exec says, with exit code 255, when it can't start the command in the VM: a VM still booting or no one
+# signed in, but also a command line past about 4 KB, so past LONG_COMMAND characters it's put down to the length.
+NEW_SESSION = "Unable to open new session"
+LONG_COMMAND = 3500
+
+
+def too_long(args: list[str], code: int, stderr: str) -> str | None:
+    """What to say when prlctl exec refused `args` for their length, which it words as a VM that isn't ready."""
+    length = len(" ".join(args))
+    if code != 255 or NEW_SESSION not in stderr or length <= LONG_COMMAND:
+        return None
+    return (f"vm.sh: prlctl exec refused a command line of {length} characters (it takes about 4,000): its "
+            f"{NEW_SESSION!r} is about the length, not a VM that isn't ready or signed in\n")
 
 
 def prlctl_exec(args: list[str], capture: bool, attempts: int = 3) -> subprocess.CompletedProcess:
@@ -290,6 +305,11 @@ def prlctl_exec(args: list[str], capture: bool, attempts: int = 3) -> subprocess
         if lost and not capture:
             print(f"vm.sh: prlctl lost the command in the VM ({LOST_JOB.search(stderr).group(0)}); run it again",
                   file=sys.stderr)
+        if hint := too_long(args, process.returncode, stderr):
+            stderr += hint
+            if not capture:
+                sys.stderr.write(hint)
+                sys.stderr.flush()
         return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
     raise AssertionError("unreachable")
 
@@ -340,10 +360,6 @@ def status(vm: str) -> str:
     return f"the VM {vm!r} is ready"
 
 
-def encode(script: str) -> str:
-    return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
-
-
 def guest_script(ctx: Context, body: str) -> str:
     """A PowerShell script for the VM: vm-guest.ps1's functions, the copy as the current folder, then `body`, which
     ends in `exit`. An exception exits 1 with its message."""
@@ -362,9 +378,20 @@ def guest_script(ctx: Context, body: str) -> str:
 
 
 def powershell(ctx: Context, body: str, capture: bool = False) -> subprocess.CompletedProcess:
-    """Runs `body` (see guest_script) in the VM as the signed-in user; the output streams unless `capture`."""
-    return prlctl_exec([ctx.vm, "--current-user", "powershell.exe", "-NoProfile", "-NonInteractive",
-                        "-ExecutionPolicy", "Bypass", "-EncodedCommand", encode(guest_script(ctx, body))], capture)
+    """Runs `body` (see guest_script) in the VM as the signed-in user; the output streams unless `capture`. The script
+    goes as a file in the stage, which the VM runs through the share, so the command line stays short however long
+    `body` is (see LONG_COMMAND); the file goes once the run ends."""
+    ctx.stage.mkdir(parents=True, exist_ok=True)
+    # UTF-8 with a BOM, which Windows PowerShell 5.1 reads as UTF-8 (without one, as the ANSI code page).
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8-sig", prefix="run-", suffix=".ps1", dir=ctx.stage,
+                                     delete=False) as file:
+        file.write(guest_script(ctx, body))
+    script = Path(file.name)
+    try:
+        return prlctl_exec([ctx.vm, "--current-user", "powershell.exe", "-NoProfile", "-NonInteractive",
+                            "-ExecutionPolicy", "Bypass", "-File", guest_path(script)], capture)
+    finally:
+        script.unlink(missing_ok=True)
 
 
 # MARK: One run at a time

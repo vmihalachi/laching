@@ -17,7 +17,7 @@ screenshots.ps1, so a check of one theme never draws the other.
 [CmdletBinding(PositionalBinding = $false)]
 param(
     [string[]] $Only = @(),
-    [string] $Themes = "",
+    [string[]] $Themes = @(),
     [int] $Jobs = $(if ($env:LAYOUT_JOBS) { [int]$env:LAYOUT_JOBS } else { 4 }),
     [ValidateSet("x64", "ARM64")][string] $Platform = $(if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq "Arm64") { "ARM64" } else { "x64" }),
     [string] $Project = "",
@@ -86,7 +86,7 @@ function Start-Language([string] $language) {
     $arguments = @("-NoProfile", "-NonInteractive", "-File", $screenshots, "-NoBuild", "-Hidden", "-Project", $Project,
         "-Platform", $Platform, "-Language", $language, "-Out", (Join-Path $Out $language))
     if ($Only) { $arguments += @("-Only", ($Only -join ",")) }
-    if ($Themes) { $arguments += @("-Themes", $Themes) }
+    if ($Themes) { $arguments += @("-Themes", ($Themes -join ",")) }
     $info = New-Object Diagnostics.ProcessStartInfo $shell
     $info.Arguments = ($arguments | ForEach-Object { Quote $_ }) -join " "
     $info.UseShellExecute = $false
