@@ -49,6 +49,10 @@ FIRST_PORT = 5554  # adb's emulator ports: 5554, 5556, … (each AVD takes a con
 SNAPSHOT = "laching-screens"  # the AVD snapshot a cold boot saves and later runs load
 SETUP = 1  # what a snapshot holds (demo_mode): bump it when that changes, so every AVD saves a new one
 TOKEN = "debug.laching.snapshot"  # a property only RAM keeps: a cold boot lacks it, a loaded snapshot has it
+# A foldable AVD's postures: the console's `posture <id>`, and the device state the system commits for it.
+POSTURES = {"closed": ("1", "CLOSED"), "half-open": ("2", "HALF_OPENED"), "open": ("3", "OPENED")}
+POSTURE_TIMEOUT = 20  # seconds for the system to commit a posture
+POSTURE_SETTLE = 1  # seconds more for the windows to move to that display
 
 
 def sdk_roots() -> list[Path]:
@@ -280,6 +284,35 @@ class Emulator:
     def font_scale(self, scale: float | None) -> None:
         """The system font scale (1.0 is the default; 2.0 the largest a user can pick)."""
         self.shell("settings", "put", "system", "font_scale", str(scale or 1.0))
+
+    def posture(self, name: str) -> None:
+        """Folds or unfolds a foldable AVD (`closed`, `half-open` or `open`: the console's `posture`, as the
+        emulator's own posture buttons do), then waits for the system to commit that device state
+        (`cmd device_state state`) and move its windows to the display."""
+        if name not in POSTURES:
+            raise RuntimeError(f"unknown posture {name!r} (one of {', '.join(POSTURES)})")
+        posture, state = POSTURES[name]
+        done = self.adb("emu", "posture", posture)
+        if done.returncode != 0 or "KO" in done.stdout:
+            raise RuntimeError(f"couldn't fold {self.avd} to {name}: {(done.stderr or done.stdout).strip()}")
+        deadline = time.monotonic() + POSTURE_TIMEOUT
+        while f"name='{state}'" not in self.shell("cmd", "device_state", "state", quiet=True):
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"{self.avd} didn't fold to {name} in {POSTURE_TIMEOUT} s (not a foldable AVD?)")
+            time.sleep(0.5)
+        self.note(f"(device state {state})")
+        time.sleep(POSTURE_SETTLE)
+
+    def orientation(self, landscape: bool | None) -> None:
+        """Locks the screen in landscape or portrait (`wm user-rotation lock`, turned from the display's natural
+        orientation, which `wm size` gives: a tablet's is landscape); None unlocks it again."""
+        if landscape is None:
+            self.shell("wm", "user-rotation", "free")
+            return
+        size = (self.shell("wm", "size").splitlines() or [""])[0].rpartition(" ")[2]
+        width, _, height = size.partition("x")
+        natural = width.isdigit() and height.isdigit() and int(width) > int(height)
+        self.shell("wm", "user-rotation", "lock", "0" if landscape == natural else "1")
 
     def install(self, apk: Path) -> None:
         """Installs (or replaces) the APK with its runtime permissions granted, so a camera shot needs no dialog."""

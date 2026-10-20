@@ -29,7 +29,8 @@ it), which draws its window without the status bar; shots with an `env` of their
 device given more than one simulator runs its languages side by side on clones of its simulator (sim.py's `on_clones`,
 deleted at the end); Android on headless emulators (`avd`, one per platform; avd.py), each language one launch with
 Laching's intent extras (`LACHING_SCREENSHOT_MODE`, `LACHING_SCREENS`, `LACHING_LANG`, `LACHING_REGION`; a shot's `env`
-adds extras, `camera` gives the emulator the host's webcam), the status bar in demo mode at 09:41, each emulator
+adds extras, `camera` gives the emulator the host's webcam; the platform's `posture` folds a foldable AVD and its
+`orientation` turns the screen), the status bar in demo mode at 09:41, each emulator
 quick-booting from the snapshot its first run saved (`--cold` boots them cold and saves new ones). `--jobs`
 (LAYOUT_JOBS, 3) is the whole run's budget: the Mac and Windows app processes, iOS simulators and Android emulators at
 once in all, shared among the platforms in proportion to their runs (sim.py's `shares`), at least one each, so a
@@ -568,6 +569,10 @@ class Capture:
             emulator.boot()
             emulator.install(apk)
             component = emulator.launcher(app_id)
+            if posture := platform.settings.get("posture"):
+                emulator.posture(posture)
+            if "orientation" in platform.settings:
+                emulator.orientation(platform.landscape)
         except (RuntimeError, OSError) as error:
             for language in self.languages:
                 self.problem(platform, language, str(error))

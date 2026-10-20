@@ -68,6 +68,7 @@ public class ReminderNotifications(
     /**
      * A notification on the channel: [copy] as title, text and subtext, [actions] as buttons, [contentIntent] on
      * tap and [deleteIntent] when the user swipes it away. The app turns the delete into a snooze or a skip.
+     * [silent] posts this one without the channel's sound and vibration (the app's own sounds-off setting).
      */
     public fun build(
         copy: Copy,
@@ -77,6 +78,7 @@ public class ReminderNotifications(
         deleteIntent: PendingIntent? = null,
         autoCancel: Boolean = true,
         onlyAlertOnce: Boolean = true,
+        silent: Boolean = false,
     ): Notification {
         val builder =
             NotificationCompat
@@ -89,6 +91,7 @@ public class ReminderNotifications(
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setAutoCancel(autoCancel)
                 .setOnlyAlertOnce(onlyAlertOnce)
+                .setSilent(silent)
         copy.subtext?.let(builder::setSubText)
         contentIntent?.let(builder::setContentIntent)
         deleteIntent?.let(builder::setDeleteIntent)

@@ -273,7 +273,8 @@
               "vm": { "enum": ["check-layout", "screenshots"], "description": "windows: vm.sh check-layout, every language side by side (the default), or vm.sh screenshots once per language, for a script without -Only." },
               "device": { "type": "string", "description": "ios: the simulator's device type, by name or identifier." },
               "avd": { "type": "string", "description": "android: the Android Virtual Device's name (avdmanager list avd)." },
-              "orientation": { "enum": ["landscape", "portrait"], "description": "The sheet's row: landscape on top (mac, windows), portrait below (ios, android)." },
+              "orientation": { "enum": ["landscape", "portrait"], "description": "The sheet's row: landscape on top (mac, windows), portrait below (ios, android). android: the emulator's screen is turned to it, auto-rotate off." },
+              "posture": { "enum": ["closed", "half-open", "open"], "description": "android: a foldable AVD's posture for the run (the emulator console's `posture`)." },
               "crop": { "type": "boolean", "description": "Crop each shot to its window: the transparent or flat margin around it goes." }
             }
           }
