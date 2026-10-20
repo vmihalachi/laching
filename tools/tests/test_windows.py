@@ -243,7 +243,9 @@ class PowerShellTests(unittest.TestCase):
             done = self.powershell("-File", str(tools / "check-layout.ps1"), "-Only", "panel,home", "-Jobs", "1", "en", "it")
             self.assertEqual(done.returncode, 0, done.stderr)
             self.assertIn("Every window fits in: en it", done.stdout)
-            self.assertEqual(sorted(call["Only"] for call in calls() if not call["BuildOnly"]), ["panel,home", "panel,home"])
+            runs = [call for call in calls() if not call["BuildOnly"]]
+            self.assertEqual([(call["Language"], call["Only"]) for call in runs], [("en,it", "panel,home")], "one run for both")
+            self.assertEqual(Path(runs[0]["Out"]), root / "windows" / "build" / "layout-check")
 
     def test_screenshots_build_once_or_not_at_all(self):
         with tempfile.TemporaryDirectory() as temp:
