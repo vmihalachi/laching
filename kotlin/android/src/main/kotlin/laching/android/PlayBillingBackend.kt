@@ -18,14 +18,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
 import laching.core.store.ProductCatalog
 import laching.core.store.PurchaseOutcome
 import laching.core.store.StoreBackend
 import laching.core.store.StoreProduct
 import laching.core.store.TransactionUpdate
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 /**
  * [StoreBackend] over Google Play Billing: connects on first use (and reconnects by itself), lists the catalog's
@@ -72,16 +69,17 @@ public class PlayBillingBackend(
                     .build()
             }
         val params = QueryProductDetailsParams.newBuilder().setProductList(products).build()
-        val found =
-            suspendCancellableCoroutine { continuation ->
-                client.queryProductDetailsAsync(params) { result, queryResult ->
-                    if (result.responseCode == BillingClient.BillingResponseCode.OK) {
-                        continuation.resume(queryResult.productDetailsList)
-                    } else {
-                        continuation.resumeWithException(result.toException("Loading products failed"))
-                    }
-                }
+        // Play can answer one query twice (that the service disconnected, then that it timed out): a deferred keeps
+        // the first answer, where resuming a continuation again would crash the app.
+        val answer = CompletableDeferred<List<ProductDetails>>()
+        client.queryProductDetailsAsync(params) { result, queryResult ->
+            if (result.responseCode == BillingClient.BillingResponseCode.OK) {
+                answer.complete(queryResult.productDetailsList)
+            } else {
+                answer.completeExceptionally(result.toException("Loading products failed"))
             }
+        }
+        val found = answer.await()
         for (product in found) details[product.productId] = product
         return found.mapNotNull { product ->
             val price = product.oneTimePurchaseOfferDetails?.formattedPrice ?: return@mapNotNull null
@@ -134,6 +132,7 @@ public class PlayBillingBackend(
             return when (launched.responseCode) {
                 BillingClient.BillingResponseCode.OK -> outcome.await()
                 BillingClient.BillingResponseCode.USER_CANCELED -> PurchaseOutcome.CANCELLED
+                BillingClient.BillingResponseCode.ITEM_ALREADY_OWNED -> alreadyOwned(id)
                 else -> throw launched.toException("Starting the purchase failed")
             }
         } finally {
@@ -163,7 +162,7 @@ public class PlayBillingBackend(
                     } else {
                         ready.completeExceptionally(result.toException("Connecting to Play failed"))
                     }
-                    connecting = null
+                    if (connecting === ready) connecting = null
                 }
 
                 override fun onBillingServiceDisconnected() {
@@ -174,17 +173,18 @@ public class PlayBillingBackend(
         ready.await()
     }
 
-    private suspend fun queryPurchases(): List<Purchase> =
-        suspendCancellableCoroutine { continuation ->
-            val params = QueryPurchasesParams.newBuilder().setProductType(BillingClient.ProductType.INAPP).build()
-            client.queryPurchasesAsync(params) { result, purchases ->
-                if (result.responseCode == BillingClient.BillingResponseCode.OK) {
-                    continuation.resume(purchases)
-                } else {
-                    continuation.resumeWithException(result.toException("Reading purchases failed"))
-                }
+    private suspend fun queryPurchases(): List<Purchase> {
+        val params = QueryPurchasesParams.newBuilder().setProductType(BillingClient.ProductType.INAPP).build()
+        val answer = CompletableDeferred<List<Purchase>>()
+        client.queryPurchasesAsync(params) { result, purchases ->
+            if (result.responseCode == BillingClient.BillingResponseCode.OK) {
+                answer.complete(purchases)
+            } else {
+                answer.completeExceptionally(result.toException("Reading purchases failed"))
             }
         }
+        return answer.await()
+    }
 
     /** Settles every bought purchase and caches the unlockables they hold as what the user owns, replacing the cache. */
     private fun syncOwned(purchases: List<Purchase>): Set<String> {
@@ -262,8 +262,8 @@ public class PlayBillingBackend(
                 }
 
                 BillingClient.BillingResponseCode.ITEM_ALREADY_OWNED -> {
-                    scope.launch { runCatching { entitledProductIds() } }
-                    waiting?.complete(PurchaseOutcome.PURCHASED)
+                    val outcome = alreadyOwned(waitingFor)
+                    waiting?.complete(outcome)
                 }
 
                 else -> {
@@ -271,6 +271,19 @@ public class PlayBillingBackend(
                 }
             }
         }
+    }
+
+    /**
+     * Play says [id] is owned already: an unlockable bought on another device (or not yet acknowledged) counts as
+     * bought; a tip Play hasn't consumed yet is consumed now and thanks no one, so the next tap tips again.
+     */
+    private suspend fun alreadyOwned(id: String?): PurchaseOutcome {
+        try {
+            syncOwned(queryPurchases())
+        } catch (e: BillingException) {
+            log("Reading purchases failed: ${e.message}")
+        }
+        return if (id != null && catalog.isTip(id)) PurchaseOutcome.CANCELLED else PurchaseOutcome.PURCHASED
     }
 
     private fun cachedOwned(): Set<String> = preferences.getStringSet(OWNED_KEY, emptySet()).orEmpty().toSet()
