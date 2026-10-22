@@ -353,7 +353,9 @@ jobs:
   # re-run it.
   npm:
     needs: [plan, tag, landing]
-    if: needs.landing.result == 'success' && needs.tag.result == 'success'
+    # !cancelled(): without a status function the implicit success() is false once core, windows or web was skipped.
+    if: >-
+      !cancelled() && needs.landing.result == 'success' && needs.tag.result == 'success'
     runs-on: ubuntu-latest
     environment: npm
     permissions:
@@ -451,6 +453,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NPM: ${{ needs.npm.result }}
+          LANDING: ${{ needs.plan.outputs.landing }}
           PUSHED: ${{ steps.push.outputs.pushed }}
         run: |
           set -euo pipefail
@@ -476,6 +479,8 @@ jobs:
             fi
             if [ "$NPM" = success ]; then
               echo "- \`@laching/landing\` $LACHING_VERSION: published to npm"
+            elif [ "$LANDING" = true ]; then
+              echo "- \`@laching/landing\` $LACHING_VERSION: changed, but not published to npm yet (the npm job: $NPM)"
             else
               echo "- \`@laching/landing\`: unchanged, not published"
             fi
