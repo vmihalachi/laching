@@ -79,7 +79,9 @@ iPad match what ships, and that purchase UI is only where the app's rules allow.
    simulator captures at either scale; `ios.duoScreenshots`, `<store.dir>/apple/duo/<lang>/` by default). Smaller
    iPhones and iPads scale from these; the Duo doesn't, so without its own set its tab stays empty. App Store Connect
    has no screenshot set for the Duo: push.py places them in the App Asset Library, in file order, when the folder
-   exists.
+   exists. With the simulator's screens in `build/store-captures/ios/<device>/<lang>`, `python3
+   laching/tools/store-screenshots.py --canvas iphone|ipad|duo [--lang all]` composes them into those folders from
+   `screenshots.store.captions` (an entry's `ios` object over its fields), as the Mac's.
 3. **Product page header and search results asset** (iOS 27; no text, so one image each serves every language; no
    alpha): regenerate only when the art changes (the app's notes say how). No prices, URLs, logos or other platforms.
    - **Header**: `store.apple.ios.header`, `<store.dir>/apple/header.png` by default, 3840×1646. Keep the subject inside
