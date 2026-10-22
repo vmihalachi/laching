@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Composes store screenshots from the captures (`screenshots.store` in companion.json): the Mac App Store's by default,
-Google Play's or the Microsoft Store's with --canvas.
+the App Store's iPhone, iPad and iPhone Duo images, Google Play's or the Microsoft Store's with --canvas.
 
-    python3 laching/tools/store-screenshots.py [--canvas mac|android-phone|android-tablet|microsoft] [--lang LANG|all]…
-        [--out DIR] [captures-dir]
+    python3 laching/tools/store-screenshots.py [--canvas mac|iphone|ipad|duo|android-phone|android-tablet|microsoft]
+        [--lang LANG|all]… [--out DIR] [captures-dir]
 
 Each language's images land in <store.out>/<language> (<store.out>/<canvas>/<language> for an Android canvas; --out
 DIR for DIR/<language>), named <n>-<shot>-<appearance>.png in upload order: upload them from there. --lang (repeatable,
@@ -18,7 +18,7 @@ Each image is one capture on the paper of its appearance with a headline (`store
 accentText). Captions live in `store.captions`, one list per language in upload order: `[{"shot": capture,
 "appearance": "light"|"dark", "headline": [lines], "note": text}, …]`; keep them to what ships and free of health or
 productivity claims. An entry's `windows` object replaces its fields (shot, appearance, headline, note) on the
-`microsoft` canvas, its `android` object on the Android ones (other objects, e.g. an app's own `ios`, are left alone).
+`microsoft` canvas, its `ios` object on the iOS ones, its `android` object on the Android ones.
 `store.style` is `rule` (the default: a short accent rule between headline and note, the window rounded with a soft
 shadow) or `zine` (a copy of the headline offset in the accent behind it, as a misregistered print, and the window
 framed in ink over a hard offset shadow, `store.palette`'s `shadow`, else the ink at 16% on the paper; a larger note,
@@ -32,6 +32,14 @@ Canvases: `mac` is landscape, the window on the right and the text beside it, dr
 shot of a language reserving its tallest caption's height so the screens line up; `android-tablet` (2560 × 1600, a
 10-inch tablet) is the landscape layout. `store.canvases` overrides an Android canvas's size; Google Play takes each
 side between 320 and 3840 px and no side more than twice the other, which every Android image is checked against.
+
+`iphone` (1320 × 2868, the 6.9" display), `ipad` (2064 × 2752, 13") and `duo` (1398 × 2034, the iPhone Duo; 2007 × 2853
+through `store.canvases`) stack the caption above the simulator's screen as `android-phone` does, the zine style in
+each device's own numbers, sized for touch; the iPad's captures lose the simulator's status bar (48 px). An entry's
+`ios` object replaces its fields there. The captures: the folder given, else build/store-captures/ios/<canvas>/<language>
+(the app's own simulator run puts them there; a missing one stops the run before anything is written). The images go
+where push.py takes them, <store.dir>/<store.apple.ios.iphoneScreenshots, ipadScreenshots or duoScreenshots;
+apple/<canvas> by default>/<language> (--out DIR: DIR/<language>), the folder's old PNGs first.
 
 `microsoft` needs no captions or fonts (Partner Center shows each caption under its image): each Windows capture
 named in `store.microsoft.shots` (file names without .png, upload order, one per line of ms.captions) is centered at
@@ -72,9 +80,13 @@ sys.path.insert(0, str(TOOLS))
 import companion  # noqa: E402
 
 ANDROID_CANVASES = {"android-phone": (1080, 1920), "android-tablet": (2560, 1600)}
+# The App Store's iPhone 6.9", iPad 13" and iPhone Duo sizes, the largest it takes.
+IOS_CANVASES = {"iphone": (1320, 2868), "ipad": (2064, 2752), "duo": (1398, 2034)}
 # Partner Center takes desktop screenshots from 1366 × 768 up to this.
 MICROSOFT_CANVAS = (3840, 2160)
-CANVASES = ("mac", *ANDROID_CANVASES, "microsoft")
+CANVASES = ("mac", *ANDROID_CANVASES, *IOS_CANVASES, "microsoft")
+# The simulator's status bar, cut off the iPad's captures: an overridden clock comes with the simulator's English date.
+STATUS_BAR = {"ipad": 48}
 # A capture's appearance, the end of its file name.
 APPEARANCE = re.compile(r"-(light|dark)$")
 # Google Play's screenshot limits: each side, and the longer side over the shorter.
@@ -109,8 +121,16 @@ STYLES = {
         "cjkNote": 0.7,
     },
 }
-# The caption entry's object that replaces its fields on a canvas (an app's own composer may read others, e.g. ios).
-PLATFORMS = {"android-phone": "android", "android-tablet": "android", "microsoft": "windows"}
+# The zine style on the iOS canvases, in each one's own pixels: sized for touch, the text larger than on Android's.
+IOS_ZINE = {
+    canvas: {"margin": margin, "top": top, "bottom": bottom, "headline": headline, "step": 5, "leading": 1.2, "gap": 0,
+             "after": 40, "note": note, "noteLeading": note, "screen": 90, "offset": (9, 7)}
+    for canvas, (margin, top, bottom, headline, note) in {
+        "iphone": (100, 150, 130, 150, 104), "ipad": (180, 160, 150, 170, 124), "duo": (110, 90, 90, 112, 84)}.items()
+}
+# The caption entry's object that replaces its fields on a canvas.
+PLATFORMS = {"android-phone": "android", "android-tablet": "android", "microsoft": "windows",
+             **{canvas: "ios" for canvas in IOS_CANVASES}}
 
 
 class Settings:
@@ -125,15 +145,18 @@ class Settings:
         elif canvas == "microsoft":
             self.width, self.height = MICROSOFT_CANVAS
         else:
-            self.width, self.height = (int(v) for v in store.get("canvases", {}).get(canvas, ANDROID_CANVASES[canvas]))
-        self.portrait = canvas == "android-phone"
+            default = {**ANDROID_CANVASES, **IOS_CANVASES}[canvas]
+            self.width, self.height = (int(v) for v in store.get("canvases", {}).get(canvas, default))
+        self.portrait = canvas == "android-phone" or canvas in IOS_CANVASES
         self.max_scale = MICROSOFT_MAX_SCALE if canvas == "microsoft" else MAX_SCALE
-        # The layouts' numbers are for a 2880-wide (landscape) or 1080-wide (portrait) canvas.
-        self.unit = self.width / (1080 if self.portrait else 2880)
         self.palette = {mode: {**DEFAULT_PALETTE[mode], **store.get("palette", {}).get(mode, {})} for mode in DEFAULT_PALETTE}
         self.style = store.get("style", "rule")
         self.zine = self.style == "zine"
         self.metrics = STYLES[self.style]["portrait" if self.portrait else "landscape"]
+        # The layouts' numbers are for a 2880-wide (landscape) or 1080-wide (portrait) canvas, or the iOS canvas's own.
+        self.unit = self.width / (1080 if self.portrait else 2880)
+        if self.zine and canvas in IOS_CANVASES:
+            self.metrics, self.unit = IOS_ZINE[canvas], self.width / IOS_CANVASES[canvas][0]
         # The display faces seldom have CJK: those languages set the headline and the note in their own face.
         cjk = config.path(f"screenshots.store.cjkFonts.{language}")
         self.headline_font = cjk or config.require_path("screenshots.store.font")
@@ -141,16 +164,26 @@ class Settings:
         self.note_size = self.metrics["note"] * (STYLES[self.style]["cjkNote"] if cjk else 1)
 
     def render(self, captions: list[dict], root: Path) -> None:
-        """Writes the language's images, printing each one's path; exits when Google Play would refuse one."""
-        self.out.mkdir(parents=True, exist_ok=True)
+        """Writes the language's images, printing each one's path; exits when Google Play would refuse one, or (iOS)
+        when a capture is missing, before writing anything."""
         captions = for_platform(captions, self.canvas)
+        ios = self.canvas in IOS_CANVASES
+        if ios:
+            for caption in captions:
+                if not (path := self.capture_path(caption)).is_file():
+                    sys.exit(f"store-screenshots: no {companion.rel(path, root)}: capture the app's iOS screens first")
+        self.out.mkdir(parents=True, exist_ok=True)
+        # push.py uploads every PNG of an iOS folder: an earlier run's must not stand in for a shot that's gone.
+        for stale in self.out.glob("*.png") if ios else ():
+            stale.unlink()
+        digits = len(str(len(captions))) if ios else 1  # 01-… past nine, so the names sort in upload order
         if self.portrait:
             measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
             text_height = max(self.portrait_text(measure, caption)[-1] for caption in captions)
         for i, caption in enumerate(captions, 1):
-            path = self.out / f"{i}-{caption['shot']}-{caption.get('appearance', 'light')}.png"
+            path = self.out / f"{i:0{digits}}-{caption['shot']}-{caption.get('appearance', 'light')}.png"
             image = self.compose_portrait(caption, text_height) if self.portrait else self.compose(caption)
-            if self.canvas != "mac" and (problem := play_problem(image)):
+            if self.canvas in ANDROID_CANVASES and (problem := play_problem(image)):
                 sys.exit(f"store-screenshots: {path.name} {problem} (store.canvases)")
             image.save(path, optimize=True)
             print(companion.rel(path, root))
@@ -158,9 +191,14 @@ class Settings:
     def px(self, value: float) -> int:
         return round(value * self.unit)
 
+    def capture_path(self, caption) -> Path:
+        return self.captures / f"{caption['shot']}-{caption.get('appearance', 'light')}.png"
+
     def shot(self, caption) -> Image.Image:
-        image = Image.open(self.captures / f"{caption['shot']}-{caption.get('appearance', 'light')}.png")
-        # Windows captures keep their alpha, pasted over the frame; the Mac's and Android's are flattened as they were.
+        image = Image.open(self.capture_path(caption))
+        if bar := STATUS_BAR.get(self.canvas):
+            image = image.crop((0, bar, image.width, image.height))
+        # Windows captures keep their alpha, pasted over the frame; the others are flattened as they were.
         return image.convert("RGBA" if self.canvas == "microsoft" else "RGB")
 
     def frame(self, canvas, draw, shot, x, y, colors, dark, radius, lift, blur):
@@ -190,8 +228,8 @@ class Settings:
         """One headline line at `position`, over its accent copy offset right and down in the zine style."""
         if self.zine:
             start = self.metrics["headline"]
-            draw.text((position[0] + self.px(start * 0.06), position[1] + self.px(start * 0.047)), line, font=font,
-                      fill=colors["accent"])
+            dx, dy = self.metrics.get("offset", (start * 0.06, start * 0.047))
+            draw.text((position[0] + self.px(dx), position[1] + self.px(dy)), line, font=font, fill=colors["accent"])
         draw.text(position, line, font=font, fill=colors["ink"])
 
     def fitted(self, draw, lines, column):
@@ -596,12 +634,20 @@ def main(argv: list[str]) -> int:
         parser.error(f"no captions for {', '.join(missing)} in store.captions (it has {', '.join(captions)})")
     if args.captures and len(languages) > 1:
         parser.error("a captures folder is one language's: name one --lang")
-    out = args.out or config.require_path("screenshots.store.out") / ("" if args.canvas == "mac" else args.canvas)
+    if args.out:
+        out = args.out
+    elif args.canvas in IOS_CANVASES:
+        # Where push.py takes them from.
+        out = config.require_path("store.dir") / config.get(f"store.apple.ios.{args.canvas}Screenshots", f"apple/{args.canvas}")
+    else:
+        out = config.require_path("screenshots.store.out") / ("" if args.canvas == "mac" else args.canvas)
     for language in languages:
         if args.captures:
             captures = args.captures
         elif args.canvas == "mac" and language != config.source_language:
             captures = capture(config, language, captions[language])
+        elif args.canvas in IOS_CANVASES:
+            captures = config.root / "build" / "store-captures" / "ios" / args.canvas / language
         else:
             captures = config.require_path("screenshots.out")
         Settings(config, args.canvas, captures, out / language, language).render(captions[language], config.root)

@@ -1012,6 +1012,92 @@ class MicrosoftStoreScreenshotTests(FixtureAppTestCase):
         self.assertTrue(any(problem.startswith("store.microsoft.captioned") for problem in problems), problems)
 
 
+class IosStoreScreenshotTests(FixtureAppTestCase):
+    """--canvas iphone|ipad|duo: the App Store's portrait images from the simulator's screens."""
+
+    def setUp(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("needs Pillow (pip3 install pillow)")
+        if not FONT:
+            self.skipTest("needs Arial or DejaVu Sans")
+        super().setUp()
+        self.Image = Image
+        data = json.loads((self.root / "companion.json").read_text("utf8"))
+        data["screenshots"]["store"] = {"captions": "captions.json", "out": "store", "font": str(FONT), "style": "zine",
+                                        "palette": {"light": {"paper": "#F3EDE1", "ink": "#26336B", "accent": "#FF4D9D"}}}
+        self.data = data
+        self.write_config()
+        entry = {"shot": "menu", "headline": ["LIVES IN YOUR", "MENU BAR"], "note": "On your Mac.",
+                 "ios": {"shot": "today", "headline": ["NUDGES YOU"], "note": "Today shows your breaks."}}
+        second = {"shot": "panel", "headline": ["PANEL"], "note": "A note."}
+        (self.root / "captions.json").write_text(json.dumps({"en": [entry, second], "it": [entry, second]}), "utf8")
+
+    def write_config(self):
+        (self.root / "companion.json").write_text(json.dumps(self.data), "utf8")
+
+    def screens(self, device, size, language="en"):
+        """The simulator's screens: a black status bar over a body with a block drawn in it."""
+        folder = self.root / "build" / "store-captures" / "ios" / device / language
+        folder.mkdir(parents=True, exist_ok=True)
+        for shot in ("today", "panel"):
+            image = self.Image.new("RGB", size, (250, 248, 240))
+            image.paste((0, 0, 0), (0, 0, size[0], 48))
+            image.paste((240, 180, 40), (size[0] // 3, size[1] // 2, size[0] // 2, size[1] - 20))
+            image.save(folder / f"{shot}-light.png")
+
+    def run_tool(self, *args: str):
+        return subprocess.run([sys.executable, str(TOOLS / "store-screenshots.py"), *args], cwd=self.root,
+                              capture_output=True, encoding="utf8")
+
+    def test_each_device_from_its_captures_to_push_pys_folder(self):
+        out = self.root / "store-listing" / "apple"
+        for device, size in (("iphone", (1320, 2868)), ("ipad", (2064, 2752)), ("duo", (1398, 2034))):
+            self.screens(device, size)
+            stale = out / device / "en" / "9-gone-light.png"
+            stale.parent.mkdir(parents=True, exist_ok=True)
+            stale.write_bytes(b"")
+            result = self.run_tool("--canvas", device)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            # The ios object over the entry; the images where push.py takes them, an earlier run's gone.
+            self.assertEqual(result.stdout.split(), [f"store-listing/apple/{device}/en/1-today-light.png",
+                                                     f"store-listing/apple/{device}/en/2-panel-light.png"])
+            self.assertEqual(sorted(path.name for path in (out / device / "en").iterdir()),
+                             ["1-today-light.png", "2-panel-light.png"])
+            image = self.Image.open(out / device / "en" / "1-today-light.png").convert("RGB")
+            self.assertEqual(image.size, size)
+            self.assertEqual(image.getpixel((0, 0)), (0xF3, 0xED, 0xE1))
+            # The screen centered below the caption, framed in ink; the iPad's status bar cut off, the others' kept.
+            x, y = size[0] * 3 // 5, size[1] - 1
+            for inside in (False, True, False):  # up to the bottom border, through it, up the screen to the top one
+                while (image.getpixel((x, y)) == (0x26, 0x33, 0x6B)) == inside:
+                    y -= 1
+            self.assertEqual(image.getpixel((x, y + 1)), (250, 248, 240) if device == "ipad" else (0, 0, 0), device)
+
+    def test_store_folders_and_missing_captures(self):
+        self.data["store"]["apple"]["ios"] = {"iphoneScreenshots": "apple/phone"}
+        self.write_config()
+        self.screens("iphone", (1320, 2868))
+        moved = self.run_tool("--canvas", "iphone")
+        self.assertEqual(moved.returncode, 0, moved.stderr)
+        self.assertTrue((self.root / "store-listing" / "apple" / "phone" / "en" / "1-today-light.png").exists())
+        # Another language needs its own captures, and nothing is written without them.
+        missing = self.run_tool("--canvas", "iphone", "--lang", "it")
+        self.assertEqual(missing.returncode, 1)
+        self.assertIn("no build/store-captures/ios/iphone/it/today-light.png: capture the app's iOS screens first",
+                      missing.stderr)
+        self.assertFalse((self.root / "store-listing" / "apple" / "phone" / "it").exists())
+
+    def test_rule_style_and_canvas_size(self):
+        self.data["screenshots"]["store"].update({"style": "rule", "canvases": {"duo": [2007, 2853]}})
+        self.write_config()
+        self.screens("duo", (1398, 2034))
+        result = self.run_tool("--canvas", "duo", "--out", str(self.root / "elsewhere"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.Image.open(self.root / "elsewhere" / "en" / "1-today-light.png").size, (2007, 2853))
+
+
 class CaptionWrapTests(unittest.TestCase):
     """store-screenshots.py's line breaking, measured by a fake draw: every character 10 px wide."""
 
