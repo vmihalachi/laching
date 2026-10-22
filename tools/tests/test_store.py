@@ -110,12 +110,19 @@ class FakeApi:
         if method == "GET" and path.endswith("/assetLibrary"):
             return {"data": {"type": "appAssetLibraries", "id": "library"}}
         if method == "GET" and "/placements" in path:
+            if path.startswith("/v1/appAssetLibraryImages/"):  # an image's placements, in every language
+                image_id = path.split("/")[3]
+                return {"data": [p for (k, _), p in self.objects.items() if k == "appAssetLibraryPlacements"
+                                 and p["relationships"]["image"][1] == image_id]}
             placements = self.children("appAssetLibraryPlacements", path.split("/")[3])
             images = {p["relationships"]["image"][1] for p in placements}
             return {"data": [{**p, "relationships": {"image": {"data": {"type": "appAssetLibraryImages",
                                                                          "id": p["relationships"]["image"][1]}}}}
                              for p in placements],
                     "included": [self.objects[("appAssetLibraryImages", i)] for i in images]}
+        if method == "GET" and path.endswith("/appStoreReviewScreenshot"):
+            shots = self.children("inAppPurchaseAppStoreReviewScreenshots", path.rsplit("/", 2)[1])
+            return {"data": shots[0] if shots else None}
         if method == "GET" and path.endswith("/appStoreReviewDetail"):
             details = self.children("appStoreReviewDetails", path.rsplit("/", 2)[1])
             return {"data": details[0] if details else None}
@@ -137,7 +144,8 @@ class FakeApi:
         if kind == "appInfoLocalizations":  # like App Store Connect: the editable version gets the language too
             for version in self.children("appStoreVersions", self.app_id):
                 self.add("appStoreVersionLocalizations", {"locale": attributes["locale"]}, version["id"])
-        if kind in ("appScreenshots", "appPreviews", "appAssetLibraryImages"):
+        if kind in ("appScreenshots", "appPreviews", "appAssetLibraryImages",
+                    "inAppPurchaseAppStoreReviewScreenshots"):
             obj["attributes"]["uploadOperations"] = []
         return obj
 
@@ -734,6 +742,66 @@ class StoreTests(FixtureAppTestCase):
         sync.duo_screenshots(localizations)
         self.assertEqual(len(sync.problems), 1)
         self.assertIn("1320x2868", sync.problems[0])
+
+    def test_an_image_stuck_awaiting_upload_is_deleted_and_uploaded_again(self):
+        """An upload App Store Connect left in AWAITING_UPLOAD (its commit lost, no checksum) never finishes: each flow
+        retries it like a FAILED one instead of keeping it because its name or checksum matches."""
+        stuck = {"state": "AWAITING_UPLOAD", "sourceFileChecksum": ""}
+
+        api, sync, ios = self.header_app()
+        folder = self.listing.duo_screenshots / "en"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "1-shot.png").write_bytes(png(1398, 2034))
+        (self.listing.duo_screenshots / "de").mkdir()
+        (self.listing.duo_screenshots / "de" / "1-shot.png").write_bytes(png(1398, 2034))
+        localizations = sync.text(["en", "de"], ios, extra=False, write=False, page=sync.ios)
+        sync.duo_screenshots(localizations)
+        [image] = [o for (k, _), o in api.objects.items() if k == "appAssetLibraryImages"]
+        image["attributes"].update(stuck)
+        api.calls.clear()
+        sync.duo_screenshots(localizations)
+        self.assertEqual(sync.problems, [])
+        self.assertIn(("DELETE", "appAssetLibraryImages", image["id"]), api.calls)
+        self.assertEqual(len([c for c in api.calls if c[:2] == ("DELETE", "appAssetLibraryPlacements")]), 2,
+                         "its placements in both languages go with it")
+        [again] = [o for (k, _), o in api.objects.items() if k == "appAssetLibraryImages"]
+        self.assertNotEqual(again["id"], image["id"])
+        self.assertEqual(again["attributes"]["fileName"], image["attributes"]["fileName"])
+        self.assertEqual({p["relationships"]["image"][1] for (k, _), p in api.objects.items()
+                          if k == "appAssetLibraryPlacements"}, {again["id"]}, "both languages placed again")
+        again["attributes"]["state"] = "UPLOAD_COMPLETE"
+        api.calls.clear()
+        sync.duo_screenshots(localizations)
+        self.assertEqual([c for c in api.calls if c[0] != "GET"], [], "a processing image is left alone")
+
+        folder = self.listing.screenshots / "en"
+        folder.mkdir(parents=True)
+        (folder / "1-home.png").write_bytes(PNG)
+        api, version = self.setup_app()
+        sync = push.Sync(self.listing, api, apply=True, log=discard)
+        locale = sync.text(["en"], version, extra=False, write=False)["en-US"][1]
+        shot_set = api.add("appScreenshotSets", {"screenshotDisplayType": self.listing.screenshot_type}, locale["id"])
+        shot = api.add("appScreenshots", {"fileName": "1-home.png", "sourceFileChecksum": push.md5(folder / "1-home.png"),
+                                          "assetDeliveryState": {"state": "AWAITING_UPLOAD"}}, shot_set["id"])
+        sync.screenshots({"en-US": ("en", locale)})
+        self.assertIn(("DELETE", "appScreenshots", shot["id"]), api.calls, "a matching checksum doesn't keep it")
+        self.assertEqual([c[2] for c in api.calls if c[:2] == ("POST", "appScreenshots")], ["1-home.png"])
+
+        capture = self.listing.dir / "review.png"
+        capture.write_bytes(PNG)
+        product = api.add("inAppPurchases", {"productId": "tip"}, self.listing.app_id)
+        kind = "inAppPurchaseAppStoreReviewScreenshots"
+        old = api.add(kind, {"fileName": "review.png", "sourceFileChecksum": "",
+                             "assetDeliveryState": {"state": "AWAITING_UPLOAD"}}, product["id"])
+        api.calls.clear()
+        with mock.patch.object(push, "review_image", lambda _listing, f: f):
+            sync.iap_review_screenshot(product, capture)
+            self.assertEqual([c[:2] for c in api.calls if c[0] != "GET"],
+                             [("DELETE", kind), ("POST", kind), ("PATCH", kind)])
+            self.assertNotIn((kind, old["id"]), api.objects)
+            api.calls.clear()
+            sync.iap_review_screenshot(product, capture)
+            self.assertEqual([c for c in api.calls if c[0] != "GET"], [], "the new upload is kept")
 
     # MARK: import.py
 
