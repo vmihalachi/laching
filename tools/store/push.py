@@ -141,6 +141,16 @@ def changed(want, have):
     return {k: v for k, v in want.items() if (have or {}).get(k) != v}
 
 
+def stale(item):
+    """True when App Store Connect will never finish an uploaded screenshot or asset library image, so it has to be
+    deleted and uploaded again: FAILED, or any state but COMPLETE and UPLOAD_COMPLETE, like an image left in
+    AWAITING_UPLOAD by an upload that was never committed (no checksum) or that the commit didn't move on. An item
+    without a state reads as fine."""
+    attrs = item["attributes"]
+    state = (attrs.get("assetDeliveryState") or {}).get("state") or attrs.get("state")
+    return state is not None and state not in ("COMPLETE", "UPLOAD_COMPLETE")
+
+
 def md5(path):
     return hashlib.md5(path.read_bytes()).hexdigest()
 
@@ -491,8 +501,7 @@ class Sync:
             return
         f = review_image(self.listing, capture)
         have = self.api.request("GET", f"/v2/inAppPurchases/{product['id']}/appStoreReviewScreenshot").get("data")
-        failed = have and (have["attributes"].get("assetDeliveryState") or {}).get("state") == "FAILED"
-        if have and not failed and have["attributes"].get("sourceFileChecksum") == md5(f):
+        if have and not stale(have) and have["attributes"].get("sourceFileChecksum") == md5(f):
             return
         kind = "inAppPurchaseAppStoreReviewScreenshots"
 
@@ -507,12 +516,14 @@ class Sync:
         self.step(f"  review screenshot: {'replace' if have else 'upload'} {f.name}", upload)
 
     def media(self, localization, locale, files, set_kind, set_type_attr, set_type, item_kind):
-        """Replaces a screenshot or preview set when its files differ from ours (compared by MD5)."""
+        """Replaces a screenshot or preview set when its files differ from ours (compared by MD5) or one of them is
+        stale."""
         sets_path = f"/v1/appStoreVersionLocalizations/{localization['id']}/{set_kind}" if localization else None
         sets = self.api.get_all(sets_path) if sets_path else []
         media_set = next((s for s in sets if s["attributes"][set_type_attr] == set_type), None)
         have = self.api.get_all(f"/v1/{set_kind}/{media_set['id']}/{item_kind}") if media_set else []
-        if [x["attributes"].get("sourceFileChecksum") for x in have] == [md5(f) for f in files]:
+        if [x["attributes"].get("sourceFileChecksum") for x in have] == [md5(f) for f in files] \
+                and not any(stale(x) for x in have):
             return
         label = f"screenshots ({set_type})" if item_kind == "appScreenshots" else "preview"
         self.log(f"  {locale}: {label}: replace {len(have)} with {len(files)} ({', '.join(f.name for f in files)})")
@@ -631,10 +642,11 @@ class Sync:
         replaced. Each file is uploaded to the app's Asset Library once, however many languages and runs use it: an
         image already there under that file name is reused, and each upload's reference name (unique in a library) is
         the label plus the file name. Screenshots go in the library's screenshots category, the rest in its creative
-        assets (an image in the wrong one fails processing); an image that failed is deleted and uploaded again."""
+        assets (an image in the wrong one fails processing). A stale image (`stale`: failed, or stuck short of COMPLETE)
+        is deleted with its placements and uploaded again, and a group with one placed counts as not matching."""
         images = None  # uploaded file name -> image id ("" in a dry run), read from the library on first use
-        failed = {}  # uploaded file name -> ids of the images under that name that failed processing
-        gone = set()  # placements deleted with their failed image
+        retry = {}  # uploaded file name -> ids of the stale images under that name
+        gone = set()  # placements deleted with their stale image
         category = "APP_SCREENSHOTS_AND_PREVIEWS" if placement_type == SCREENSHOT else "CREATIVE_ASSETS"
         groups_for = {}  # (width, height) -> groups
         label = reference[0].lower() + reference[1:]
@@ -643,7 +655,7 @@ class Sync:
             return self.api.request("GET", f"/v1/apps/{self.listing.app_id}/assetLibrary")["data"]["id"]
 
         def upload(f, name):
-            for image_id in failed.pop(name, []):  # its reference name would clash with the new one's
+            for image_id in retry.pop(name, []):  # its reference name would clash with the new one's
                 for p in self.api.request("GET", f"/v1/appAssetLibraryImages/{image_id}/placements")["data"]:
                     self.api.delete("appAssetLibraryPlacements", p["id"])  # an invalid placement blocks the delete
                     gone.add(p["id"])
@@ -684,7 +696,8 @@ class Sync:
             if localization:
                 page = self.api.request("GET", f"/v1/appStoreVersionLocalizations/{localization['id']}/placements"
                                                f"?filter[placementType]={placement_type}&include=image&limit=50") or {}
-                file_names = {i["id"]: i["attributes"].get("fileName") for i in page.get("included", [])}
+                file_names = {i["id"]: None if stale(i) else i["attributes"].get("fileName")
+                              for i in page.get("included", [])}
                 for p in page.get("data") or []:
                     if p["attributes"].get("placementType", placement_type) != placement_type:
                         continue
@@ -692,14 +705,14 @@ class Sync:
                     placed.setdefault(p["attributes"]["placementGroup"], []).append((p["id"], file_names.get(image_id)))
             for g in groups:
                 have = placed.get(g, [])
-                if sorted(n for _, n in have) == sorted(names):
+                if sorted(n or "" for _, n in have) == sorted(names):
                     continue
                 if images is None:
                     images = {}
                     for i in self.api.get_all(f"/v1/appAssetLibraries/{library()}/images"):
                         file_name = i["attributes"].get("fileName")
-                        if i["attributes"].get("state") == "FAILED":
-                            failed.setdefault(file_name, []).append(i["id"])
+                        if stale(i):
+                            retry.setdefault(file_name, []).append(i["id"])
                         else:
                             images[file_name] = i["id"]
                 for f, name in zip(files, names):
@@ -752,7 +765,7 @@ def status(listing: Listing, api, version_string):
         errors = ", ".join(e.get("code", "") for e in delivery.get("errors") or [])
         print(f"  {product_id}: {product['attributes'].get('state')}, review screenshot {shot_state}"
               + (f" ({errors})" if errors else ""))
-        if shot_state in ("none", "FAILED"):
+        if not shot or stale(shot):
             missing.append(f"{product_id} review screenshot")
     print("\nStill needed: " + ("; ".join(missing) if missing else "nothing found missing"))
 
