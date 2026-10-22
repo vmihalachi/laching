@@ -86,6 +86,9 @@ python3 laching/tools/store-screenshots.py --canvas microsoft             # the 
 python3 laching/tools/store-screenshots.py --canvas microsoft --lang all  # every language: ask first
 ```
 
+With `store.microsoft.captioned` the images are laid out as the Mac App Store's, each caption of
+`screenshots.store.captions` (its `windows` object over its fields) beside the window in `screenshots.store.style`;
+the captions go one to one with `store.microsoft.shots`, and the run stops before writing anything when they don't.
 Show the source language's images to the owner and render the rest once they OK them. `python3 laching/tools/store/check.py` checks
 the `ms.*` fields against the Store's limits.
 

@@ -241,7 +241,16 @@
             "size": { "type": "array", "items": { "type": "number" } },
             "font": { "type": "string", "description": "The headline font file." },
             "noteFont": { "type": "string", "description": "The note's font file (the headline's when absent)." },
-            "palette": { "type": "object", "description": "light/dark → {paper, ink, accent, accentText} hex colors." },
+            "palette": { "type": "object", "description": "light/dark → {paper, ink, accent, accentText, shadow} hex colors (shadow: the zine style's, the ink at 16% on the paper by default)." },
+            "style": {
+              "enum": ["rule", "zine"],
+              "description": "The captions' style on every canvas: rule (the default) sets an accent rule between headline and note beside a rounded window with a soft shadow; zine offsets a copy of the headline in the accent behind it and frames the window in ink over a hard offset shadow."
+            },
+            "cjkFonts": {
+              "type": "object",
+              "additionalProperties": { "type": "string" },
+              "description": "Language → the font file its headline and note are set in instead (e.g. ja, ko, zh-Hans: the display faces seldom have CJK); Japanese and Chinese lines break between characters."
+            },
             "canvases": {
               "type": "object",
               "additionalProperties": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
@@ -410,6 +419,10 @@
                 "light": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
                 "dark": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" }
               }
+            },
+            "captioned": {
+              "type": "boolean",
+              "description": "store-screenshots.py --canvas microsoft lays each shot out as the Mac's, the caption of screenshots.store.captions beside the window (scaled to fit, at most 1.5×) in its style and fonts, instead of centering the capture unscaled; the captions go one to one with shots, an entry's windows object replacing its fields. backdrop and shadow then don't apply."
             },
             "backdrop": {
               "type": "object",

@@ -688,7 +688,8 @@ class FontsPlanTests(unittest.TestCase):
 
 # A font every Mac has, else the one most Linux machines have.
 FONT = next((font for font in (Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
-                               Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")) if font.exists()), None)
+                               Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+                               Path("C:/Windows/Fonts/arial.ttf")) if font.exists()), None)
 
 
 class StoreScreenshotTests(unittest.TestCase):
@@ -927,6 +928,132 @@ class MicrosoftStoreScreenshotTests(FixtureAppTestCase):
             with self.assertRaises(SystemExit) as stop:
                 tool.main(["--canvas", "microsoft", "--lang", "de"])
         self.assertEqual(str(stop.exception), "store-screenshots: capturing the de windows failed")
+
+    def captioned(self, style="zine"):
+        """store.microsoft.captioned, with captions for en and it whose first entry Windows shows from another shot."""
+        self.data["screenshots"]["store"] = {"captions": "captions.json", "out": "store", "font": str(FONT), "style": style,
+                                             "palette": {"light": {"paper": "#F3EDE1", "ink": "#26336B", "accent": "#FF4D9D"}}}
+        self.data["store"]["microsoft"]["captioned"] = True
+        self.write_config()
+        entry = {"shot": "menu", "headline": ["LIVES IN YOUR", "MENU BAR"], "note": "On your Mac.",
+                 "windows": {"shot": "panel", "headline": ["LIVES IN YOUR", "TASKBAR"], "note": "On your PC."},
+                 "ios": {"shot": "today"}}
+        second = {"shot": "home", "appearance": "dark", "headline": ["HOME"], "note": "A note that wraps over lines."}
+        (self.root / "captions.json").write_text(json.dumps({"en": [entry, second], "it": [entry, second]}), "utf8")
+
+    def accent_pixels(self, path, right):
+        left = self.Image.open(path).convert("RGB").crop((0, 0, right, 2160))
+        return sum(count for count, color in left.getcolors(1 << 22) if color == (0xFF, 0x4D, 0x9D))
+
+    @unittest.skipUnless(FONT, "needs Arial or DejaVu Sans")
+    def test_captioned_lays_the_caption_beside_the_window(self):
+        self.captioned()
+        self.window(self.captures / "panel-light.png", (600, 1000))
+        result = self.run_tool()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), [
+            "store-listing/microsoft/screenshots/en/1-panel-light.png (600×1000 window)",
+            "store-listing/microsoft/screenshots/en/2-home-dark.png (601×451 window)",
+        ])
+        path = self.out / "en" / "1-panel-light.png"
+        image = self.Image.open(path).convert("RGB")
+        self.assertEqual(image.size, (3840, 2160))
+        self.assertEqual(image.getpixel((0, 0)), (0xF3, 0xED, 0xE1), "the palette's paper, not the backdrop")
+        # The window on the right, enlarged no more than 1.5×, framed in ink over a hard shadow of ink on paper.
+        width, height = 900, 1500
+        x, y = 3840 - width - round(160 * 3840 / 2880), (2160 - height) // 2
+        self.assertEqual(image.getpixel((x - 2, y + height // 2)), (0x26, 0x33, 0x6B))
+        self.assertEqual(image.getpixel((x + width // 2, y + 4)), (200, 200, 200), "the title band, enlarged")
+        self.assertEqual(image.getpixel((x + width + 20, y + height // 2)), (0xD2, 0xCF, 0xCE), "the ink at 16% on the paper")
+        # The headline on the left, in ink over its accent offset.
+        left = image.crop((0, 0, x - 160, 2160))
+        self.assertIn((0x26, 0x33, 0x6B), {color for _, color in left.getcolors(1 << 22)})
+        zine = self.accent_pixels(path, x - 160)
+        # The dark shot takes the dark palette.
+        self.assertEqual(self.Image.open(self.out / "en" / "2-home-dark.png").getpixel((0, 0))[:3], (0x1C, 0x1C, 0x1E))
+        # The rule style: no offset copy, only the short rule in the accent.
+        self.captioned("rule")
+        self.assertEqual(self.run_tool().returncode, 0)
+        self.assertLess(self.accent_pixels(path, x - 160), zine / 2)
+
+    @unittest.skipUnless(FONT, "needs Arial or DejaVu Sans")
+    def test_captioned_captions_go_one_to_one_with_the_shots(self):
+        self.captioned()
+        first = self.run_tool()
+        self.assertEqual(first.returncode, 0, first.stderr)
+        made = sorted((self.out / "en").iterdir())
+        captions = json.loads((self.root / "captions.json").read_text("utf8"))
+        del captions["en"][0]["windows"]
+        (self.root / "captions.json").write_text(json.dumps(captions), "utf8")
+        mismatched = self.run_tool()
+        self.assertEqual(mismatched.returncode, 1)
+        self.assertIn("the en captions show menu-light, home-dark, store.microsoft.shots panel-light, home-dark",
+                      mismatched.stderr)
+        self.assertEqual(sorted((self.out / "en").iterdir()), made, "nothing is touched")
+        missing = self.run_tool("--lang", "de")
+        self.assertEqual(missing.returncode, 1)
+        self.assertIn("no captions for de in store.captions (store.microsoft.captioned)", missing.stderr)
+        # A captioned window is scaled to fit, so it may be larger than the canvas.
+        captions["en"][0]["windows"] = {"shot": "panel"}
+        (self.root / "captions.json").write_text(json.dumps(captions), "utf8")
+        self.window(self.captures / "panel-light.png", (3900, 2400))
+        large = self.run_tool()
+        self.assertEqual(large.returncode, 0, large.stderr)
+
+    def test_captioned_is_checked_by_the_schema(self):
+        self.data["screenshots"]["store"] = {"captions": "c.json", "out": "store", "style": "zine",
+                                             "cjkFonts": {"ja": "fonts/NotoSansJP-Bold.ttf"}}
+        self.data["store"]["microsoft"]["captioned"] = True
+        self.assertEqual(companion.validate(self.data), [])
+        self.data["screenshots"]["store"]["style"] = "fancy"
+        self.data["store"]["microsoft"]["captioned"] = "yes"
+        problems = companion.validate(self.data)
+        self.assertTrue(any(problem.startswith("screenshots.store.style") for problem in problems), problems)
+        self.assertTrue(any(problem.startswith("store.microsoft.captioned") for problem in problems), problems)
+
+
+class CaptionWrapTests(unittest.TestCase):
+    """store-screenshots.py's line breaking, measured by a fake draw: every character 10 px wide."""
+
+    class Draw:
+        @staticmethod
+        def textlength(text, font=None):
+            return 10 * len(text)
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import PIL  # noqa: F401
+        except ImportError:
+            raise unittest.SkipTest("needs Pillow (pip3 install pillow)")
+        spec = importlib.util.spec_from_file_location("store_screenshots", TOOLS / "store-screenshots.py")
+        cls.tool = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.tool)
+
+    def wrap(self, text, width, language):
+        return self.tool.wrap(self.Draw(), text, None, width, language)
+
+    def test_latin_and_korean_wrap_at_spaces_balanced(self):
+        self.assertEqual(self.wrap("Pick the interval, hours and days.", 250, "en"),
+                         ["Pick the interval,", "hours and days."])
+        self.assertEqual(self.wrap("간격, 시간, 요일을 고르세요.", 100, "ko"), ["간격, 시간,", "요일을 고르세요."])
+
+    def test_japanese_breaks_at_a_comma_else_after_a_particle(self):
+        self.assertEqual(self.wrap("連続記録、週間のふり返り、CSV書き出し。", 130, "ja"),
+                         ["連続記録、週間のふり返り、", "CSV書き出し。"])
+        # No comma: after the particle that ends a phrase, and never inside a katakana word.
+        self.assertEqual(self.wrap("休憩はリマインダーで知らせます", 80, "ja"), ["休憩は", "リマインダーで", "知らせます"])
+        self.assertEqual(self.tool.pieces("「はい」。", "ja"), [("「は", ""), ("い」。", "")])
+
+    def test_chinese_keeps_particles_and_spaced_words(self):
+        self.assertEqual([piece for piece, _ in self.tool.pieces("CSV 导出的", "zh-Hans")], ["CSV", "导", "出的"])
+        self.assertEqual(self.tool.pieces("CSV 导出", "zh-Hans")[1], ("导", " "))
+
+    def test_platform_overrides(self):
+        captions = [{"shot": "menu", "note": "Mac", "windows": {"note": "PC"}, "android": {"shot": "home"}}]
+        self.assertEqual(self.tool.for_platform(captions, "microsoft")[0]["note"], "PC")
+        self.assertEqual(self.tool.for_platform(captions, "android-phone")[0]["shot"], "home")
+        self.assertEqual(self.tool.for_platform(captions, "mac"), captions)
 
 
 class DevIconTests(unittest.TestCase):
