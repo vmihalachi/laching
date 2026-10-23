@@ -104,7 +104,7 @@ def wrapper_problems(config: companion.Config, files: list[str], allowed: set[st
             text = file.read_text("utf-8-sig")
         except (OSError, UnicodeDecodeError):
             continue
-        # store-listing/microsoft/push.py is push-microsoft.py's copy, not push.py's.
+        # store-listing/microsoft/push.py is push-microsoft.py's copy, not push.py's (google/push.py push-google.py's).
         tool = f"{laching}/tools/{names.get(f'{path.stem}-{path.parent.name}', names[path.stem])}"
         if not delegates(text, laching):
             problems.append(f"{name}: a copy of {tool}: delete it and run the tool, make it a wrapper that calls it, "

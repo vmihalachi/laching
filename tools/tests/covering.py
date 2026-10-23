@@ -48,7 +48,7 @@ COVERS: dict[str, tuple[str, ...]] = {
     "tools/screenshots.sh": ("test_scripts",),
     "tools/sim.py": ("test_screens", "test_scripts"),  # check-layout-ios.py
     "tools/store-screenshots.py": ("test_scripts",),
-    "tools/store/*": ("test_store", "test_push_microsoft"),
+    "tools/store/*": ("test_store", "test_push_microsoft", "test_push_google"),
     "tools/synth.py": ("test_synth", "test_scripts"),
     "tools/verify.sh": ("test_scripts", "test_hook"),
     "tools/voice.py": ("test_voice",),
