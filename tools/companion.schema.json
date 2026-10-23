@@ -84,8 +84,8 @@
       "additionalProperties": false,
       "properties": {
         "dir": { "type": "string", "description": "The Gradle project's folder (android)." },
-        "core": { "type": "string", "description": "The pure Kotlin module, vector-tested (core by default)." },
-        "app": { "type": "string", "description": "The app module (app by default)." },
+        "core": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$", "description": "The pure Kotlin module, vector-tested (core by default); a Gradle module name inside dir, not a path." },
+        "app": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$", "description": "The app module (app by default); a Gradle module name inside dir, not a path." },
         "applicationId": { "type": "string", "description": "The Play application id; bundleId by default." },
         "devApplicationId": { "type": "string", "description": "The Debug build's application id; devBundleId by default." },
         "strings": { "type": "string", "description": "Where l10n.py export-android writes values*/strings.xml and xml/locales_config.xml: the app module's res folder." }

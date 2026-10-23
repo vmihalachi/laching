@@ -18,7 +18,9 @@ prepare  without --apply prints what it would change: against Google Play when t
                      source language's
            products  `store.apple.iaps` as one-time products with the same IDs: the name and description from the
                      `google.iap.*` fields, one buy option priced at the product's `price` in USD, converted to every
-                     region by Google Play; created when missing, then activated
+                     region by Google Play; created when missing, then activated. A product Google Play already has
+                     gets its name and description only: its prices stay as Play Console has them (Google Play's
+                     conversion adds VAT on top, so a euro price set by hand, tax-inclusive, would be lost)
          Text and graphics go through one edit, committed at the end (--not-sent-for-review when Google Play asks for
          it: the changes then wait for Publishing overview → Send for review). Products are written directly.
 status   prints the languages, graphics and products Google Play has.
@@ -220,26 +222,40 @@ def prepare_products(api: Client | None, store: Listing, apply: bool) -> None:
         remote = {item["productId"]: item for item in api.call("GET", "oneTimeProducts").get("oneTimeProducts", [])}
     for product, want in products(store).items():
         current = remote.get(product)
-        print(f"product {product}: {'update' if current else 'create'}, {len(want['listings'])} languages,"
-              f" USD {want['price']}")
+        if current:
+            print(f"product {product}: update, {len(want['listings'])} languages (prices kept)")
+            if apply:
+                # The API wants a regions version on every write; a conversion is the way to learn the current one.
+                version = api.call("POST", "pricing:convertRegionPrices", {"price": money(want["price"])})
+                api.call("PATCH", f"onetimeproducts/{product}",
+                         {"packageName": api.package, "productId": product, "listings": want["listings"]},
+                         {"updateMask": "listings", "regionsVersion.version": version["regionVersion"]["version"]})
+        else:
+            print(f"product {product}: create, {len(want['listings'])} languages, USD {want['price']}")
         if not apply:
             continue
-        converted = api.call("POST", "pricing:convertRegionPrices", {"price": money(want["price"])})
-        regions = [{"regionCode": region, "price": price["price"], "availability": "AVAILABLE"}
-                   for region, price in converted["convertedRegionPrices"].items()]
-        option = {"purchaseOptionId": OPTION, "buyOption": {"legacyCompatible": True},
-                  "regionalPricingAndAvailabilityConfigs": regions}
-        body = {"packageName": api.package, "productId": product, "listings": want["listings"],
-                "purchaseOptions": [option]}
-        api.call("PATCH", f"onetimeproducts/{product}", body,
-                 {"allowMissing": "true", "updateMask": "listings,purchaseOptions",
-                  "regionsVersion.version": converted["regionVersion"]["version"]})
+        if not current:
+            create(api, product, want)
         state = next((o.get("state") for o in (current or {}).get("purchaseOptions", [])
                       if o["purchaseOptionId"] == OPTION), None)
         if state != "ACTIVE":
             api.call("POST", f"oneTimeProducts/{product}/purchaseOptions:batchUpdateStates", {"requests": [
                 {"activatePurchaseOptionRequest": {"packageName": api.package, "productId": product,
                                                    "purchaseOptionId": OPTION}}]})
+
+
+def create(api: Client, product: str, want: dict) -> None:
+    """A new product with its one buy option, priced in every region from the USD price."""
+    converted = api.call("POST", "pricing:convertRegionPrices", {"price": money(want["price"])})
+    regions = [{"regionCode": region, "price": price["price"], "availability": "AVAILABLE"}
+               for region, price in converted["convertedRegionPrices"].items()]
+    option = {"purchaseOptionId": OPTION, "buyOption": {"legacyCompatible": True},
+              "regionalPricingAndAvailabilityConfigs": regions}
+    body = {"packageName": api.package, "productId": product, "listings": want["listings"],
+            "purchaseOptions": [option]}
+    api.call("PATCH", f"onetimeproducts/{product}", body,
+             {"allowMissing": "true", "updateMask": "listings,purchaseOptions",
+              "regionsVersion.version": converted["regionVersion"]["version"]})
 
 
 def cmd_prepare(api: Client | None, store: Listing, args) -> None:

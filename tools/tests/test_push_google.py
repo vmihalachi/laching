@@ -162,6 +162,15 @@ class PrepareTests(PushGoogleTestCase):
         self.assertEqual(len(api.paths("PATCH")), 1)
         self.assertFalse([path for path in api.paths("POST") if "batchUpdateStates" in path])
 
+    def test_an_existing_product_keeps_its_prices(self):
+        api = FakeApi(products=[{"productId": "app.fixture.supporter",
+                                 "purchaseOptions": [{"purchaseOptionId": "buy", "state": "ACTIVE"}]}])
+        self.prepare(api, only="products")
+        _, _, body, query, _ = next(call for call in api.calls if call[0] == "PATCH")
+        self.assertEqual(query["updateMask"], "listings")
+        self.assertNotIn("purchaseOptions", body, "prices set in Play Console (tax-inclusive euros) aren't overwritten")
+        self.assertEqual(query["regionsVersion.version"], "2025/03")
+
 
 @unittest.skipUnless(shutil.which("openssl"), "needs openssl")
 class AssertionTests(unittest.TestCase):
