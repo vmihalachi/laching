@@ -25,7 +25,7 @@ class CoveringTests(unittest.TestCase):
         self.assertEqual(covering.covering(["tools/l10n.py"]), ["test_l10n", "test_scripts.SharedFilesTests"])
         self.assertEqual(covering.covering(["tools/windows/vm.py"]), ["test_scripts.SharedFilesTests", "test_vm"])
         self.assertEqual(covering.covering(["tools/store/push.py", "tools/store/listing.py"]),
-                         ["test_push_microsoft", "test_scripts.SharedFilesTests", "test_store"])
+                         ["test_push_google", "test_push_microsoft", "test_scripts.SharedFilesTests", "test_store"])
         self.assertEqual(covering.covering(["tools/windows/assets.py"]), ["test_scripts.SharedFilesTests", "test_windows"])
         self.assertEqual(covering.covering(["tools/landing/src/index.ts"]), ["test_scripts.SharedFilesTests"])
         self.assertEqual(covering.covering(["Tests/Fixtures/characters/fixture/body.svg"]), ["test_character"])

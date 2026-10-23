@@ -385,11 +385,16 @@
         },
         "google": {
           "type": "object",
-          "description": "Google Play; check.py requires the google.* fields of the listing when it's there, and store-screenshots.py knows Play's canvases.",
+          "description": "Google Play; check.py requires the google.* fields of the listing when it's there, store-screenshots.py knows Play's canvases and push-google.py pushes the listing, graphics and one-time products.",
           "additionalProperties": false,
           "properties": {
             "screenshots": { "type": "string", "description": "<lang>/*.png per language; google/screenshots by default." },
             "screenshotCount": { "type": "integer", "description": "Screenshots (and captions) per language; 8 by default." },
+            "packageName": { "type": "string", "description": "The Android app's package name (its release applicationId), for push-google.py." },
+            "icon": { "type": "string", "description": "The 512 × 512 app icon, in store.dir; google/icon-512.png by default." },
+            "featureGraphic": { "type": "string", "description": "The 1024 × 500 feature graphic, in store.dir; google/feature-graphic.png by default." },
+            "phoneScreenshots": { "type": "string", "description": "<lang>/*.png phone screenshots per language, in store.dir; google/phone by default." },
+            "tabletScreenshots": { "type": "string", "description": "<lang>/*.png tablet screenshots per language, in store.dir, uploaded to both the 7-inch and the 10-inch slot; google/tablet by default." },
             "locales": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Listing language → Play Console locale where it differs from the language (en → en-US, zh-Hans → zh-CN, nb → no-NO, pt-BR → pt-BR); the rest as Apple's." }
           }
         },

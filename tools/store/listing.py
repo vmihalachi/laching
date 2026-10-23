@@ -4,7 +4,7 @@
 a ```text block (`parse`). `store.apple` names the app in App Store Connect (its Apple ID, platform, copyright, the
 listing language → App Store Connect locale map, the in-app purchases); `store.apple.ios`, when present, adds the iPhone
 and iPad version page of a universal app (`ios.*`: the name and subtitle are the app's, shared by both platforms).
-`store.microsoft` is the Partner Center import. Standard library only.
+`store.microsoft` is the Partner Center import, and `store.google` the Google Play listing (push-google.py). Standard library only.
 """
 
 from __future__ import annotations
@@ -127,6 +127,13 @@ class Listing:
         self.ios_search = self.dir / ios.get("searchResults", "apple/search-results.png")
         self.microsoft = config.get("store.microsoft")
         self.google = config.get("store.google")
+        google = self.google or {}
+        self.package = google.get("packageName")
+        self.google_locale = {**self.locale, **google.get("locales", {})}
+        self.google_icon = self.dir / google.get("icon", "google/icon-512.png")
+        self.feature_graphic = self.dir / google.get("featureGraphic", "google/feature-graphic.png")
+        self.phone_screenshots = self.dir / google.get("phoneScreenshots", "google/phone")
+        self.tablet_screenshots = self.dir / google.get("tabletScreenshots", "google/tablet")
 
     def site(self, lang: str) -> str:
         """The landing page for a language: the site's root for the source language, `/<lang>/` for the others."""
