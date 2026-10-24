@@ -580,16 +580,21 @@ def cmd_render(args) -> int:
     lang_entry["default"] = config["languages"][args.lang]["default"]
     entry = lang_entry.setdefault("voices", {}).setdefault(kind, {"clips": {}})
     entry["name"] = voice.get("name", "")
+    if todo and not args.yes and not args.dry_run:  # before the prune: a refused run deletes nothing
+        fail("add --yes to spend the credits above (check them with --dry-run first)")
     if args.prune:
         keys = clip_keys(config, args.lang)
         for clip in [c for c in entry["clips"] if c not in keys]:
+            if args.dry_run:
+                print(f"  would prune {clip}")
+                continue
             clip_path(args.lang, kind, clip).unlink(missing_ok=True)
             del entry["clips"][clip]
             print(f"  pruned {clip}")
+        if not args.dry_run:
+            dump_json(MANIFEST, manifest)  # now, so a recording that stops (ElevenLabs, ^C) lists no deleted clip
     if args.dry_run:
         return 0
-    if todo and not args.yes:
-        fail("add --yes to spend the credits above (check them with --dry-run first)")
     for n, (clip, text, request, rhash, lufs) in enumerate(todo, 1):
         print(f"  [{n}/{len(todo)}] {clip}: {request['text']}")
         raw = WORK / "raw" / args.lang / kind / f"{clip}.mp3"

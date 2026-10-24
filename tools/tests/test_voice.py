@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Tests for tools/voice.py's offline parts over the fixture app: clip ids (a joke's parts, language scoping), the
-pending report, the check, the friends' site, the review page, the render hash and the mouth envelope. Nothing here
-talks to ElevenLabs."""
+pending report, the check, render's prune, the friends' site, the review page, the render hash and the mouth envelope.
+Nothing here talks to ElevenLabs."""
 
 from __future__ import annotations
 
+import argparse
 import io
 import json
 import ntpath
@@ -40,15 +41,31 @@ class VoiceTests(FixtureAppTestCase):
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             return voice.cmd_check(None)
 
-    def add_clip(self, clip: str, text: str | None = None, lang: str = "it", kind: str = "clown") -> None:
+    def add_clip(self, clip: str, text: str | None = None, lang: str = "it", kind: str = "clown",
+                 render_hash: str = "r") -> None:
         path = voice.clip_path(lang, kind, clip)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"aac")
         manifest = voice.load_manifest()
         entry = manifest["languages"].setdefault(lang, {"status": "testing", "default": "clown", "voices": {}})
         entry["voices"].setdefault(kind, {"clips": {}})["clips"][clip] = {
-            "textHash": voice.text_hash(text or TEXTS[clip]), "renderHash": "r", "duration": 1.0, "mouth": "0110"}
+            "textHash": voice.text_hash(text or TEXTS[clip]), "renderHash": render_hash, "duration": 1.0,
+            "mouth": "0110"}
         voice.dump_json(voice.MANIFEST, manifest)
+
+    def add_every_clip(self) -> None:
+        """Every Italian line recorded from its current text and render settings: nothing left to render."""
+        for clip, text, _, rhash, _ in voice.plan_render("it", "clown", voice.load_config(), None, False):
+            self.add_clip(clip, text, render_hash=rhash)
+
+    def prune(self, **flags) -> str:
+        """`voice.py render --lang it --prune` with `flags` (`dry_run`, `yes`): what it printed."""
+        args = argparse.Namespace(lang="it", voice=None, only=None, force=False, prune=True,
+                                  **{"dry_run": False, "yes": False, **flags})
+        out = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(io.StringIO()):
+            self.assertEqual(voice.cmd_render(args), 0)
+        return out.getvalue()
 
     def test_names_come_from_companion_json(self):
         self.assertEqual(voice.KINDS, ("clown",))
@@ -105,6 +122,39 @@ class VoiceTests(FixtureAppTestCase):
         voice.dump_json(voice.MANIFEST, manifest)
         self.assertEqual(self.check(), 1, "the file is still on disk, outside the manifest")
         voice.clip_path("it", "clown", "retired").unlink()
+        self.assertEqual(self.check(), 0)
+
+    def test_a_dry_run_prune_only_says_what_it_would_remove(self):
+        self.add_every_clip()
+        self.add_clip("retired", "Addio.")
+        before = voice.MANIFEST.read_bytes()
+        out = self.prune(dry_run=True)
+        self.assertIn("would prune retired", out)
+        self.assertNotIn("pruned retired", out)
+        self.assertTrue(voice.clip_path("it", "clown", "retired").exists(), "the file stays on disk")
+        self.assertEqual(voice.MANIFEST.read_bytes(), before, "and in the manifest")
+
+    def test_prune_removes_an_orphan_from_disk_and_manifest(self):
+        self.add_every_clip()
+        self.add_clip("retired", "Addio.")
+        self.assertEqual(self.check(), 1)
+        self.assertIn("pruned retired", self.prune())
+        self.assertFalse(voice.clip_path("it", "clown", "retired").exists())
+        self.assertNotIn("retired", voice.manifest_clips(voice.load_manifest(), "it", "clown"))
+        self.assertEqual(self.check(), 0)
+
+    def test_a_prune_that_stops_before_recording_leaves_files_and_manifest_agreeing(self):
+        self.add_clip("hello", render_hash="old")  # so there are lines to render
+        self.add_clip("retired", "Addio.")
+        before = voice.MANIFEST.read_bytes()
+        with self.assertRaises(SystemExit):
+            self.prune()  # no --yes
+        self.assertTrue(voice.clip_path("it", "clown", "retired").exists(), "a refused run prunes nothing")
+        self.assertEqual(voice.MANIFEST.read_bytes(), before)
+        with mock.patch.object(voice, "tts", side_effect=SystemExit(2)), self.assertRaises(SystemExit):
+            self.prune(yes=True)  # ElevenLabs fails on the first line
+        self.assertFalse(voice.clip_path("it", "clown", "retired").exists())
+        self.assertNotIn("retired", voice.manifest_clips(voice.load_manifest(), "it", "clown"))
         self.assertEqual(self.check(), 0)
 
     def test_site_follows_the_clips(self):
