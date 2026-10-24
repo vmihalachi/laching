@@ -35,6 +35,7 @@ COVERS: dict[str, tuple[str, ...]] = {
     "tools/check-layout-android.py": ("test_scripts",),
     "tools/check-layout-ios.py": ("test_scripts",),
     "tools/check-layout.sh": ("test_scripts",),
+    "tools/ci-macos.py": ("test_ci_macos",),
     "tools/conform.py": ("test_conform", "test_pins"),
     "tools/conformance.sh": ("test_scripts",),
     "tools/dev-icon.swift": ("test_scripts",),  # install-dev.sh
@@ -50,6 +51,7 @@ COVERS: dict[str, tuple[str, ...]] = {
     "tools/store-screenshots.py": ("test_scripts",),
     "tools/store/*": ("test_store", "test_push_microsoft", "test_push_google"),
     "tools/synth.py": ("test_synth", "test_scripts"),
+    "tools/verify-lock.py": ("test_verify",),
     "tools/verify.sh": ("test_scripts", "test_hook"),
     "tools/voice.py": ("test_voice",),
     "tools/voice-review.html": ("test_voice",),

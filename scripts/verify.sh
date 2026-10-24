@@ -32,17 +32,11 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-case "$mode" in
-  worktree) changed="$(git diff --name-only HEAD; git ls-files --others --exclude-standard)" ;;
-  staged) changed="$(git diff --cached --name-only)" ;;
-esac
-changed="$(printf '%s\n' "$changed" | sed '/^$/d' | sort -u)"
+. tools/verify-lib.sh
+base="" paths=()
+discover_changes "$root"
 touched() { [ "$all" = 1 ] || printf '%s\n' "$changed" | grep -Eq "$1"; }
 darwin=0; [ "$(uname)" = Darwin ] && darwin=1
-# check, skip, summary, finish: the harness tools/verify.sh uses too.
-# shellcheck source=../tools/verify-lib.sh
-. tools/verify-lib.sh
-
 swift='^Package\.swift$|^Sources/|^Tests/|^\.swift-format$'
 dotnet='^dotnet/|^conformance/|^Tests/LachingCompanionTests/Resources/|^Tests/LachingShellTests/Resources/'
 tools='^tools/|^Tests/Fixtures/'

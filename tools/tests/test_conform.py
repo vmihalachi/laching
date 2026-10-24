@@ -95,6 +95,15 @@ class ConformTests(FixtureAppTestCase):
         self.edit_config(lambda data: data["windows"].pop("app"))
         self.assertFalse(any("no workflow calls" in p for p in self.problems()), "only an app with windows.app")
 
+    def test_macos_workflow_refs_are_checked_against_the_same_release(self):
+        self.write(".github/workflows/macos.yml", "jobs:\n  test:\n"
+                   "    uses: vmihalachi/laching/.github/workflows/macos-app.yml@v0.4.0\n")
+        self.assertIn(".github/workflows/macos.yml: calls macos-app.yml@v0.4.0, but the app pins Laching v0.5.0: "
+                      "call it @v0.5.0", self.problems())
+        self.write(".github/workflows/macos.yml", "jobs:\n  test:\n"
+                   "    uses: vmihalachi/laching/.github/workflows/macos-app.yml@v0.5.0\n")
+        self.assertEqual(self.problems(), [])
+
     def test_skills_link_into_laching(self):
         git(self.root, "init", "-q")
         skills = self.root / ".agents" / "skills"

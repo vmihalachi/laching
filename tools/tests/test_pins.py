@@ -114,6 +114,15 @@ class BumpTests(PinsTestCase):
         self.assertIn("originHash", out)
         self.assertEqual(self.calls, ["regenerate_project"])
 
+    def test_bump_moves_the_reusable_macos_workflow_pin(self):
+        workflow = self.root / ".github/workflows/macos.yml"
+        workflow.write_text("jobs:\n  test:\n    uses: vmihalachi/laching/.github/workflows/macos-app.yml@v0.5.0\n", "utf8")
+        self.assertIn((".github/workflows/macos.yml macos-app.yml@", "v0.5.0"), companion.pins(companion.load()))
+        code, out = self.cli("bump", "0.6.0")
+        self.assertEqual(code, 0, out)
+        self.assertIn("macos-app.yml@v0.6.0", workflow.read_text("utf8"))
+        self.assertTrue(companion.pins_agree(companion.pins(companion.load())))
+
     def test_an_android_app_pins_the_submodules_kotlin_build(self):
         manifest = self.root / "companion.json"
         data = json.loads(manifest.read_text("utf8"))

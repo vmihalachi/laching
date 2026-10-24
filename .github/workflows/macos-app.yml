@@ -1,0 +1,75 @@
+name: macOS app (reusable)
+
+# The app's companion.json supplies all source/project paths, content checks and build settings. The caller pins this
+# workflow to its Laching release; commands use that same release's tools in the submodule. No command-string inputs.
+on:
+  workflow_call:
+    inputs:
+      hosted:
+        description: "Use GitHub's Mac runner (macOS minutes bill at 10x)"
+        type: boolean
+        default: false
+      runner:
+        description: "Self-hosted runner labels as JSON"
+        type: string
+        default: '["self-hosted","macOS"]'
+      laching-path:
+        description: "The Laching submodule, matching companion.json's laching.path"
+        type: string
+        default: laching
+      submodules:
+        description: "actions/checkout's submodules; true also checks out the app's bundled voices"
+        type: string
+        default: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ${{ inputs.hosted && 'macos-26' || fromJSON(inputs.runner) }}
+    timeout-minutes: 40
+    env:
+      COMPANION_ROOT: ${{ github.workspace }}
+      LACHING_PATH: ${{ inputs.laching-path }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: ${{ inputs.submodules }}
+
+      - name: Check out the pinned Laching tools
+        run: git submodule update --init -- "$LACHING_PATH"
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        if: inputs.hosted
+        with:
+          xcode-version: latest-stable
+
+      - name: Install XcodeGen
+        run: command -v xcodegen >/dev/null || brew install xcodegen
+
+      - name: Check the Laching pins and shared tooling
+        run: python3 "./$LACHING_PATH/tools/ci-macos.py" pins
+
+      - name: Generate the Xcode project and check the committed copy
+        run: python3 "./$LACHING_PATH/tools/ci-macos.py" project
+
+      - name: Check Swift formatting
+        run: python3 "./$LACHING_PATH/tools/ci-macos.py" format
+
+      - name: Check strings and generated content
+        run: python3 "./$LACHING_PATH/tools/ci-macos.py" content
+
+      - name: Core package tests
+        run: python3 "./$LACHING_PATH/tools/ci-macos.py" core
+
+      - name: App tests
+        run: python3 "./$LACHING_PATH/tools/ci-macos.py" test
+
+      - name: Upload the test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-logs
+          path: "**/build/ci-*.log"
+          if-no-files-found: ignore

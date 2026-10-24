@@ -38,21 +38,7 @@ public readonly record struct ThemedColor(Color Light, Color Dark)
 
     private static Color? ResourceColor(string key, string theme)
     {
-        var resources = Application.Current.Resources;
-        foreach (var dictionary in resources.MergedDictionaries.Reverse().Append(resources))
-        {
-            // Through XamlCast: under Native AOT a theme dictionary or a brush read untyped can arrive as a plain
-            // DependencyObject, so `is` misses and the app throws at launch (a Debug run never shows it).
-            if (
-                dictionary.ThemeDictionaries.TryGetValue(theme, out var themed)
-                && XamlCast.As<ResourceDictionary>(themed) is { } colors
-                && colors.TryGetValue(key, out var value)
-            )
-                return ColorOf(value);
-            if (dictionary.TryGetValue(key, out var plain))
-                return ColorOf(plain);
-        }
-        return null;
+        return XamlResources.FindThemed(key, theme) is { } value ? ColorOf(value) : null;
     }
 
     private static Color? ColorOf(object value) =>

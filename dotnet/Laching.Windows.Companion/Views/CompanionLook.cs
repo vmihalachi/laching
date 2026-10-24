@@ -1,8 +1,7 @@
-using Microsoft.UI.Dispatching;
+using Laching.Windows.Shell;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 using Windows.UI.Text;
-using Windows.UI.ViewManagement;
 
 namespace Laching.Windows.Companion.Views;
 
@@ -29,7 +28,7 @@ public sealed record CompanionLook(CompanionPalette Palette)
         set
         {
             current = value;
-            LookWatch.Raise();
+            ThemeBinding.Refresh();
         }
     }
 
@@ -38,54 +37,13 @@ public sealed record CompanionLook(CompanionPalette Palette)
 }
 
 /// <summary>
-/// Tells the controls on screen to repaint: the app set a new look, or Windows' colors changed (a contrast theme on or
-/// off, a new accent). UI thread only; Windows' change arrives on another thread and is brought over.
-/// </summary>
-internal static class LookWatch
-{
-    private static readonly List<Action> Listeners = [];
-    private static UISettings? settings;
-    private static DispatcherQueue? queue;
-
-    public static void Add(Action listener)
-    {
-        if (settings is null)
-        {
-            queue = DispatcherQueue.GetForCurrentThread();
-            // Kept in a field: Windows forgets the handler of a collected UISettings.
-            settings = new UISettings();
-            settings.ColorValuesChanged += (_, _) => queue?.TryEnqueue(Raise);
-        }
-        if (!Listeners.Contains(listener))
-            Listeners.Add(listener);
-    }
-
-    public static void Remove(Action listener) => Listeners.Remove(listener);
-
-    public static void Raise()
-    {
-        foreach (var listener in Listeners.ToArray())
-            listener();
-    }
-}
-
-/// <summary>
 /// Keeps a code-built element in the look's colors (what <c>{ThemeResource}</c> does in XAML): <c>apply</c> runs now,
 /// when the element's theme changes and, while it is loaded, when the look or Windows' colors change.
 /// </summary>
-internal static class LookBinding
+public static class LookBinding
 {
-    public static void Keep(FrameworkElement element, Action apply)
-    {
-        apply();
-        element.ActualThemeChanged += (_, _) => apply();
-        element.Loaded += (_, _) =>
-        {
-            LookWatch.Add(apply);
-            apply();
-        };
-        element.Unloaded += (_, _) => LookWatch.Remove(apply);
-    }
+    /// <summary>Applies now and on element, app-look and Windows color changes; listeners follow the element's lifetime.</summary>
+    public static void Keep(FrameworkElement element, Action apply) => ThemeBinding.Keep(element, apply);
 
     /// <summary>A brush of <paramref name="color"/> picked for <paramref name="element"/>'s theme from the look's palette now.</summary>
     public static SolidColorBrush Brush(FrameworkElement element, Func<CompanionPalette, ThemedColor> color) =>
