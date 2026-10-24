@@ -172,6 +172,36 @@ class VoiceTests(FixtureAppTestCase):
         with self.assertRaises(SystemExit):
             voice.review_colors()
 
+    def test_site_takes_reactions_an_icon_and_link_previews(self):
+        self.add_clip("hello")
+        path = self.root / "companion.json"
+        data = json.loads(path.read_text("utf8"))
+        data["voice"].update({"reactions": ["Funny", "Meh"], "siteIcon": "icon.png", "repo": "someone/fixture-voices"})
+        path.write_text(json.dumps(data), "utf8")
+        (self.root / "icon.png").write_bytes(b"\x89PNG fixture")
+        voice.configure(companion.load())
+        voice.sync_site(voice.load_config(), voice.load_manifest())
+        site = voice.VOICE.parent
+        page = (site / "review" / "it.html").read_text("utf8")
+        shown = json.loads(page.split("const DATA = ", 1)[1].split(";\n", 1)[0])
+        self.assertEqual((shown["reactions"], shown["icon"], shown["source"]), (["Funny", "Meh"], "../icon.png", "en"))
+        self.assertEqual((site / "icon.png").read_bytes(), b"\x89PNG fixture")
+        self.assertIn('<link rel="icon" type="image/png" href="../icon.png">', page)
+        self.assertIn('<meta property="og:url" content="https://someone.github.io/fixture-voices/review/it.html">', page)
+        index = (site / "index.html").read_text("utf8")
+        self.assertIn('<meta property="og:image" content="https://someone.github.io/fixture-voices/icon.png">', index)
+        self.assertIn('data-lang="it" data-lines="1"', index)
+        self.assertEqual(voice.stale_site(voice.load_config(), voice.load_manifest()), [])
+        owner, _ = voice.review_page("it", ["clown"], voice.WORK / "review" / "it.html", False, voice.load_config(),
+                                     voice.load_manifest())
+        self.assertNotIn("og:", owner, "the owner's page is local: no previews")
+        self.assertNotIn("<!--HEAD-->", owner)
+        data["voice"]["reactions"] = ["Funny", " "]
+        path.write_text(json.dumps(data), "utf8")
+        voice.configure(companion.load())
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
+            voice.review_reactions()
+
     def test_publish_pushes_to_origins_default_branch(self):
         remote, site = self.root / "remote.git", self.root / "voices-clone"
         git = lambda *a: subprocess.run(["git", *a], check=True, capture_output=True)  # noqa: E731

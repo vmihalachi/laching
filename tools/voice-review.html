@@ -2,12 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow, noarchive">
 <title>Voice review</title>
+<!--HEAD-->
 <style>
   /* The default colors; an app sets its own in companion.json (`voice.reviewColors`), injected after this block. */
   :root {
+    color-scheme: light dark;
     --paper: #FFF8E7; --card: #FFFDF7; --ink: #3D2B1F; --ink-soft: #7A6555; --line: #E8DCC4;
     --accent: #F2C94C; --accent-soft: #FCEFC4; --on-accent: #3D2B1F;
     --done: #6B8F4E; --done-soft: #E3EDD5; --flag: #C4623A; --flag-soft: #F6DED3;
@@ -21,119 +23,223 @@
   }
   /*COLORS*/
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.45 system-ui, -apple-system, sans-serif; }
-  header { position: sticky; top: 0; z-index: 2; background: var(--paper); border-bottom: 1px solid var(--line); padding: 12px 16px; }
-  .bar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; max-width: 980px; margin: 0 auto; }
-  h1 { font-size: 18px; margin: 0 12px 0 0; }
-  .progress { flex: 1 1 160px; height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; min-width: 120px; }
-  .progress > i { display: block; height: 100%; background: var(--done); width: 0; transition: width .2s; }
-  .count { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
-  button, select { font: inherit; color: var(--ink); background: var(--card); border: 1.5px solid var(--line); border-radius: 999px; padding: 4px 12px; cursor: pointer; }
-  button:hover { border-color: var(--ink-soft); }
+  html { scrollbar-color: var(--line) var(--paper); -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; accent-color: var(--accent); }
+  ::selection { background: var(--accent-soft); color: var(--ink); }
+  :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  svg { width: 1em; height: 1em; flex: none; }
+  a { color: inherit; text-underline-offset: 3px; }
+  [hidden] { display: none !important; }
+
+  button, select { font: inherit; font-size: 14px; color: var(--ink); background: var(--card); border: 1.5px solid var(--line); border-radius: 999px; padding: 5px 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; min-height: 34px; }
+  select { padding-right: 8px; max-width: 100%; }
+  button:hover, select:hover { border-color: var(--ink-soft); }
+  button:active { transform: translateY(1px); }
   button.primary { background: var(--accent); border-color: var(--accent); font-weight: 600; color: var(--on-accent); }
-  button.on { background: var(--done-soft); border-color: var(--done); }
-  .keys { max-width: 980px; margin: 6px auto 0; color: var(--ink-soft); font-size: 12px; }
-  kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: var(--card); }
-  main { max-width: 980px; margin: 0 auto; padding: 12px 16px 270px; }
-  .row { display: grid; grid-template-columns: 34px 1fr auto; gap: 4px 12px; align-items: start; background: var(--card); border: 1.5px solid var(--line); border-radius: 14px; padding: 12px 14px; margin: 0 0 10px; }
+  button.primary:hover { border-color: var(--ink); }
+  button.quiet { background: transparent; border-color: transparent; color: var(--ink-soft); text-decoration: underline; text-underline-offset: 3px; padding-inline: 4px; }
+  button.quiet:hover { color: var(--ink); border-color: transparent; }
+  button:disabled { opacity: .4; cursor: default; transform: none; border-color: var(--line); }
+
+  /* The header: who and which language, then the player. Progress is the line along its bottom edge. */
+  header { position: sticky; top: 0; z-index: 3; background: var(--paper); border-bottom: 1px solid var(--line); padding: 10px 16px 12px; padding-top: max(10px, env(safe-area-inset-top)); }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; max-width: 980px; margin: 0 auto; }
+  .ident { display: flex; align-items: center; gap: 10px; flex: 1 1 auto; min-width: 0; }
+  .ident img { width: 30px; height: 30px; border-radius: 7px; }
+  h1 { font-size: 18px; line-height: 1.2; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: -.01em; }
+  .player { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .count { color: var(--ink-soft); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .progress { position: absolute; left: 0; right: 0; bottom: -1px; height: 3px; }
+  .progress > i { display: block; height: 100%; width: 0; background: var(--done); border-radius: 0 3px 3px 0; transition: width .25s cubic-bezier(.2, .8, .2, 1); }
+
+  main { max-width: 980px; margin: 0 auto; padding: 14px 16px calc(var(--footer-h, 120px) + 24px); }
+
+  /* The first-visit guide, for friends. */
+  .intro { background: var(--card); border: 1.5px solid var(--line); border-radius: 16px; padding: 16px 18px; margin: 0 0 16px; }
+  .intro h2 { font-size: 16px; margin: 0 0 8px; }
+  .intro ol { margin: 0 0 12px; padding-left: 1.3em; display: grid; gap: 6px; max-width: 70ch; }
+  .intro li::marker { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+  .intro b { font-weight: 600; }
+
+  .row { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 4px 14px; align-items: start; background: var(--card); border: 1.5px solid var(--line); border-radius: 14px; padding: 12px 14px; margin: 0 0 10px; scroll-margin: 140px 0 calc(var(--footer-h, 120px) + 16px); transition: border-color .15s, box-shadow .15s; }
   .row.current { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   .row.flagged { border-color: var(--flag); }
-  .row.done .num::after { content: " ✓"; color: var(--done); }
-  .num { color: var(--ink-soft); font-variant-numeric: tabular-nums; padding-top: 3px; font-size: 13px; }
-  .it { font-size: 18px; font-weight: 600; }
-  .en { color: var(--ink-soft); font-size: 13px; }
-  .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; font-size: 12px; color: var(--ink-soft); }
-  .chip { border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; }
-  .chip.flavor-0 { background: var(--accent-soft); } .chip.flavor-1 { background: var(--flag-soft); }
-  .chip.new { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
-  .chip.waiting { border-style: dashed; }
-  .chip.flavor-2 { background: var(--done-soft); } .chip.flavor-3 { background: var(--line); }
+  .row.flagged.current { box-shadow: 0 0 0 3px var(--flag-soft); }
   /* A joke's later parts sit under its first, indented, joined to it. */
   .row.part { margin: -6px 0 10px 34px; border-top-style: dashed; }
+  .num { color: var(--ink-soft); font-variant-numeric: tabular-nums; padding-top: 3px; font-size: 13px; text-decoration: none; display: inline-flex; align-items: center; gap: 3px; }
+  .num:hover { color: var(--ink); text-decoration: underline; }
+  .num svg { color: var(--done); }
+  .line { font-size: 18px; font-weight: 600; margin: 0; line-height: 1.35; overflow-wrap: anywhere; text-wrap: pretty; }
+  .gloss { color: var(--ink-soft); font-size: 13px; margin: 2px 0 0; overflow-wrap: anywhere; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 12px; color: var(--ink-soft); align-items: center; }
+  .chip { border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; line-height: 18px; }
+  .chip.flavor-0 { background: var(--accent-soft); } .chip.flavor-1 { background: var(--flag-soft); }
+  .chip.flavor-2 { background: var(--done-soft); } .chip.flavor-3 { background: var(--line); }
+  .chip.new { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+  .chip.waiting { border-style: dashed; }
+  .chip.failed { border-color: var(--flag); color: var(--flag); }
+  .id { font: 11px ui-monospace, monospace; }
+
   .actions { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
-  .pair { display: flex; gap: 6px; } .pair button:first-child { flex: 1; }
-  .actions button { font-size: 13px; padding: 3px 10px; white-space: nowrap; }
-  .actions button.flag.on { background: var(--flag-soft); border-color: var(--flag); }
+  .actions button { font-size: 13px; padding: 3px 11px; min-height: 30px; white-space: nowrap; justify-content: center; }
+  .pair { display: flex; gap: 6px; } .pair .play { flex: 1; justify-content: flex-start; }
+  .actions .flag[aria-pressed="true"] { background: var(--flag-soft); border-color: var(--flag); }
   .actions .playing { background: var(--accent-soft); border-color: var(--accent); }
+  .actions .noted { border-color: var(--ink-soft); }
+  .react { display: flex; } .react button { flex: 1; }
+  .react button:first-child { border-radius: 999px 0 0 999px; } .react button:last-child { border-radius: 0 999px 999px 0; margin-left: -1.5px; }
+  .react button[aria-pressed="true"] { background: var(--done-soft); border-color: var(--done); position: relative; }
+  .react button.down[aria-pressed="true"] { background: var(--line); border-color: var(--ink-soft); }
+  /* While a clip plays, its button's icon becomes three moving bars. */
+  .eq { display: none; gap: 2px; align-items: flex-end; height: 12px; width: 13px; }
+  .eq i { width: 3px; background: currentColor; border-radius: 1px; animation: eq .9s ease-in-out infinite; }
+  .eq i:nth-child(2) { animation-delay: -.3s; } .eq i:nth-child(3) { animation-delay: -.6s; }
+  .playing > .eq { display: inline-flex; } .playing > svg { display: none; }
+  @keyframes eq { 0%, 100% { height: 30%; } 50% { height: 100%; } }
+  @media (prefers-reduced-motion: reduce) { .eq i { animation: none; height: 70%; } .progress > i, .row, .toggle svg { transition: none; } }
   .note { grid-column: 2 / 4; display: none; }
-  .row.flagged .note { display: block; }
-  .note input { width: 100%; font: inherit; font-size: 13px; padding: 6px 10px; border: 1.5px solid var(--line); border-radius: 10px; background: var(--paper); color: var(--ink); }
-  footer { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1.5px solid var(--line); padding: 10px 16px; }
-  footer .inner { max-width: 980px; margin: 0 auto; display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: start; }
-  footer textarea { width: 100%; height: 96px; resize: vertical; font: 12px/1.4 ui-monospace, monospace; background: var(--paper); color: var(--ink); border: 1.5px solid var(--line); border-radius: 10px; padding: 8px; }
-  footer .side { display: grid; gap: 6px; }
-  .hint { font-size: 12px; color: var(--ink-soft); }
-  /* The pager sits on top of the notes footer; on wide screens it is fixed under the list instead. */
-  .pager { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: center; max-width: 980px; margin: 0 auto 10px; }
-  .pager button { font-size: 13px; padding: 3px 10px; min-width: 34px; font-variant-numeric: tabular-nums; }
+  .row.noting .note { display: block; }
+  input[type="text"] { width: 100%; font: inherit; font-size: 14px; padding: 7px 11px; border: 1.5px solid var(--line); border-radius: 10px; background: var(--paper); color: var(--ink); }
+  input[type="text"]:focus { border-color: var(--ink-soft); outline: none; }
+  input::placeholder, textarea::placeholder { color: var(--ink-soft); opacity: 1; }
+
+  .empty, .end { text-align: center; color: var(--ink-soft); padding: 28px 16px; border: 1.5px dashed var(--line); border-radius: 14px; margin: 6px 0 10px; }
+  .empty p, .end p { margin: 0 auto 10px; max-width: 46ch; }
+  .end strong { display: block; color: var(--ink); font-size: 17px; margin-bottom: 4px; }
+  .end button, .empty button { margin: 0 auto; }
+
+  /* The notes: a tray along the bottom that opens into a panel; on wide screens, a column on the right. */
+  footer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 3; background: var(--card); border-top: 1.5px solid var(--line); padding: 8px 16px; padding-bottom: max(8px, env(safe-area-inset-bottom)); box-shadow: 0 -6px 18px -12px color-mix(in srgb, var(--ink) 45%, transparent); }
+  .pager { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: center; max-width: 980px; margin: 0 auto 8px; }
+  .pager button { font-size: 13px; padding: 3px 10px; min-width: 34px; min-height: 30px; justify-content: center; font-variant-numeric: tabular-nums; }
   .pager button[aria-current] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
-  .pager button:disabled { opacity: .4; cursor: default; border-color: var(--line); }
-  .pager[hidden] { display: none; }
   .pager .gap { color: var(--ink-soft); padding: 0 2px; }
   .pager .range { color: var(--ink-soft); font-size: 12px; font-variant-numeric: tabular-nums; margin-left: 6px; }
-  .it, .en { overflow-wrap: anywhere; }
-  .notice { font-size: 11px; color: var(--ink-soft); }
-  /* Wide screens: the notes become a full-height column on the right, room for many flags. */
-  @media (min-width: 1100px) {
-    :root { --notes: clamp(320px, 28vw, 440px); }
-    /* The page reserves the column, so the header bar and the list stay centered in what's left. */
-    body { padding-right: var(--notes); }
-    .bar, .keys, main { max-width: 1120px; }
-    main { padding: 16px 24px 80px; }
-    .pager { position: fixed; left: 0; right: var(--notes); bottom: 0; max-width: none; margin: 0; padding: 10px 24px; background: var(--card); border-top: 1.5px solid var(--line); }
-    header { padding: 12px 24px; }
-    footer { left: auto; top: 0; width: var(--notes); border-top: 0; border-left: 1.5px solid var(--line); padding: 16px; }
-    footer .inner { height: 100%; display: flex; flex-direction: column; }
-    footer textarea { flex: 1; height: auto; resize: none; font-size: 13px; }
-    footer .side { flex: none; }
+  .tray { display: flex; gap: 10px; align-items: center; max-width: 980px; margin: 0 auto; }
+  .tray .toggle { flex: 1; min-width: 0; justify-content: space-between; background: transparent; border-color: transparent; padding-inline: 4px; text-align: left; border-radius: 10px; }
+  .tray .toggle:hover { border-color: transparent; }
+  .tally { display: grid; line-height: 1.25; min-width: 0; }
+  .tally b { font-weight: 600; } .tally span { color: var(--ink-soft); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .toggle svg { transition: transform .2s; color: var(--ink-soft); }
+  footer.open .toggle svg { transform: rotate(180deg); }
+  .panel { display: none; max-width: 980px; margin: 10px auto 2px; gap: 10px; }
+  footer.open .panel { display: grid; }
+  .panel label { display: grid; gap: 4px; font-size: 13px; color: var(--ink-soft); }
+  .side { display: grid; gap: 8px; align-content: start; }
+  textarea { width: 100%; height: 120px; resize: vertical; font: 12px/1.45 ui-monospace, monospace; background: var(--paper); color: var(--ink); border: 1.5px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .status { font-size: 13px; color: var(--ink-soft); min-height: 1.4em; margin: 0; }
+  .status button { font-size: 13px; min-height: 0; padding: 0 4px; }
+  .notice { font-size: 11px; color: var(--ink-soft); margin: 0; }
+  .keys { color: var(--ink-soft); font-size: 12px; line-height: 1.9; margin: 0; }
+  kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: var(--paper); color: var(--ink); }
+
+  @media (min-width: 641px) and (max-width: 1099px) {
+    .panel { grid-template-columns: minmax(0, 1fr) minmax(220px, 300px); align-items: start; }
+    .panel > .wide { grid-column: 1 / -1; }
   }
+  /* Wide screens: the notes are a full-height column on the right, room for many flags. */
+  @media (min-width: 1100px) {
+    :root { --notes: clamp(320px, 28vw, 420px); }
+    body { padding-right: var(--notes); }
+    .bar, main { max-width: 1120px; }
+    header { padding-inline: 24px; }
+    main { padding: 18px 24px 80px; }
+    .pager { position: fixed; left: 0; right: var(--notes); bottom: 0; max-width: none; margin: 0; padding: 10px 24px; background: var(--card); border-top: 1.5px solid var(--line); z-index: 3; }
+    footer { left: auto; top: 0; width: var(--notes); border-top: 0; border-left: 1.5px solid var(--line); padding: 18px; box-shadow: none; overflow-y: auto; }
+    .tray { display: none; }
+    .panel, footer.open .panel { display: flex; flex-direction: column; min-height: 100%; margin: 0; }
+    .panel h2 { font-size: 15px; margin: 0; }
+    textarea { flex: 1; min-height: 160px; height: auto; resize: none; font-size: 12.5px; }
+  }
+  /* Below the notes column the tray carries the count, so the header doesn't repeat it. */
+  @media (max-width: 1099px) { .panel h2, .count { display: none; } }
   @media (max-width: 640px) {
-    .row { grid-template-columns: minmax(0, 1fr); } .num { display: none; }
+    header { padding-inline: 12px; }
+    .player { flex: 1 1 100%; }
+    .player select { flex: 1 1 0; min-width: 0; }
+    .keys { display: none; }
+    main { padding-inline: 12px; }
+    .row { grid-template-columns: minmax(0, 1fr); padding: 12px; }
+    .row.part { margin-left: 18px; }
+    .num { display: none; }
     .actions { flex-direction: row; flex-wrap: wrap; }
-    .note { grid-column: 1; } footer .inner { grid-template-columns: 1fr; } footer textarea { height: 56px; }
-    main { padding-bottom: 250px; } .keys { display: none; } .pager .range { display: none; }
+    .voices { display: contents; }
+    .note { grid-column: 1; }
+    footer { padding-inline: 12px; }
+    .pager { gap: 4px; } .pager .range, .pager .word { display: none; }
   }
 </style>
 </head>
 <body>
 <header>
   <div class="bar">
-    <h1 id="title"></h1>
-    <select id="lang" title="Language" aria-label="Language"></select>
-    <button id="listen" class="primary" title="Space">▶ Listen through</button>
-    <select id="voice" title="Which voice the listen-through plays"></select>
-    <select id="speed" title="Playback speed while reviewing (the app plays at your Rate setting)">
-      <option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option>
-    </select>
-    <select id="filter">
-      <option value="all">All lines</option><option value="voiced">Voiced</option><option value="todo">New or not heard yet</option><option value="flagged">Flagged</option><option value="waiting">Waiting for a voice</option>
-    </select>
-    <div class="progress"><i id="bar"></i></div>
-    <span class="count" id="count"></span>
-  </div>
-  <div class="keys"><kbd>Space</kbd> listen through / pause · <kbd>↓</kbd><kbd>↑</kbd> next / previous · <kbd>←</kbd><kbd>→</kbd> page · <kbd>1</kbd><kbd>2</kbd>… play the first, second… voice ·
-    <kbd>R</kbd> retake the voice you just heard · <kbd>T</kbd> the text should change · <kbd>N</kbd> write a note · Flags are kept in this browser.</div>
-</header>
-<main id="list"></main>
-<footer>
-  <nav class="pager" id="pager" aria-label="Pages"></nav>
-  <div class="inner">
-    <textarea id="summary" readonly placeholder="Flag what sounds off; your notes for Claude appear here."></textarea>
-    <div class="side">
-      <button id="copy" class="primary">Copy notes for Claude</button>
-      <button id="clear">Clear flags</button>
-      <span class="hint" id="copied"></span>
-      <span class="notice" id="notice" hidden></span>
+    <div class="ident"><img id="icon" alt="" hidden><h1 id="title"></h1><select id="lang" aria-label="Language"></select></div>
+    <div class="player">
+      <button id="listen" class="primary" aria-keyshortcuts="Space"></button>
+      <select id="voice" aria-label="Voice for the listen-through"></select>
+      <select id="speed" aria-label="Playback speed" title="Playback speed while reviewing (the app plays at its own rate)">
+        <option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option>
+      </select>
+      <select id="filter" aria-label="Which lines to show"></select>
     </div>
+    <span class="count" id="count" aria-hidden="true"></span>
+  </div>
+  <div class="progress" id="progress" role="progressbar" aria-label="Recordings heard" aria-valuemin="0"><i id="bar"></i></div>
+</header>
+<main>
+  <section class="intro" id="intro" hidden aria-labelledby="intro-title">
+    <h2 id="intro-title">How this works</h2>
+    <ol id="steps"></ol>
+    <button id="got-it" class="primary">Got it</button>
+  </section>
+  <div id="list"></div>
+  <div class="empty" id="empty" hidden></div>
+  <div class="end" id="end" hidden></div>
+</main>
+<footer id="notes">
+  <nav class="pager" id="pager" aria-label="Pages"></nav>
+  <div class="tray">
+    <button class="toggle" id="toggle" aria-expanded="false" aria-controls="panel"><span class="tally"><b id="tally"></b><span id="heard"></span></span></button>
+    <button class="primary" id="send"></button>
+  </div>
+  <div class="panel" id="panel">
+    <h2 class="wide">Your notes</h2>
+    <label class="wide" id="name-field" hidden>Your name, so we know who to thank<input type="text" id="name" autocomplete="name"></label>
+    <textarea id="summary" readonly aria-label="Your notes"></textarea>
+    <div class="side">
+      <div class="buttons"><button id="share" class="primary" hidden></button><button id="copy"></button><button id="clear" class="quiet">Clear my notes</button></div>
+      <p class="status" id="status" role="status"></p>
+      <p class="keys" id="keys"></p>
+    </div>
+    <p class="notice wide" id="notice" hidden></p>
   </div>
 </footer>
 <script>
 const DATA = /*DATA*/null;
+const SITE = !!DATA.site;
 const KEY = `${DATA.app}-review-${DATA.lang}`;
+const BEAT = 1200;  // the silence before a joke's next part: Laching's PhraseTiming.partBeat, as the app plays it
+const GAP = 450;    // between lines in a listen-through
+const PAGE = 20;
+// Friends see plain words; the owner's page keeps the words its notes use.
+const WORDS = SITE
+  ? { retake: "Sounds off", retakeTip: v => `The ${v}recording sounds wrong: a word, the tone, a glitch (R)`, text: "Wording off",
+      textTip: "The words themselves should change (T)", copy: "Copy notes", send: "Send notes",
+      sent: "Copied. Send it to whoever shared this page with you." }
+  : { retake: "Retake", retakeTip: v => `Re-record the ${v}take (R)`, text: "Text", textTip: `The ${DATA.languageName} should change (T)`,
+      copy: "Copy notes for Claude", send: "Copy notes", sent: "Copied. Paste it to Claude." };
+const [UP, DOWN] = DATA.reactions || [];
+
 for (const v of DATA.voices) v.label = v.kind.charAt(0).toUpperCase() + v.kind.slice(1);
-let state = {};
-try { state = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch { state = {}; }
-const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {} };
+const store = {
+  get(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } },
+  set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} },
+};
+let state = store.get(KEY, {});
+if (typeof state !== "object" || Array.isArray(state)) state = {};
+const save = () => store.set(KEY, state);
 const entry = id => (state[id] ||= { heard: {}, retake: {}, text: false, note: "" });
 // heard and retake hold the take's version (its render hash), so a new take shows up unheard and its old retake flag
 // lapses. `true` is from before versions: it counts for the current take.
@@ -142,120 +248,245 @@ const heard = (r, kind) => mark(r, kind, "heard");
 const retake = (r, kind) => !!r.clips[kind] && mark(r, kind, "retake");
 const newTake = (r, kind) => { const v = state[r.id]?.heard?.[kind]; return !!r.clips[kind] && !!v && v !== true && v !== r.versions[kind]; };
 const flagged = r => !!state[r.id]?.text || DATA.voices.some(v => retake(r, v.kind));
+const noted = r => !!state[r.id]?.note?.trim();
+const voiced = r => Object.keys(r.clips).length > 0;
+const rated = r => !!UP && (!r.joke || r.part === r.parts);  // a joke is rated once, after its punchline
+const reactKey = r => r.joke || r.id;
+const unheard = r => DATA.voices.some(v => r.clips[v.kind] && !heard(r, v.kind));
 
-const audio = new Audio();
-const PAGE = 20;
-let page = 0;
-let current = 0, listening = false, lastVoice = DATA.voices[0].kind, queue = [];
+const svg = (body, sw) => `<svg viewBox="0 0 16 16" aria-hidden="true"${sw ? ` fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"` : ' fill="currentColor"'}>${body}</svg>`;
+const ICON = {
+  play: svg('<path d="M4.6 2.6v10.8c0 .5.5.8.9.5l8.4-5.4a.6.6 0 0 0 0-1L5.5 2.1a.6.6 0 0 0-.9.5Z"/>'),
+  pause: svg('<rect x="3.5" y="2.5" width="3" height="11" rx="1"/><rect x="9.5" y="2.5" width="3" height="11" rx="1"/>'),
+  check: svg('<path d="m3.5 8.5 3 3 6-7"/>', 2),
+  chevron: svg('<path d="m4 10 4-4 4 4"/>', 1.8),
+  prev: svg('<path d="m10 3.5-4.5 4.5 4.5 4.5"/>', 1.8),
+  next: svg('<path d="m6 3.5 4.5 4.5-4.5 4.5"/>', 1.8),
+  share: svg('<path d="M8 10V2.5m0 0L5 5.5m3-3 3 3M4.5 8H4a1.5 1.5 0 0 0-1.5 1.5v3A1.5 1.5 0 0 0 4 14h8a1.5 1.5 0 0 0 1.5-1.5v-3A1.5 1.5 0 0 0 12 8h-.5"/>', 1.6),
+  copy: svg('<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5A1.5 1.5 0 0 0 9 1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/>', 1.6),
+};
+const EQ = '<span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>';
 const $ = s => document.querySelector(s);
+const el = (tag, props = {}, html) => { const e = Object.assign(document.createElement(tag), props); if (html != null) e.innerHTML = html; return e; };
+const escape = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const rowAt = i => document.querySelector(`.row[data-index="${i}"]`);
+const calm = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+const audio = new Audio(), warm = new Audio();
+warm.preload = "auto";
+const failed = new Set();  // "index:kind" of clips that didn't load this visit
+const noting = new Set();  // rows whose note field is open without a flag or a note yet
+let page = 0, current = 0, listening = false, lastVoice = DATA.voices[0]?.kind, timer = 0, token = 0, playing = null, queue = [], step = 0;
+let scrolledAt = 0;  // when the reader last scrolled by hand: a listen-through doesn't pull them back for a while
+
+// ---------------------------------------------------------------------------------------------- the controls
+
 for (const l of DATA.languages || [{ code: DATA.lang, name: DATA.languageName, recorded: true }]) {
-  const o = document.createElement("option"); o.value = l.code; o.disabled = !l.recorded;
-  o.textContent = l.recorded ? l.name : `${l.name} (not recorded yet)`; o.selected = l.code === DATA.lang;
-  $("#lang").append(o);
+  $("#lang").append(el("option", { value: l.code, disabled: !l.recorded, selected: l.code === DATA.lang,
+    textContent: l.recorded ? l.name : `${l.name} (not recorded yet)` }));
 }
 $("#lang").onchange = () => { location.href = `${encodeURIComponent($("#lang").value)}.html`; };
 document.title = `${DATA.title} · ${DATA.languageName}`;
-document.querySelector("#title").textContent = DATA.title;
-document.querySelector("#notice").textContent = DATA.notice;
-for (const f of DATA.flavors) {
-  const o = document.createElement("option"); o.value = f; o.textContent = f.charAt(0).toUpperCase() + f.slice(1);
-  document.querySelector("#filter").append(o);
+$("#title").textContent = DATA.title;
+if (DATA.icon) { $("#icon").src = DATA.icon; $("#icon").hidden = false; }
+if (DATA.voices.length > 1) {
+  for (const v of DATA.voices) $("#voice").append(el("option", { value: v.kind, textContent: `${v.label}: ${v.name}` }));
+  $("#voice").append(el("option", { value: "both", textContent: "Both voices" }));
+} else $("#voice").hidden = true;
+{
+  const options = [["all", "All lines"], ["todo", "Not heard yet"], ["flagged", "Flagged or noted"]];
+  if (UP) options.push(["unrated", "Not rated yet"]);
+  if (DATA.rows.some(r => !voiced(r))) options.push(["voiced", "Voiced"], ["waiting", "Waiting for a voice"]);
+  for (const [value, label] of options) $("#filter").append(el("option", { value, textContent: label }));
+  if (DATA.flavors.length) {
+    const group = el("optgroup", { label: "Mood" });
+    for (const f of DATA.flavors) group.append(el("option", { value: `flavor:${f}`, textContent: f.charAt(0).toUpperCase() + f.slice(1) }));
+    $("#filter").append(group);
+  }
 }
-const SEND = DATA.site ? "Copied. Send it to whoever shared this page with you." : "Copied. Paste it to Claude.";
-if (DATA.site) {
-  $("#copy").textContent = "Copy my notes"; $("#notice").hidden = false;
-  $("#summary").placeholder = "Flag what sounds off or reads wrong; your notes appear here.";
+const canShare = SITE && !!navigator.share;
+$("#copy").innerHTML = `${ICON.copy}<span>${WORDS.copy}</span>`;
+$("#send").innerHTML = `${canShare ? ICON.share : ICON.copy}<span>${WORDS.send}</span>`;
+$("#toggle").insertAdjacentHTML("beforeend", ICON.chevron);
+$("#summary").placeholder = SITE ? "Flag what sounds off or reads wrong; your notes collect here." : "Flag what sounds off; your notes for Claude collect here.";
+if (SITE) {
+  $("#notice").textContent = DATA.notice; $("#notice").hidden = false;
+  $("#name-field").hidden = false;
+  $("#name").value = store.get(`${DATA.app}-review-name`, "");
+  $("#name").oninput = () => { store.set(`${DATA.app}-review-name`, $("#name").value); summarize(); };
 }
-for (const v of [...DATA.voices, { kind: "both", name: "Both voices" }]) {
-  const o = document.createElement("option"); o.value = v.kind; o.textContent = v.kind === "both" ? v.name : `${v.label}: ${v.name}`;
-  $("#voice").append(o);
+if (canShare) { $("#share").hidden = false; $("#share").innerHTML = `${ICON.share}<span>Share notes</span>`; }
+else $("#copy").classList.add("primary");
+$("#keys").innerHTML = "<kbd>Space</kbd> listen through / pause · <kbd>↓</kbd> <kbd>↑</kbd> next / previous · <kbd>←</kbd> <kbd>→</kbd> page · " +
+  (DATA.voices.length > 1 ? DATA.voices.map((v, n) => `<kbd>${n + 1}</kbd>`).join(" ") + " play a voice · " : "<kbd>1</kbd> play · ") +
+  `<kbd>R</kbd> ${WORDS.retake.toLowerCase()} · <kbd>T</kbd> ${WORDS.text.toLowerCase()} · <kbd>N</kbd> note` +
+  (UP ? ` · <kbd>+</kbd> ${escape(UP)} · <kbd>-</kbd> ${escape(DOWN)}` : "") + ". Your notes stay in this browser until you send them.";
+
+// The first visit: what to do, in a few steps (friends only; the owner knows).
+if (SITE && !store.get(`${DATA.app}-review-intro`, false)) {
+  const steps = [
+    "<b>Listen.</b> Press Listen through and read along, or play any line on its own. Each line plays the way the app says it.",
+    `<b>Flag what's wrong.</b> <b>${WORDS.retake}</b> when a recording is off: a mispronounced word, a strange tone, a glitch. <b>${WORDS.text}</b> when the words themselves read wrong. <b>Note</b> to say why, or anything else.`,
+    "<b>Send your notes</b> with the button at the bottom. They stay in this browser until then, so you can stop and come back later.",
+  ];
+  if (UP) steps.splice(2, 0, `<b>Rate the jokes.</b> <b>${escape(UP)}</b> or <b>${escape(DOWN)}</b> after each punchline tells us which ones land.`);
+  $("#steps").innerHTML = steps.map(s => `<li>${s}</li>`).join("");
+  $("#intro").hidden = false;
+  $("#got-it").onclick = () => { store.set(`${DATA.app}-review-intro`, true); $("#intro").hidden = true; };
 }
+
+// ---------------------------------------------------------------------------------------------- the list
 
 function visible() {
   const f = $("#filter").value;
   return DATA.rows.map((r, i) => i).filter(i => {
     const r = DATA.rows[i];
     if (f === "all") return true;
-    if (f === "todo") return DATA.voices.some(v => r.clips[v.kind] && !heard(r, v.kind));
-    if (f === "flagged") return flagged(r);
-    if (f === "voiced") return Object.keys(r.clips).length > 0;
-    if (f === "waiting") return !Object.keys(r.clips).length;
-    return r.flavor === f;
+    if (f === "todo") return unheard(r);
+    if (f === "flagged") return flagged(r) || noted(r);
+    if (f === "unrated") return rated(r) && !state[reactKey(r)]?.reaction;
+    if (f === "voiced") return voiced(r);
+    if (f === "waiting") return !voiced(r);
+    return r.flavor === f.slice("flavor:".length);
   });
 }
+
+const EMPTY = {
+  todo: "You've heard every line. Thank you!",
+  flagged: `Nothing flagged yet. Lines you mark ${WORDS.retake} or ${WORDS.text}, or write a note on, gather here.`,
+  unrated: "Every joke is rated.",
+  voiced: "Nothing is recorded yet.",
+  waiting: "Every line has a voice.",
+};
 
 function render() {
   const list = $("#list"); list.innerHTML = "";
   const order = visible(), pages = Math.max(1, Math.ceil(order.length / PAGE));
   page = Math.min(page, pages - 1);
-  for (const i of order.slice(page * PAGE, (page + 1) * PAGE)) {
-    const r = DATA.rows[i], e = state[r.id] || { heard: {}, retake: {}, text: false, note: "" };
-    const waiting = !Object.keys(r.clips).length;
-    const done = !waiting && DATA.voices.every(v => !r.clips[v.kind] || heard(r, v.kind));
-    const fresh = DATA.voices.filter(v => newTake(r, v.kind)).map(v => v.label.toLowerCase());
-    const el = document.createElement("section");
-    el.className = `row${r.joke && r.part > 1 ? " part" : ""}${i === current ? " current" : ""}${flagged(r) ? " flagged" : ""}${done ? " done" : ""}`;
-    el.dataset.index = i;
-    el.innerHTML = `
-      <div class="num">${i + 1}</div>
-      <div><div class="it"></div><div class="en"></div>
-        <div class="meta">${fresh.length ? `<span class="chip new">New take: ${fresh.join(", ")}</span>` : ""}
-        ${waiting ? `<span class="chip waiting" title="Not recorded for this text yet: check the words; the voice comes later">Waiting for a voice</span>` : ""}
-        <span class="chip flavor-${DATA.flavors.indexOf(r.flavor) % 4}">${r.flavor || "ui"}</span><span class="chip">${r.slot}</span>
-        ${r.joke ? `<span class="chip">Joke, part ${r.part} of ${r.parts}</span>` : ""}
-        ${r.tags ? `<span class="chip">${r.tags}</span>` : ""}<span>${r.id}</span></div></div>
-      <div class="actions"></div>
-      <div class="note"><input placeholder="What's off? (optional)"></div>`;
-    el.querySelector(".it").textContent = r.text;
-    el.querySelector(".en").textContent = DATA.lang === "en" ? "" : r.en;  // English needs no gloss
-    const actions = el.querySelector(".actions");
-    for (const v of DATA.voices) {
-      if (!r.clips[v.kind]) continue;
-      const play = document.createElement("button");
-      play.textContent = `▶ ${v.label}`; play.title = `${v.name}, key ${DATA.voices.indexOf(v) + 1}`;
-      play.dataset.play = v.kind;
-      play.onclick = ev => { ev.stopPropagation(); stopListening(); select(i); playOne(i, v.kind); };
-      const flag = document.createElement("button");
-      flag.className = `flag${retake(r, v.kind) ? " on" : ""}`; flag.textContent = "Retake";
-      flag.title = `Re-record the ${v.label.toLowerCase()} voice's take`;
-      flag.onclick = ev => { ev.stopPropagation(); toggleRetake(i, v.kind); };
-      const pair = document.createElement("span"); pair.className = "pair";
-      pair.append(play, flag); actions.append(pair);
-    }
-    const text = document.createElement("button");
-    text.className = `flag${e.text ? " on" : ""}`; text.textContent = "Text"; text.title = `The ${DATA.languageName} should change (T)`;
-    text.onclick = ev => { ev.stopPropagation(); toggleText(i); };
-    actions.append(text);
-    const input = el.querySelector(".note input");
-    input.value = e.note || "";
-    input.oninput = () => { entry(r.id).note = input.value; save(); summarize(); };
-    input.onclick = ev => ev.stopPropagation();
-    el.onclick = () => { select(i); };
-    list.append(el);
+  for (const i of order.slice(page * PAGE, (page + 1) * PAGE)) list.append(rowElement(i));
+  $("#empty").hidden = order.length > 0;
+  if (!order.length) {
+    $("#empty").innerHTML = `<p>${escape(EMPTY[$("#filter").value] || "No lines in this mood.")}</p><button id="show-all">Show all lines</button>`;
+    $("#show-all").onclick = () => setFilter("all");
   }
+  ending(order.length, pages);
   pager(order.length, pages); progress(); summarize();
+}
+
+function rowElement(i) {
+  const r = DATA.rows[i], e = state[r.id] || { heard: {}, retake: {}, text: false, note: "" };
+  const waiting = !voiced(r);
+  const done = !waiting && !unheard(r);
+  const open = flagged(r) || noted(r) || noting.has(i);
+  const fresh = DATA.voices.filter(v => newTake(r, v.kind)).map(v => v.label.toLowerCase());
+  const broken = DATA.voices.filter(v => failed.has(`${i}:${v.kind}`)).map(v => v.label.toLowerCase());
+  const row = el("article", {
+    className: `row${r.joke && r.part > 1 ? " part" : ""}${i === current ? " current" : ""}${flagged(r) ? " flagged" : ""}${open ? " noting" : ""}`,
+    id: `line-${r.id}`,
+  });
+  row.dataset.index = i;
+  const chips = [];
+  if (fresh.length) chips.push(`<span class="chip new">New take${DATA.voices.length > 1 ? `: ${fresh.join(", ")}` : ""}</span>`);
+  if (broken.length) chips.push(`<span class="chip failed">Didn't load${DATA.voices.length > 1 ? ` (${broken.join(", ")})` : ""}: press play to try again</span>`);
+  if (waiting) chips.push('<span class="chip waiting" title="Not recorded for this text yet: check the words; the voice comes later">Waiting for a voice</span>');
+  if (r.flavor) chips.push(`<span class="chip flavor-${DATA.flavors.indexOf(r.flavor) % 4}">${escape(r.flavor)}</span>`);
+  if (r.joke) chips.push(`<span class="chip">${r.part === 1 ? "Joke: setup" : r.part === r.parts ? "Punchline" : `Joke: part ${r.part} of ${r.parts}`}</span>`);
+  if (r.tags) chips.push(`<span class="chip">${escape(r.tags)}</span>`);
+  if (!SITE) chips.push(`<span class="chip">${escape(r.slot)}</span><span class="id">${escape(r.id)}</span>`);
+  row.innerHTML = `
+    <a class="num" href="#${encodeURIComponent(r.id)}" title="Link to this line">${i + 1}${done ? ICON.check : ""}</a>
+    <div><p class="line" lang="${escape(DATA.lang)}"></p>${DATA.lang === DATA.source ? "" : `<p class="gloss" lang="${escape(DATA.source)}"></p>`}
+      <div class="meta">${chips.join("")}</div></div>
+    <div class="actions"><div class="voices actions"></div></div>
+    <div class="note"><input type="text" aria-label="Note on line ${i + 1}" placeholder="What's off? Or anything else"></div>`;
+  row.querySelector(".line").textContent = r.text;
+  const gloss = row.querySelector(".gloss"); if (gloss) gloss.textContent = r.en;
+  if (done) row.querySelector(".num").setAttribute("aria-label", `Line ${i + 1}, heard`);
+  row.querySelector(".num").onclick = ev => { ev.preventDefault(); ev.stopPropagation(); select(i); };
+  const actions = row.querySelector(".actions"), voices = row.querySelector(".voices");
+  for (const [n, v] of DATA.voices.entries()) {
+    if (!r.clips[v.kind]) continue;
+    const many = DATA.voices.length > 1;
+    const play = el("button", { className: "play", title: `${v.name} (${n + 1})` }, `${ICON.play}${EQ}<span>${many ? v.label : "Play"}</span>`);
+    play.dataset.play = v.kind;
+    play.setAttribute("aria-label", many ? `Play the ${v.label.toLowerCase()} voice` : "Play");
+    play.onclick = ev => { ev.stopPropagation(); stopListening(); select(i, false); playOne(i, v.kind); };
+    const flag = el("button", { className: "flag", textContent: WORDS.retake, title: WORDS.retakeTip(many ? `${v.label.toLowerCase()} ` : "") });
+    flag.setAttribute("aria-pressed", retake(r, v.kind));
+    if (many) flag.setAttribute("aria-label", `${WORDS.retake}: ${v.label.toLowerCase()} voice`);
+    flag.onclick = ev => { ev.stopPropagation(); toggleRetake(i, v.kind); };
+    const pair = el("span", { className: "pair" }); pair.append(play, flag); voices.append(pair);
+  }
+  // A joke's setup can play the whole joke, with the beat before the punchline.
+  if (r.joke && r.part === 1 && voiced(r)) {
+    const whole = el("button", { className: "whole", title: "The setup, the beat, the punchline" }, `${ICON.play}${EQ}<span>Whole joke</span>`);
+    whole.onclick = ev => { ev.stopPropagation(); playJoke(i); };
+    voices.append(whole);
+  }
+  const pair = el("span", { className: "pair" });
+  const text = el("button", { className: "flag", textContent: WORDS.text, title: WORDS.textTip });
+  text.setAttribute("aria-pressed", !!e.text);
+  text.onclick = ev => { ev.stopPropagation(); toggleText(i); };
+  const note = el("button", { className: noted(r) ? "noted" : "", textContent: "Note", title: "Write a note (N)" });
+  note.setAttribute("aria-expanded", open);
+  note.onclick = ev => { ev.stopPropagation(); openNote(i); };
+  pair.append(text, note); actions.append(pair);
+  if (rated(r)) {
+    const group = el("span", { className: "react", role: "group" });
+    group.setAttribute("aria-label", r.joke ? "How is the joke?" : "How is it?");
+    for (const [value, label] of [["up", UP], ["down", DOWN]]) {
+      const b = el("button", { className: value, textContent: label, title: `${label} (${value === "up" ? "+" : "-"})` });
+      b.setAttribute("aria-pressed", state[reactKey(r)]?.reaction === value);
+      b.onclick = ev => { ev.stopPropagation(); react(i, value); };
+      group.append(b);
+    }
+    actions.append(group);
+  }
+  const input = row.querySelector(".note input");
+  input.value = e.note || "";
+  input.oninput = () => { entry(r.id).note = input.value; save(); summarize(); row.querySelector("[aria-expanded]").classList.toggle("noted", noted(r)); };
+  input.onclick = ev => ev.stopPropagation();
+  row.onclick = () => select(i, false);
+  return row;
+}
+
+function redraw(i) {
+  rowAt(i)?.replaceWith(rowElement(i));
+  markPlaying(); progress(); summarize();
+}
+
+// The end of the list: what's left, and the way to send.
+function ending(count, pages) {
+  const end = $("#end");
+  end.hidden = !count || page !== pages - 1 || $("#filter").value !== "all";
+  if (end.hidden) return;
+  const left = DATA.rows.filter(unheard).length;
+  end.innerHTML = left
+    ? `<strong>That's the last line.</strong><p>${left} ${left === 1 ? "line is" : "lines are"} still unheard.</p><button id="end-todo">Show only those</button>`
+    : `<strong>You've heard every line. Thank you!</strong><p>${SITE ? "Send your notes back to whoever shared this page, even if nothing was wrong." : "Copy the notes for Claude."}</p><button class="primary" id="end-send">${WORDS.send}</button>`;
+  if (left) $("#end-todo").onclick = () => setFilter("todo");
+  else $("#end-send").onclick = send;
 }
 
 // Page buttons: the first, the last, and two either side of the current one, with gaps between.
 function pager(count, pages) {
   const nav = $("#pager"); nav.innerHTML = ""; nav.hidden = pages < 2;
-  const button = (label, to, title) => {
-    const b = document.createElement("button"); b.textContent = label; b.title = title || `Page ${to + 1}`;
-    if (to === page && !title) b.setAttribute("aria-current", "page");
-    b.disabled = to < 0 || to >= pages || (to === page && !!title);
+  const button = (html, to, label) => {
+    const b = el("button", { title: label || `Page ${to + 1}` }, html);
+    if (label) b.setAttribute("aria-label", label);
+    else if (to === page) b.setAttribute("aria-current", "page");
+    b.disabled = to < 0 || to >= pages;
     b.onclick = () => goPage(to); nav.append(b);
   };
-  button("‹ Previous", page - 1, "Previous page (←)");
+  button(`${ICON.prev}<span class="word">Previous</span>`, page - 1, "Previous page (←)");
   let last = -1;
   for (let p = 0; p < pages; p++) {
     if (p !== 0 && p !== pages - 1 && Math.abs(p - page) > 2) continue;
-    if (p - last > 1) { const gap = document.createElement("span"); gap.className = "gap"; gap.textContent = "…"; nav.append(gap); }
+    if (p - last > 1) nav.append(el("span", { className: "gap", textContent: "…" }));
     button(String(p + 1), p); last = p;
   }
-  button("Next ›", page + 1, "Next page (→)");
-  const range = document.createElement("span"); range.className = "range";
-  range.textContent = `${page * PAGE + 1}–${Math.min(count, (page + 1) * PAGE)} of ${count}`;
-  nav.append(range);
+  button(`<span class="word">Next</span>${ICON.next}`, page + 1, "Next page (→)");
+  nav.append(el("span", { className: "range", textContent: `${page * PAGE + 1}–${Math.min(count, (page + 1) * PAGE)} of ${count}` }));
 }
 
 function goPage(p) {
@@ -264,101 +495,261 @@ function goPage(p) {
   stopListening(); page = p; render(); select(order[p * PAGE], false); window.scrollTo({ top: 0 });
 }
 
+function setFilter(value) { $("#filter").value = value; stopListening(); page = 0; render(); window.scrollTo({ top: 0 }); }
+
 function progress() {
   let done = 0, total = 0;
   for (const r of DATA.rows) for (const v of DATA.voices) if (r.clips[v.kind]) { total++; if (heard(r, v.kind)) done++; }
-  const waiting = DATA.rows.filter(r => !Object.keys(r.clips).length).length;
+  const waiting = DATA.rows.filter(r => !voiced(r)).length;
   $("#bar").style.width = `${total ? (100 * done / total) : 0}%`;
-  $("#count").textContent = `${done} / ${total} heard` + (waiting ? ` · ${waiting} waiting for a voice` : "");
+  const text = `${done} of ${total} heard` + (waiting ? ` · ${waiting} waiting` : "");
+  $("#progress").setAttribute("aria-valuemax", total); $("#progress").setAttribute("aria-valuenow", done);
+  $("#progress").setAttribute("aria-valuetext", `${done} of ${total} heard` + (waiting ? `, ${waiting} lines waiting for a voice` : ""));
+  $("#count").textContent = text; $("#heard").textContent = text;
 }
 
+// The notes, in the shape the owner pastes to Claude.
 function summarize() {
-  const retakes = {}, texts = [];
+  const retakes = {}, texts = [], notes = [], up = [], down = [];
   for (const r of DATA.rows) {
-    const e = state[r.id]; if (!e) continue;
-    for (const v of DATA.voices) if (retake(r, v.kind)) (retakes[v.kind] ||= []).push(r.id + (e.note ? ` (${e.note})` : ""));
-    if (e.text) texts.push(`${r.id}: "${r.text}"${e.note ? ` — ${e.note}` : ""}`);
+    const e = state[r.id];
+    if (e) {
+      const note = e.note?.trim();
+      const voice = DATA.voices.filter(v => retake(r, v.kind));
+      for (const v of voice) (retakes[v.kind] ||= []).push(r.id + (note ? ` (${note})` : ""));
+      if (e.text) texts.push(`${r.id}: "${r.text}"${note ? ` — ${note}` : ""}`);
+      else if (note && !voice.length) notes.push(`${r.id}: "${r.text}" — ${note}`);
+    }
+    if (rated(r)) { const reaction = state[reactKey(r)]?.reaction; if (reaction) (reaction === "up" ? up : down).push(reactKey(r)); }
   }
   const lines = [];
   for (const v of DATA.voices) if (retakes[v.kind]) lines.push(`Retake ${DATA.lang}/${v.kind} (${v.name}): ${retakes[v.kind].join(", ")}`);
   if (texts.length) lines.push(`Change the ${DATA.languageName} text:`, ...texts.map(t => `- ${t}`));
+  if (notes.length) lines.push(`Notes on the ${DATA.languageName} lines:`, ...notes.map(t => `- ${t}`));
+  if (up.length) lines.push(`${UP} (${DATA.lang}): ${up.join(", ")}`);
+  if (down.length) lines.push(`${DOWN} (${DATA.lang}): ${down.join(", ")}`);
+  const name = SITE && $("#name").value.trim();
+  if (lines.length && name) lines.unshift(`From ${name}, ${DATA.title} · ${DATA.languageName}:`);
   $("#summary").value = lines.join("\n");
+  const flags = Object.values(retakes).reduce((n, l) => n + l.length, 0) + texts.length;
+  const parts = [];
+  if (flags) parts.push(`${flags} flagged`);
+  if (notes.length) parts.push(`${notes.length} ${notes.length === 1 ? "note" : "notes"}`);
+  if (up.length + down.length) parts.push(`${up.length + down.length} rated`);
+  $("#tally").textContent = parts.length ? parts.join(" · ") : "No notes yet";
 }
 
+// ---------------------------------------------------------------------------------------------- selection and playback
+
 function select(i, scroll = true) {
+  if (i == null || !DATA.rows[i]) return;
   current = i;
   const pos = visible().indexOf(i);
   if (pos >= 0 && Math.floor(pos / PAGE) !== page) { page = Math.floor(pos / PAGE); render(); }
-  document.querySelectorAll(".row").forEach(el => el.classList.toggle("current", +el.dataset.index === i));
-  const el = document.querySelector(`.row[data-index="${i}"]`);
-  if (el && scroll) el.scrollIntoView({ block: "center", behavior: "smooth" });
+  document.querySelectorAll(".row").forEach(row => row.classList.toggle("current", +row.dataset.index === i));
+  try { history.replaceState(null, "", `#${encodeURIComponent(DATA.rows[i].id)}`); } catch {}
+  if (scroll) rowAt(i)?.scrollIntoView({ block: "nearest", behavior: calm() ? "auto" : "smooth" });
 }
 
-function markPlaying(i, kind) {
+function markPlaying() {
   document.querySelectorAll(".actions .playing").forEach(b => b.classList.remove("playing"));
-  const b = document.querySelector(`.row[data-index="${i}"] [data-play="${kind}"]`);
-  if (b) b.classList.add("playing");
+  if (!playing) return;
+  const sel = playing.whole != null ? ".whole" : `[data-play="${playing.kind}"]`;
+  rowAt(playing.whole ?? playing.i)?.querySelector(sel)?.classList.add("playing");
 }
 
-function playOne(i, kind, then) {
-  const r = DATA.rows[i]; if (!r.clips[kind]) { then && then(); return; }
+function playOne(i, kind, then, whole) {
+  const r = DATA.rows[i]; if (!r?.clips[kind]) { then && then(); return; }
+  const mine = ++token;
   lastVoice = kind;
+  if (failed.delete(`${i}:${kind}`)) redraw(i);
   audio.src = r.clips[kind]; audio.playbackRate = +$("#speed").value;
-  markPlaying(i, kind);
-  audio.onended = () => {
-    entry(r.id).heard[kind] = r.versions[kind] || true; save(); progress();
-    document.querySelectorAll(".actions .playing").forEach(b => b.classList.remove("playing"));
-    const row = document.querySelector(`.row[data-index="${i}"]`);
-    if (row && DATA.voices.every(v => !r.clips[v.kind] || heard(r, v.kind))) row.classList.add("done");
-    then && then();
+  playing = { i, kind, whole }; markPlaying(); media(r, kind);
+  const finish = ok => {
+    if (mine !== token) return;
+    token++; playing = null;
+    if (ok) entry(r.id).heard[kind] = r.versions[kind] || true; else failed.add(`${i}:${kind}`);
+    save(); redraw(i);
+    then && then(ok);
   };
-  audio.play().catch(() => {});
+  audio.onended = () => finish(true);
+  audio.onerror = () => finish(false);
+  audio.play().catch(err => {
+    if (mine !== token) return;
+    if (err.name === "NotAllowedError") stopListening();
+    else if (err.name !== "AbortError") finish(false);
+  });
+}
+
+// The setup, the beat, the punchline: as the app delivers a joke.
+function playJoke(i) {
+  stopListening(); select(i, false);
+  const r = DATA.rows[i], kind = r.clips[lastVoice] ? lastVoice : Object.keys(r.clips)[0];
+  const parts = DATA.rows.map((row, n) => n).filter(n => DATA.rows[n].joke === r.joke && DATA.rows[n].clips[kind]);
+  const next = k => playOne(parts[k], kind, () => {
+    if (k + 1 < parts.length) { playing = { i: parts[k + 1], kind, whole: i }; markPlaying(); timer = setTimeout(() => next(k + 1), BEAT); }
+  }, i);
+  next(0);
+}
+
+// A listen-through plays the visible lines in order; a joke's parts play together, one voice after the other, with
+// the beat between them.
+function plan(from) {
+  const order = visible(); let pos = order.indexOf(from); if (pos < 0) pos = 0;
+  while (pos > 0 && DATA.rows[order[pos]].joke && DATA.rows[order[pos - 1]].joke === DATA.rows[order[pos]].joke) pos--;
+  const chosen = DATA.voices.length > 1 ? $("#voice").value : DATA.voices[0]?.kind;
+  const kinds = chosen === "both" ? DATA.voices.map(v => v.kind) : [chosen];
+  const out = [];
+  for (let p = pos; p < order.length;) {
+    const r = DATA.rows[order[p]];
+    let q = p + 1;
+    if (r.joke) while (q < order.length && DATA.rows[order[q]].joke === r.joke) q++;
+    for (const kind of kinds) {
+      const parts = order.slice(p, q).filter(i => DATA.rows[i].clips[kind]);
+      parts.forEach((i, n) => out.push({ i, kind, gap: n < parts.length - 1 ? BEAT : GAP }));
+    }
+    p = q;
+  }
+  return out;
 }
 
 function listenFrom(i) {
-  const order = visible(); let pos = order.indexOf(i); if (pos < 0) pos = 0;
-  const kinds = $("#voice").value === "both" ? DATA.voices.map(v => v.kind) : [$("#voice").value];
-  const step = (p, k) => {
-    if (!listening || p >= order.length) { stopListening(); return; }
-    const idx = order[p]; if (k === 0) select(idx);
-    const next = () => setTimeout(() => k + 1 < kinds.length ? step(p, k + 1) : step(p + 1, 0), 450);
-    playOne(idx, kinds[k], next);
-  };
-  listening = true; $("#listen").textContent = "❚❚ Pause"; step(pos, 0);
+  stopListening();
+  queue = plan(i); step = 0;
+  if (!queue.length) return;
+  listening = true; paintListen(); go();
 }
-function stopListening() { listening = false; audio.onended = null; audio.pause(); $("#listen").textContent = "▶ Listen through"; }
+function go() {
+  if (!listening || step >= queue.length) { stopListening(); return; }
+  const { i, kind, gap } = queue[step];
+  select(i, Date.now() - scrolledAt > 5000);
+  const next = queue[step + 1];
+  if (next) warm.src = DATA.rows[next.i].clips[next.kind];  // fetch the next clip while this one plays
+  playOne(i, kind, () => { if (!listening) return; step++; timer = setTimeout(go, gap); });
+}
+// Next or previous line: inside a listen-through, it moves the queue; otherwise, the selection.
+function skip(delta) {
+  if (!listening) {
+    const order = visible(), pos = order.indexOf(current);
+    select(order[Math.max(0, Math.min(order.length - 1, pos + delta))] ?? current);
+    return;
+  }
+  const at = queue[step]?.i;
+  let s = step;
+  if (delta > 0) while (s < queue.length && queue[s].i === at) s++;
+  else { while (s > 0 && queue[s - 1].i === at) s--; if (s > 0) { const before = queue[--s].i; while (s > 0 && queue[s - 1].i === before) s--; } }
+  clearTimeout(timer); token++; audio.pause(); step = s; go();
+}
+function stopListening() {
+  listening = false; clearTimeout(timer); token++; audio.onended = audio.onerror = null; audio.pause();
+  playing = null; markPlaying(); paintListen();
+}
+function paintListen() {
+  $("#listen").innerHTML = listening ? `${ICON.pause}<span>Pause</span>` : `${ICON.play}<span>Listen through</span>`;
+  if ("mediaSession" in navigator) navigator.mediaSession.playbackState = listening ? "playing" : "paused";
+}
+function media(r, kind) {
+  if (!("mediaSession" in navigator) || typeof MediaMetadata === "undefined") return;
+  const v = DATA.voices.find(v => v.kind === kind);
+  navigator.mediaSession.metadata = new MediaMetadata({ title: r.text, artist: `${DATA.title} · ${v?.name || kind}`, album: DATA.languageName,
+    artwork: DATA.icon ? [{ src: new URL(DATA.icon, location.href).href, sizes: "512x512", type: "image/png" }] : [] });
+}
+if ("mediaSession" in navigator) {
+  const on = (action, fn) => { try { navigator.mediaSession.setActionHandler(action, fn); } catch {} };
+  on("play", () => listening || listenFrom(current));
+  on("pause", stopListening);
+  on("nexttrack", () => skip(1));
+  on("previoustrack", () => skip(-1));
+}
+
+// ---------------------------------------------------------------------------------------------- flags and notes
 
 function toggleRetake(i, kind) {
   const r = DATA.rows[i]; if (!r.clips[kind]) return;
-  entry(r.id).retake[kind] = retake(r, kind) ? false : (r.versions[kind] || true); save(); render(); select(i, false);
+  entry(r.id).retake[kind] = retake(r, kind) ? false : (r.versions[kind] || true); save(); redraw(i);
 }
-function toggleText(i) { const e = entry(DATA.rows[i].id); e.text = !e.text; save(); render(); select(i, false); }
+function toggleText(i) { const e = entry(DATA.rows[i].id); e.text = !e.text; save(); redraw(i); }
+function openNote(i) {
+  const r = DATA.rows[i];
+  if (flagged(r) || noted(r)) noting.add(i); else if (noting.has(i)) noting.delete(i); else noting.add(i);
+  redraw(i);
+  if (rowAt(i)?.classList.contains("noting")) rowAt(i).querySelector(".note input").focus({ preventScroll: true });
+}
+function react(i, value) {
+  const r = DATA.rows[i]; if (!rated(r)) return;
+  const e = entry(reactKey(r)); e.reaction = e.reaction === value ? "" : value; save(); redraw(i);
+}
+
+function say(html, ms = 6000) {
+  $("#status").innerHTML = html; clearTimeout(say.timer);
+  if (ms) say.timer = setTimeout(() => { $("#status").textContent = ""; }, ms);
+}
+const text = () => $("#summary").value || "No flags: everything sounds right.";
+async function copy() {
+  try { await navigator.clipboard.writeText(text()); say(escape(WORDS.sent)); }
+  catch { $("#summary").select(); document.execCommand("copy"); say("Copied."); }
+}
+async function share() {
+  try { await navigator.share({ title: `${DATA.title} · ${DATA.languageName}`, text: text() }); say("Sent. Thank you!"); }
+  catch (err) { if (err.name !== "AbortError") copy(); }
+}
+function send() { openPanel(true); canShare ? share() : copy(); }
+function openPanel(open) { $("#notes").classList.toggle("open", open); $("#toggle").setAttribute("aria-expanded", open); }
+$("#copy").onclick = copy;
+$("#share").onclick = share;
+$("#send").onclick = send;
+$("#toggle").onclick = () => openPanel(!$("#notes").classList.contains("open"));
+$("#clear").onclick = () => {
+  const before = JSON.stringify(state);
+  for (const id in state) Object.assign(state[id], { retake: {}, text: false, note: "", reaction: "" });
+  noting.clear(); save(); render();
+  say('Cleared. <button class="quiet" id="undo">Undo</button>', 10000);
+  $("#undo").onclick = () => { state = JSON.parse(before); save(); render(); say("Restored."); };
+};
 
 $("#listen").onclick = () => listening ? stopListening() : listenFrom(current);
-$("#filter").onchange = () => { stopListening(); page = 0; render(); };
+$("#filter").onchange = () => setFilter($("#filter").value);
 $("#speed").onchange = () => { audio.playbackRate = +$("#speed").value; };
-$("#copy").onclick = async () => {
-  const text = $("#summary").value || "No flags: everything sounds right.";
-  try { await navigator.clipboard.writeText(text); $("#copied").textContent = SEND; }
-  catch { $("#summary").select(); document.execCommand("copy"); $("#copied").textContent = "Copied."; }
-};
-$("#clear").onclick = () => { if (confirm("Clear every flag and note?")) { for (const id in state) { state[id].retake = {}; state[id].text = false; state[id].note = ""; } save(); render(); } };
+for (const type of ["wheel", "touchmove"]) addEventListener(type, () => { scrolledAt = Date.now(); }, { passive: true });
 
 document.addEventListener("keydown", ev => {
-  if (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA" || ev.target.tagName === "SELECT") {
-    if (ev.key === "Escape") ev.target.blur(); return;
-  }
-  const order = visible(), pos = order.indexOf(current);
+  const tag = ev.target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") { if (ev.key === "Escape") ev.target.blur(); return; }
+  if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  if ((ev.key === " " || ev.key === "Enter") && (tag === "BUTTON" || tag === "A")) return;  // the focused control's own
+  if (["PageUp", "PageDown", "Home", "End"].includes(ev.key)) { scrolledAt = Date.now(); return; }
+  const key = ev.key.toLowerCase();
   if (ev.key === " ") { ev.preventDefault(); listening ? stopListening() : listenFrom(current); }
-  else if (ev.key === "ArrowDown" || ev.key === "j") { ev.preventDefault(); stopListening(); select(order[Math.min(order.length - 1, pos + 1)] ?? current); }
-  else if (ev.key === "ArrowUp" || ev.key === "k") { ev.preventDefault(); stopListening(); select(order[Math.max(0, pos - 1)] ?? current); }
+  else if (ev.key === "ArrowDown" || key === "j") { ev.preventDefault(); skip(1); }
+  else if (ev.key === "ArrowUp" || key === "k") { ev.preventDefault(); skip(-1); }
   else if (ev.key === "ArrowLeft" || ev.key === "ArrowRight") { ev.preventDefault(); goPage(page + (ev.key === "ArrowLeft" ? -1 : 1)); }
-  else if (ev.key === "1" || ev.key === "2") { const v = DATA.voices[+ev.key - 1]; if (v) { stopListening(); playOne(current, v.kind); } }
-  else if (ev.key === "r") toggleRetake(current, lastVoice);
-  else if (ev.key === "t") toggleText(current);
-  else if (ev.key === "n") { const input = document.querySelector(`.row[data-index="${current}"] .note input`); const e = entry(DATA.rows[current].id); if (!input || getComputedStyle(input.parentElement).display === "none") { e.text = e.text || !DATA.voices.some(v => retake(DATA.rows[current], v.kind)); save(); render(); select(current, false); } setTimeout(() => document.querySelector(`.row[data-index="${current}"] .note input`)?.focus(), 0); ev.preventDefault(); }
+  else if (/^[1-9]$/.test(ev.key)) { const v = DATA.voices[+ev.key - 1]; if (v) { stopListening(); playOne(current, v.kind); } }
+  else if (key === "r") toggleRetake(current, lastVoice);
+  else if (key === "t") toggleText(current);
+  else if (key === "n") { ev.preventDefault(); openNote(current); }
+  else if (UP && (ev.key === "+" || ev.key === "=")) react(current, "up");
+  else if (UP && ev.key === "-") react(current, "down");
 });
-render(); select(0, false);
+
+// The notes tray covers the bottom of the page: the list keeps room for it, whatever its height.
+new ResizeObserver(() => document.documentElement.style.setProperty("--footer-h", `${$("#notes").offsetHeight}px`)).observe($("#notes"));
+
+// A link to one line (`#<id>`, or a joke's id) opens on it.
+function fromHash() {
+  let want = ""; try { want = decodeURIComponent(location.hash.slice(1)); } catch {}
+  return want ? DATA.rows.findIndex(r => r.id === want || r.joke === want) : -1;
+}
+addEventListener("hashchange", () => {
+  const i = fromHash(); if (i < 0 || i === current) return;
+  if (!visible().includes(i)) setFilter("all");
+  select(i);
+});
+paintListen();
+render();
+{
+  const i = fromHash();
+  if (i >= 0) { select(i, false); requestAnimationFrame(() => rowAt(i)?.scrollIntoView({ block: "center" })); }
+}
 </script>
 </body>
 </html>
