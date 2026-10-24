@@ -945,7 +945,9 @@ def link(config: Config, checkout: Path | None = None) -> int:
                           read_text(core / "Package.swift"))
         if not match:
             raise PinError(f"{rel(core / 'Package.swift', config.root)}: no Laching `.package(url:…, exact:…)` to switch")
-        edits.append(_LinkEdit(core / "Package.swift", *match.span(), f'.package(path: "{_link_path(laching, core)}")'))
+        # Named: SwiftPM calls a path package after its folder, and a worktree's isn't `laching`.
+        edits.append(_LinkEdit(core / "Package.swift", *match.span(),
+                               f'.package(name: "laching", path: "{_link_path(laching, core)}")'))
     windows = config.path("windows.dir")
     if windows and any(pin.file and pin.file.is_relative_to(windows) for pin in pin_sites(config)):
         targets = windows / "Directory.Build.targets"

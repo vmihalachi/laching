@@ -43,7 +43,15 @@ public sealed partial class SupportWindow : UserControl
         this.copy = copy;
         this.look = look;
         this.onDone = onDone;
-        changed = Rebuild;
+        changed = () =>
+        {
+            // A rebuild drops the focused ask, and while the ask waits on the store the window's first focus lands on
+            // Restore: give it back to the ask, unless someone put it on Restore or Done.
+            var refocus = IsLoaded && (restore.FocusState == FocusState.Programmatic || HasFocusWithin(body));
+            Rebuild();
+            if (refocus)
+                FocusAsk();
+        };
         IsTabStop = false;
         body.Padding = WindowInset.ContentOverActionBar;
         var scroll = new ScrollViewer { Content = body };
@@ -156,6 +164,15 @@ public sealed partial class SupportWindow : UserControl
             purchases.LoadState,
             purchases.Products
         );
+
+    /// <summary>Whether the focused element is <paramref name="root"/> or inside it.</summary>
+    private bool HasFocusWithin(DependencyObject root)
+    {
+        var element = FocusManager.GetFocusedElement(XamlRoot) as DependencyObject;
+        while (element is not null && element != root)
+            element = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(element);
+        return element is not null;
+    }
 
     /// <summary>The focus on the stage's first button (the ask), as WinUI puts it when the window opens.</summary>
     private void FocusAsk() =>

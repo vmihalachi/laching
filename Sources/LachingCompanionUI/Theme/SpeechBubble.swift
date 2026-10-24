@@ -2,10 +2,11 @@
     import SwiftUI
 
     /// A sticker card with a tail toward the character, in the app's display face (`companionDisplayFont`), drawn with the
-    /// `companionPalette`. While the character thinks it shows "…". It fills the
-    /// width it's offered, or hugs its words when `fillsWidth` is false (wrapping only when they don't fit). With a
-    /// `countdown`, a tiny dial in its bottom-trailing corner runs down until the bubble goes away; `roomForDial` keeps
-    /// the words clear of that corner (set it where a countdown can appear, so the size doesn't change when it does).
+    /// `companionPalette`. While the character thinks it shows "…". It fills the width it's offered, or hugs its words
+    /// when `fillsWidth` is false (wrapping only when they don't fit); wrapped lines come out of even length
+    /// (`BalancedWrap`). With a `countdown`, a tiny dial in its bottom-trailing corner runs down until the bubble goes
+    /// away; `roomForDial` keeps the words clear of that corner (set it where a countdown can appear, so the size doesn't
+    /// change when it does).
     public struct SpeechBubble: View {
         public var text: String?
         public var tail: Edge
@@ -30,28 +31,30 @@
         }
 
         public var body: some View {
-            Text(verbatim: text ?? "…")
-                .font(displayFont(size))
-                .foregroundStyle(palette.ink)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
-                .padding(.horizontal, Space.item)
-                .padding(.trailing, roomForDial ? CountdownDial.room : 0)
-                .padding(.vertical, Space.snug + 2)
-                .overlay(alignment: .bottomTrailing) {
-                    if let countdown {
-                        CountdownDial(countdown: countdown)
-                            .id(countdown)
-                            .padding([.trailing, .bottom], CountdownDial.inset)
-                            .transition(.opacity)
-                    }
+            BalancedLines {
+                Text(verbatim: text ?? "…")
+                    .font(displayFont(size))
+                    .foregroundStyle(palette.ink)
+                    .multilineTextAlignment(.leading)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
+            .padding(.horizontal, Space.item)
+            .padding(.trailing, roomForDial ? CountdownDial.room : 0)
+            .padding(.vertical, Space.snug + 2)
+            .overlay(alignment: .bottomTrailing) {
+                if let countdown {
+                    CountdownDial(countdown: countdown)
+                        .id(countdown)
+                        .padding([.trailing, .bottom], CountdownDial.inset)
+                        .transition(.opacity)
                 }
-                .background { bubble }
-                .padding(Edge.Set(tail), BubbleShape.tailLength)
-                .contentTransition(.opacity)
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: text)
-                .animation(.easeOut(duration: 0.15), value: countdown)
+            }
+            .background { bubble }
+            .padding(Edge.Set(tail), BubbleShape.tailLength)
+            .contentTransition(.opacity)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: text)
+            .animation(.easeOut(duration: 0.15), value: countdown)
         }
 
         /// Card and tail are one outline, so the tail joins the card without a seam.

@@ -345,7 +345,7 @@ class LinkTests(PinsTestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("path: ../../laching", (self.root / "macos/project.yml").read_text("utf8"))
         self.assertNotIn("exactVersion", (self.root / "macos/project.yml").read_text("utf8"))
-        self.assertIn('.package(path: "../../../laching")',
+        self.assertIn('.package(name: "laching", path: "../../../laching")',
                       (self.root / "macos/FixtureCore/Package.swift").read_text("utf8"))
         targets = (self.root / "windows/Directory.Build.targets").read_text("utf8")
         self.assertIn('<_LachingLinkable Include="Laching.Companion;Laching.Core" />', targets)
