@@ -97,6 +97,43 @@ describe("companionLanding", () => {
     ]);
   });
 
+  it("gives a page in one language its canonical alone", () => {
+    const result = render("/compare/", { pages: [{ page: "compare", languages: ["en"] }] }) as {
+      html: string;
+      tags: { attrs: Record<string, string> }[];
+    };
+    expect(result.html).toContain("Fixture against the rest.");
+    expect(result.tags.map((tag) => tag.attrs)).toEqual([
+      { rel: "canonical", href: "https://fixture.example/compare/" },
+    ]);
+  });
+
+  it("lists a page only in its languages", () => {
+    const options = { pages: [{ page: "compare", languages: ["en"] }] };
+    const plugin = landing(options).plugins[0] as any;
+    const emitted: { fileName: string; source: string }[] = [];
+    plugin.generateBundle.call({
+      emitFile: (file: { fileName: string; source: string }) => emitted.push(file),
+    });
+    const sitemap = emitted.find((file) => file.fileName === "sitemap.xml")!.source;
+    expect(sitemap).toContain("<url><loc>https://fixture.example/compare/</loc></url>");
+    expect(sitemap).not.toContain("/it/compare/");
+    expect(Object.keys(landing(options).build.rollupOptions.input)).toEqual([
+      "main",
+      "it",
+      "privacy",
+      "it-privacy",
+      "compare",
+      "notFound",
+    ]);
+  });
+
+  it("refuses a page in a language the site doesn't have", () => {
+    expect(() => landing({ pages: [{ page: "compare", languages: ["fr"] }] })).toThrow(
+      "No language fr among the languages, for compare",
+    );
+  });
+
   it("switches languages in a row when asked", () => {
     expect(render("/it/", { languageSwitcher: "inline" })).toContain(
       '<nav class="languages" aria-label="Lingua"><a href="/" lang="en" hreflang="en" data-lang="en" title="English">EN</a>',
