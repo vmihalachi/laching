@@ -16,9 +16,9 @@ namespace Laching.Windows.Companion.Support;
 /// The Support window's content (Swift's <c>SupportWindow</c>): first the one-time supporter purchase (shared with the
 /// family), then, once that's bought, the tips with the store's prices. One ask at a time, and never right after a
 /// purchase: buying the supporter or a tip leaves only a thank-you until the window opens again (the app makes a fresh
-/// one for each open, and the model acknowledges the tip when it closes). Restore brings the supporter back. The app
-/// opens it only when the user asks; every word and the look are the app's. Esc is Done. Right after a purchase or a
-/// tip, focus moves to Done and Narrator hears the thanks.
+/// one for each open, and the model acknowledges the tip when it closes). Restore brings the supporter back, so it
+/// shows only until then. The app opens it only when the user asks; every word and the look are the app's. Esc is
+/// Done. Right after a purchase or a tip, focus moves to Done and Narrator hears the thanks.
 /// </summary>
 public sealed partial class SupportWindow : UserControl
 {
@@ -138,6 +138,8 @@ public sealed partial class SupportWindow : UserControl
         if (Status() is { } status)
             body.Children.Add(status);
         restore.IsEnabled = !purchases.IsBusy;
+        // Restore brings back only the supporter purchase (tips are consumables): nothing to restore once it's owned.
+        restore.Visibility = isSupporter ? Visibility.Collapsed : Visibility.Visible;
         var thanks = Thanks(shown, stage, copy);
         shown = stage;
         built = Built();
