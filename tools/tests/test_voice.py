@@ -252,6 +252,41 @@ class VoiceTests(FixtureAppTestCase):
         with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
             voice.review_reactions()
 
+    def test_a_site_page_in_a_translated_language_speaks_it(self):
+        self.add_clip("hello")
+        path = self.root / "companion.json"
+        data = json.loads(path.read_text("utf8"))
+        data["voice"].update({"reactions": ["Funny", "Meh"], "siteText": {"it": {
+            "reviewTitle": "La voce di Fixy", "voices": {"clown": "Pagliaccio"}, "flavors": {"a": "alfa"},
+            "reactions": ["Divertente", "Così così"]}}})
+        path.write_text(json.dumps(data), "utf8")
+        voice.configure(companion.load())
+        voice.sync_site(voice.load_config(), voice.load_manifest())
+        site = voice.VOICE.parent
+        page = (site / "review" / "it.html").read_text("utf8")
+        shown = json.loads(page.split("const DATA = ", 1)[1].split(";\n", 1)[0])
+        self.assertIn('<html lang="it">', page)
+        self.assertIn("<title>La voce di Fixy · Italiano</title>", page)
+        self.assertEqual(shown["ui"]["Sounds off"], "Suona male")
+        self.assertEqual((shown["title"], shown["languageLabel"], shown["voices"][0]["label"]),
+                         ("La voce di Fixy", "Italiano", "Pagliaccio"))
+        self.assertEqual(shown["flavorLabels"], {"a": "alfa", "b": "b"})
+        self.assertEqual((shown["reactions"], shown["reactionLabels"]), (["Funny", "Meh"], ["Divertente", "Così così"]),
+                         "the notes sent back stay in English")
+        self.assertTrue(shown["notice"].startswith("Condiviso con gli amici che aiutano a rivedere la voce di Fixy."))
+        self.assertIn("Ascolta le frasi di Fixy in italiano", page)
+        index = (site / "index.html").read_text("utf8")
+        self.assertIn("<title>Fixy's voice review</title>", index, "English until the browser asks for Italian")
+        self.assertIn('"title": "La voce di Fixy: la revisione"', index)
+        self.assertEqual((voice.say("it", "{n} lines", n=1), voice.say("it", "{n} lines", n=3)), ("1 frase", "3 frasi"))
+        self.assertEqual(voice.say("de", "{n} lines", n=1, one="{n} line"), "1 line", "no translation: English")
+        owner, _ = voice.review_page("it", ["clown"], voice.WORK / "review" / "it.html", False, voice.load_config(),
+                                     voice.load_manifest())
+        mine = json.loads(owner.split("const DATA = ", 1)[1].split(";\n", 1)[0])
+        self.assertIn('<html lang="en">', owner)
+        self.assertNotIn("ui", mine, "the owner's page stays English")
+        self.assertEqual(mine["title"], "Fixy's voice")
+
     def test_publish_pushes_to_origins_default_branch(self):
         remote, site = self.root / "remote.git", self.root / "voices-clone"
         git = lambda *a: subprocess.run(["git", *a], check=True, capture_output=True)  # noqa: E731

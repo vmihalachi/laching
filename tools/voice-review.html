@@ -190,9 +190,9 @@
 </header>
 <main>
   <section class="intro" id="intro" hidden aria-labelledby="intro-title">
-    <h2 id="intro-title">How this works</h2>
+    <h2 id="intro-title" data-t>How this works</h2>
     <ol id="steps"></ol>
-    <button id="got-it" class="primary">Got it</button>
+    <button id="got-it" class="primary" data-t>Got it</button>
   </section>
   <div id="list"></div>
   <div class="empty" id="empty" hidden></div>
@@ -205,11 +205,11 @@
     <button class="primary" id="send"></button>
   </div>
   <div class="panel" id="panel">
-    <h2 class="wide">Your notes</h2>
-    <label class="wide" id="name-field" hidden>Your name, so we know who to thank<input type="text" id="name" autocomplete="name"></label>
+    <h2 class="wide" data-t>Your notes</h2>
+    <label class="wide" id="name-field" hidden><span data-t>Your name, so we know who to thank</span><input type="text" id="name" autocomplete="name"></label>
     <textarea id="summary" readonly aria-label="Your notes"></textarea>
     <div class="side">
-      <div class="buttons"><button id="share" class="primary" hidden></button><button id="copy"></button><button id="clear" class="quiet">Clear my notes</button></div>
+      <div class="buttons"><button id="share" class="primary" hidden></button><button id="copy"></button><button id="clear" class="quiet" data-t>Clear my notes</button></div>
       <p class="status" id="status" role="status"></p>
       <p class="keys" id="keys"></p>
     </div>
@@ -223,16 +223,35 @@ const KEY = `${DATA.app}-review-${DATA.lang}`;
 const BEAT = 1200;  // the silence before a joke's next part: Laching's PhraseTiming.partBeat, as the app plays it
 const GAP = 450;    // between lines in a listen-through
 const PAGE = 20;
+// A friend's page speaks its language when the site has it (DATA.ui: English text → translation); the notes it sends
+// stay English, for the owner. t("…{x}…", { x }) fills the placeholders; a translation with plural forms picks by
+// {n}, and English by `one` when n is 1.
+const UI = DATA.ui || {};
+const rules = new Intl.PluralRules(DATA.ui ? DATA.lang : "en");
+function t(english, values = {}, one) {
+  let text = UI[english] ?? (one != null && values.n === 1 ? one : english);
+  if (typeof text === "object") text = text[rules.select(values.n)] ?? text.other;
+  return text.replace(/\{(\w+)\}/g, (m, k) => k in values ? values[k] : m);
+}
+for (const e of document.querySelectorAll("[data-t]")) e.textContent = t(e.textContent);
+for (const e of document.querySelectorAll("[aria-label], [title]")) {
+  for (const a of ["aria-label", "title"]) if (e.hasAttribute(a)) e.setAttribute(a, t(e.getAttribute(a)));
+}
 // Friends see plain words; the owner's page keeps the words its notes use.
 const WORDS = SITE
-  ? { retake: "Sounds off", retakeTip: v => `The ${v}recording sounds wrong: a word, the tone, a glitch (R)`, text: "Wording off",
-      textTip: "The words themselves should change (T)", copy: "Copy notes", send: "Send notes",
-      sent: "Copied. Send it to whoever shared this page with you." }
-  : { retake: "Retake", retakeTip: v => `Re-record the ${v}take (R)`, text: "Text", textTip: `The ${DATA.languageName} should change (T)`,
+  ? { retake: t("Sounds off"), text: t("Wording off"), textTip: t("The words themselves should change (T)"),
+      retakeTip: v => v ? t("The {voice} recording sounds wrong: a word, the tone, a glitch (R)", { voice: v })
+        : t("The recording sounds wrong: a word, the tone, a glitch (R)"),
+      copy: t("Copy notes"), send: t("Send notes"), sent: t("Copied. Send it to whoever shared this page with you.") }
+  : { retake: "Retake", retakeTip: v => `Re-record the ${v ? `${v} ` : ""}take (R)`, text: "Text", textTip: `The ${DATA.languageName} should change (T)`,
       copy: "Copy notes for Claude", send: "Copy notes", sent: "Copied. Paste it to Claude." };
-const [UP, DOWN] = DATA.reactions || [];
+const [UP, DOWN] = DATA.reactions || [];  // as the notes say them
+const [UP_LABEL, DOWN_LABEL] = DATA.reactionLabels || DATA.reactions || [];  // as the buttons do
+const capital = s => s.charAt(0).toUpperCase() + s.slice(1);
+const flavorLabel = f => DATA.flavorLabels?.[f] || f;
+const languageLabel = DATA.languageLabel || DATA.languageName;
 
-for (const v of DATA.voices) v.label = v.kind.charAt(0).toUpperCase() + v.kind.slice(1);
+for (const v of DATA.voices) v.label ||= capital(v.kind);
 const store = {
   get(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } },
   set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} },
@@ -283,24 +302,24 @@ let scrolledAt = 0;  // when the reader last scrolled by hand: a listen-through 
 
 for (const l of DATA.languages || [{ code: DATA.lang, name: DATA.languageName, recorded: true }]) {
   $("#lang").append(el("option", { value: l.code, disabled: !l.recorded, selected: l.code === DATA.lang,
-    textContent: l.recorded ? l.name : `${l.name} (not recorded yet)` }));
+    textContent: l.recorded ? l.name : t("{name} (not recorded yet)", { name: l.name }) }));
 }
 $("#lang").onchange = () => { location.href = `${encodeURIComponent($("#lang").value)}.html`; };
-document.title = `${DATA.title} · ${DATA.languageName}`;
+document.title = `${DATA.title} · ${languageLabel}`;
 $("#title").textContent = DATA.title;
 if (DATA.icon) { $("#icon").src = DATA.icon; $("#icon").hidden = false; }
 if (DATA.voices.length > 1) {
   for (const v of DATA.voices) $("#voice").append(el("option", { value: v.kind, textContent: `${v.label}: ${v.name}` }));
-  $("#voice").append(el("option", { value: "both", textContent: "Both voices" }));
+  $("#voice").append(el("option", { value: "both", textContent: t("Both voices") }));
 } else $("#voice").hidden = true;
 {
   const options = [["all", "All lines"], ["todo", "Not heard yet"], ["flagged", "Flagged or noted"]];
   if (UP) options.push(["unrated", "Not rated yet"]);
   if (DATA.rows.some(r => !voiced(r))) options.push(["voiced", "Voiced"], ["waiting", "Waiting for a voice"]);
-  for (const [value, label] of options) $("#filter").append(el("option", { value, textContent: label }));
+  for (const [value, label] of options) $("#filter").append(el("option", { value, textContent: t(label) }));
   if (DATA.flavors.length) {
-    const group = el("optgroup", { label: "Mood" });
-    for (const f of DATA.flavors) group.append(el("option", { value: `flavor:${f}`, textContent: f.charAt(0).toUpperCase() + f.slice(1) }));
+    const group = el("optgroup", { label: t("Mood") });
+    for (const f of DATA.flavors) group.append(el("option", { value: `flavor:${f}`, textContent: capital(flavorLabel(f)) }));
     $("#filter").append(group);
   }
 }
@@ -308,28 +327,29 @@ const canShare = SITE && !!navigator.share;
 $("#copy").innerHTML = `${ICON.copy}<span>${WORDS.copy}</span>`;
 $("#send").innerHTML = `${canShare ? ICON.share : ICON.copy}<span>${WORDS.send}</span>`;
 $("#toggle").insertAdjacentHTML("beforeend", ICON.chevron);
-$("#summary").placeholder = SITE ? "Flag what sounds off or reads wrong; your notes collect here." : "Flag what sounds off; your notes for Claude collect here.";
+$("#summary").placeholder = SITE ? t("Flag what sounds off or reads wrong; your notes collect here.") : "Flag what sounds off; your notes for Claude collect here.";
 if (SITE) {
   $("#notice").textContent = DATA.notice; $("#notice").hidden = false;
   $("#name-field").hidden = false;
   $("#name").value = store.get(`${DATA.app}-review-name`, "");
   $("#name").oninput = () => { store.set(`${DATA.app}-review-name`, $("#name").value); summarize(); };
 }
-if (canShare) { $("#share").hidden = false; $("#share").innerHTML = `${ICON.share}<span>Share notes</span>`; }
+if (canShare) { $("#share").hidden = false; $("#share").innerHTML = `${ICON.share}<span>${t("Share notes")}</span>`; }
 else $("#copy").classList.add("primary");
-$("#keys").innerHTML = "<kbd>Space</kbd> listen through / pause · <kbd>↓</kbd> <kbd>↑</kbd> next / previous · <kbd>←</kbd> <kbd>→</kbd> page · " +
-  (DATA.voices.length > 1 ? DATA.voices.map((v, n) => `<kbd>${n + 1}</kbd>`).join(" ") + " play a voice · " : "<kbd>1</kbd> play · ") +
-  `<kbd>R</kbd> ${WORDS.retake.toLowerCase()} · <kbd>T</kbd> ${WORDS.text.toLowerCase()} · <kbd>N</kbd> note` +
-  (UP ? ` · <kbd>+</kbd> ${escape(UP)} · <kbd>-</kbd> ${escape(DOWN)}` : "") + ". Your notes stay in this browser until you send them.";
+$("#keys").innerHTML = `<kbd>${t("Space")}</kbd> ${t("listen through / pause")} · <kbd>↓</kbd> <kbd>↑</kbd> ${t("next / previous")} · <kbd>←</kbd> <kbd>→</kbd> ${t("page")} · ` +
+  (DATA.voices.length > 1 ? DATA.voices.map((v, n) => `<kbd>${n + 1}</kbd>`).join(" ") + ` ${t("play a voice")} · ` : `<kbd>1</kbd> ${t("play")} · `) +
+  `<kbd>R</kbd> ${WORDS.retake.toLowerCase()} · <kbd>T</kbd> ${WORDS.text.toLowerCase()} · <kbd>N</kbd> ${t("note")}` +
+  (UP ? ` · <kbd>+</kbd> ${escape(UP_LABEL)} · <kbd>-</kbd> ${escape(DOWN_LABEL)}` : "") + `. ${t("Your notes stay in this browser until you send them.")}`;
 
 // The first visit: what to do, in a few steps (friends only; the owner knows).
 if (SITE && !store.get(`${DATA.app}-review-intro`, false)) {
   const steps = [
-    "<b>Listen.</b> Press Listen through and read along, or play any line on its own. Each line plays the way the app says it.",
-    `<b>Flag what's wrong.</b> <b>${WORDS.retake}</b> when a recording is off: a mispronounced word, a strange tone, a glitch. <b>${WORDS.text}</b> when the words themselves read wrong. <b>Note</b> to say why, or anything else.`,
-    "<b>Send your notes</b> with the button at the bottom. They stay in this browser until then, so you can stop and come back later.",
+    t("<b>Listen.</b> Press Listen through and read along, or play any line on its own. Each line plays the way the app says it."),
+    t("<b>Flag what's wrong.</b> <b>{retake}</b> when a recording is off: a mispronounced word, a strange tone, a glitch. <b>{text}</b> when the words themselves read wrong. <b>Note</b> to say why, or anything else.",
+      { retake: WORDS.retake, text: WORDS.text }),
+    t("<b>Send your notes</b> with the button at the bottom. They stay in this browser until then, so you can stop and come back later."),
   ];
-  if (UP) steps.splice(2, 0, `<b>Rate the jokes.</b> <b>${escape(UP)}</b> or <b>${escape(DOWN)}</b> after each punchline tells us which ones land.`);
+  if (UP) steps.splice(2, 0, t("<b>Rate the jokes.</b> <b>{up}</b> or <b>{down}</b> after each punchline tells us which ones land.", { up: escape(UP_LABEL), down: escape(DOWN_LABEL) }));
   $("#steps").innerHTML = steps.map(s => `<li>${s}</li>`).join("");
   $("#intro").hidden = false;
   $("#got-it").onclick = () => { store.set(`${DATA.app}-review-intro`, true); $("#intro").hidden = true; };
@@ -352,11 +372,11 @@ function visible() {
 }
 
 const EMPTY = {
-  todo: "You've heard every line. Thank you!",
-  flagged: `Nothing flagged yet. Lines you mark ${WORDS.retake} or ${WORDS.text}, or write a note on, gather here.`,
-  unrated: "Every joke is rated.",
-  voiced: "Nothing is recorded yet.",
-  waiting: "Every line has a voice.",
+  todo: t("You've heard every line. Thank you!"),
+  flagged: t("Nothing flagged yet. Lines you mark {retake} or {text}, or write a note on, gather here.", { retake: WORDS.retake, text: WORDS.text }),
+  unrated: t("Every joke is rated."),
+  voiced: t("Nothing is recorded yet."),
+  waiting: t("Every line has a voice."),
 };
 
 function render() {
@@ -366,7 +386,7 @@ function render() {
   for (const i of order.slice(page * PAGE, (page + 1) * PAGE)) list.append(rowElement(i));
   $("#empty").hidden = order.length > 0;
   if (!order.length) {
-    $("#empty").innerHTML = `<p>${escape(EMPTY[$("#filter").value] || "No lines in this mood.")}</p><button id="show-all">Show all lines</button>`;
+    $("#empty").innerHTML = `<p>${escape(EMPTY[$("#filter").value] || t("No lines in this mood."))}</p><button id="show-all">${t("Show all lines")}</button>`;
     $("#show-all").onclick = () => setFilter("all");
   }
   ending(order.length, pages);
@@ -386,40 +406,40 @@ function rowElement(i) {
   });
   row.dataset.index = i;
   const chips = [];
-  if (fresh.length) chips.push(`<span class="chip new">New take${DATA.voices.length > 1 ? `: ${fresh.join(", ")}` : ""}</span>`);
-  if (broken.length) chips.push(`<span class="chip failed">Didn't load${DATA.voices.length > 1 ? ` (${broken.join(", ")})` : ""}: press play to try again</span>`);
-  if (waiting) chips.push('<span class="chip waiting" title="Not recorded for this text yet: check the words; the voice comes later">Waiting for a voice</span>');
-  if (r.flavor) chips.push(`<span class="chip flavor-${DATA.flavors.indexOf(r.flavor) % 4}">${escape(r.flavor)}</span>`);
-  if (r.joke) chips.push(`<span class="chip">${r.part === 1 ? "Joke: setup" : r.part === r.parts ? "Punchline" : `Joke: part ${r.part} of ${r.parts}`}</span>`);
+  const many = DATA.voices.length > 1;
+  if (fresh.length) chips.push(`<span class="chip new">${escape(many ? t("New take: {voices}", { voices: fresh.join(", ") }) : t("New take"))}</span>`);
+  if (broken.length) chips.push(`<span class="chip failed">${escape(many ? t("Didn't load ({voices}): press play to try again", { voices: broken.join(", ") }) : t("Didn't load: press play to try again"))}</span>`);
+  if (waiting) chips.push(`<span class="chip waiting" title="${escape(t("Not recorded for this text yet: check the words; the voice comes later"))}">${t("Waiting for a voice")}</span>`);
+  if (r.flavor) chips.push(`<span class="chip flavor-${DATA.flavors.indexOf(r.flavor) % 4}">${escape(flavorLabel(r.flavor))}</span>`);
+  if (r.joke) chips.push(`<span class="chip">${r.part === 1 ? t("Joke: setup") : r.part === r.parts ? t("Punchline") : t("Joke: part {part} of {parts}", { part: r.part, parts: r.parts })}</span>`);
   if (r.tags) chips.push(`<span class="chip">${escape(r.tags)}</span>`);
   if (!SITE) chips.push(`<span class="chip">${escape(r.slot)}</span><span class="id">${escape(r.id)}</span>`);
   row.innerHTML = `
-    <a class="num" href="#${encodeURIComponent(r.id)}" title="Link to this line">${i + 1}${done ? ICON.check : ""}</a>
+    <a class="num" href="#${encodeURIComponent(r.id)}" title="${escape(t("Link to this line"))}">${i + 1}${done ? ICON.check : ""}</a>
     <div><p class="line" lang="${escape(DATA.lang)}"></p>${DATA.lang === DATA.source ? "" : `<p class="gloss" lang="${escape(DATA.source)}"></p>`}
       <div class="meta">${chips.join("")}</div></div>
     <div class="actions"><div class="voices actions"></div></div>
-    <div class="note"><input type="text" aria-label="Note on line ${i + 1}" placeholder="What's off? Or anything else"></div>`;
+    <div class="note"><input type="text" aria-label="${escape(t("Note on line {n}", { n: i + 1 }))}" placeholder="${escape(t("What's off? Or anything else"))}"></div>`;
   row.querySelector(".line").textContent = r.text;
   const gloss = row.querySelector(".gloss"); if (gloss) gloss.textContent = r.en;
-  if (done) row.querySelector(".num").setAttribute("aria-label", `Line ${i + 1}, heard`);
+  if (done) row.querySelector(".num").setAttribute("aria-label", t("Line {n}, heard", { n: i + 1 }));
   row.querySelector(".num").onclick = ev => { ev.preventDefault(); ev.stopPropagation(); select(i); };
   const actions = row.querySelector(".actions"), voices = row.querySelector(".voices");
   for (const [n, v] of DATA.voices.entries()) {
     if (!r.clips[v.kind]) continue;
-    const many = DATA.voices.length > 1;
-    const play = el("button", { className: "play", title: `${v.name} (${n + 1})` }, `${ICON.play}${EQ}<span>${many ? v.label : "Play"}</span>`);
+    const play = el("button", { className: "play", title: `${v.name} (${n + 1})` }, `${ICON.play}${EQ}<span>${escape(many ? v.label : t("Play"))}</span>`);
     play.dataset.play = v.kind;
-    play.setAttribute("aria-label", many ? `Play the ${v.label.toLowerCase()} voice` : "Play");
+    play.setAttribute("aria-label", many ? t("Play the {voice} voice", { voice: v.label.toLowerCase() }) : t("Play"));
     play.onclick = ev => { ev.stopPropagation(); stopListening(); select(i, false); playOne(i, v.kind); };
-    const flag = el("button", { className: "flag", textContent: WORDS.retake, title: WORDS.retakeTip(many ? `${v.label.toLowerCase()} ` : "") });
+    const flag = el("button", { className: "flag", textContent: WORDS.retake, title: WORDS.retakeTip(many ? v.label.toLowerCase() : "") });
     flag.setAttribute("aria-pressed", retake(r, v.kind));
-    if (many) flag.setAttribute("aria-label", `${WORDS.retake}: ${v.label.toLowerCase()} voice`);
+    if (many) flag.setAttribute("aria-label", t("{flag}: {voice} voice", { flag: WORDS.retake, voice: v.label.toLowerCase() }));
     flag.onclick = ev => { ev.stopPropagation(); toggleRetake(i, v.kind); };
     const pair = el("span", { className: "pair" }); pair.append(play, flag); voices.append(pair);
   }
   // A joke's setup can play the whole joke, with the beat before the punchline.
   if (r.joke && r.part === 1 && voiced(r)) {
-    const whole = el("button", { className: "whole", title: "The setup, the beat, the punchline" }, `${ICON.play}${EQ}<span>Whole joke</span>`);
+    const whole = el("button", { className: "whole", title: t("The setup, the beat, the punchline") }, `${ICON.play}${EQ}<span>${t("Whole joke")}</span>`);
     whole.onclick = ev => { ev.stopPropagation(); playJoke(i); };
     voices.append(whole);
   }
@@ -427,14 +447,14 @@ function rowElement(i) {
   const text = el("button", { className: "flag", textContent: WORDS.text, title: WORDS.textTip });
   text.setAttribute("aria-pressed", !!e.text);
   text.onclick = ev => { ev.stopPropagation(); toggleText(i); };
-  const note = el("button", { className: noted(r) ? "noted" : "", textContent: "Note", title: "Write a note (N)" });
+  const note = el("button", { className: noted(r) ? "noted" : "", textContent: t("Note"), title: t("Write a note (N)") });
   note.setAttribute("aria-expanded", open);
   note.onclick = ev => { ev.stopPropagation(); openNote(i); };
   pair.append(text, note); actions.append(pair);
   if (rated(r)) {
     const group = el("span", { className: "react", role: "group" });
-    group.setAttribute("aria-label", r.joke ? "How is the joke?" : "How is it?");
-    for (const [value, label] of [["up", UP], ["down", DOWN]]) {
+    group.setAttribute("aria-label", r.joke ? t("How is the joke?") : t("How is it?"));
+    for (const [value, label] of [["up", UP_LABEL], ["down", DOWN_LABEL]]) {
       const b = el("button", { className: value, textContent: label, title: `${label} (${value === "up" ? "+" : "-"})` });
       b.setAttribute("aria-pressed", state[reactKey(r)]?.reaction === value);
       b.onclick = ev => { ev.stopPropagation(); react(i, value); };
@@ -462,8 +482,8 @@ function ending(count, pages) {
   if (end.hidden) return;
   const left = DATA.rows.filter(unheard).length;
   end.innerHTML = left
-    ? `<strong>That's the last line.</strong><p>${left} ${left === 1 ? "line is" : "lines are"} still unheard.</p><button id="end-todo">Show only those</button>`
-    : `<strong>You've heard every line. Thank you!</strong><p>${SITE ? "Send your notes back to whoever shared this page, even if nothing was wrong." : "Copy the notes for Claude."}</p><button class="primary" id="end-send">${WORDS.send}</button>`;
+    ? `<strong>${t("That's the last line.")}</strong><p>${t("{n} lines are still unheard.", { n: left }, "{n} line is still unheard.")}</p><button id="end-todo">${t("Show only those")}</button>`
+    : `<strong>${t("You've heard every line. Thank you!")}</strong><p>${SITE ? t("Send your notes back to whoever shared this page, even if nothing was wrong.") : "Copy the notes for Claude."}</p><button class="primary" id="end-send">${WORDS.send}</button>`;
   if (left) $("#end-todo").onclick = () => setFilter("todo");
   else $("#end-send").onclick = send;
 }
@@ -472,21 +492,21 @@ function ending(count, pages) {
 function pager(count, pages) {
   const nav = $("#pager"); nav.innerHTML = ""; nav.hidden = pages < 2;
   const button = (html, to, label) => {
-    const b = el("button", { title: label || `Page ${to + 1}` }, html);
+    const b = el("button", { title: label || t("Page {n}", { n: to + 1 }) }, html);
     if (label) b.setAttribute("aria-label", label);
     else if (to === page) b.setAttribute("aria-current", "page");
     b.disabled = to < 0 || to >= pages;
     b.onclick = () => goPage(to); nav.append(b);
   };
-  button(`${ICON.prev}<span class="word">Previous</span>`, page - 1, "Previous page (←)");
+  button(`${ICON.prev}<span class="word">${t("Previous")}</span>`, page - 1, t("Previous page (←)"));
   let last = -1;
   for (let p = 0; p < pages; p++) {
     if (p !== 0 && p !== pages - 1 && Math.abs(p - page) > 2) continue;
     if (p - last > 1) nav.append(el("span", { className: "gap", textContent: "…" }));
     button(String(p + 1), p); last = p;
   }
-  button(`<span class="word">Next</span>${ICON.next}`, page + 1, "Next page (→)");
-  nav.append(el("span", { className: "range", textContent: `${page * PAGE + 1}–${Math.min(count, (page + 1) * PAGE)} of ${count}` }));
+  button(`<span class="word">${t("Next")}</span>${ICON.next}`, page + 1, t("Next page (→)"));
+  nav.append(el("span", { className: "range", textContent: t("{from}–{to} of {count}", { from: page * PAGE + 1, to: Math.min(count, (page + 1) * PAGE), count }) }));
 }
 
 function goPage(p) {
@@ -502,9 +522,10 @@ function progress() {
   for (const r of DATA.rows) for (const v of DATA.voices) if (r.clips[v.kind]) { total++; if (heard(r, v.kind)) done++; }
   const waiting = DATA.rows.filter(r => !voiced(r)).length;
   $("#bar").style.width = `${total ? (100 * done / total) : 0}%`;
-  const text = `${done} of ${total} heard` + (waiting ? ` · ${waiting} waiting` : "");
+  const heardText = t("{done} of {total} heard", { done, total });
+  const text = heardText + (waiting ? t(" · {n} waiting", { n: waiting }) : "");
   $("#progress").setAttribute("aria-valuemax", total); $("#progress").setAttribute("aria-valuenow", done);
-  $("#progress").setAttribute("aria-valuetext", `${done} of ${total} heard` + (waiting ? `, ${waiting} lines waiting for a voice` : ""));
+  $("#progress").setAttribute("aria-valuetext", heardText + (waiting ? t(", {n} lines waiting for a voice", { n: waiting }, ", {n} line waiting for a voice") : ""));
   $("#count").textContent = text; $("#heard").textContent = text;
 }
 
@@ -533,10 +554,10 @@ function summarize() {
   $("#summary").value = lines.join("\n");
   const flags = Object.values(retakes).reduce((n, l) => n + l.length, 0) + texts.length;
   const parts = [];
-  if (flags) parts.push(`${flags} flagged`);
-  if (notes.length) parts.push(`${notes.length} ${notes.length === 1 ? "note" : "notes"}`);
-  if (up.length + down.length) parts.push(`${up.length + down.length} rated`);
-  $("#tally").textContent = parts.length ? parts.join(" · ") : "No notes yet";
+  if (flags) parts.push(t("{n} flagged", { n: flags }));
+  if (notes.length) parts.push(t("{n} notes", { n: notes.length }, "{n} note"));
+  if (up.length + down.length) parts.push(t("{n} rated", { n: up.length + down.length }));
+  $("#tally").textContent = parts.length ? parts.join(" · ") : t("No notes yet");
 }
 
 // ---------------------------------------------------------------------------------------------- selection and playback
@@ -645,13 +666,13 @@ function stopListening() {
   playing = null; markPlaying(); paintListen();
 }
 function paintListen() {
-  $("#listen").innerHTML = listening ? `${ICON.pause}<span>Pause</span>` : `${ICON.play}<span>Listen through</span>`;
+  $("#listen").innerHTML = listening ? `${ICON.pause}<span>${t("Pause")}</span>` : `${ICON.play}<span>${t("Listen through")}</span>`;
   if ("mediaSession" in navigator) navigator.mediaSession.playbackState = listening ? "playing" : "paused";
 }
 function media(r, kind) {
   if (!("mediaSession" in navigator) || typeof MediaMetadata === "undefined") return;
   const v = DATA.voices.find(v => v.kind === kind);
-  navigator.mediaSession.metadata = new MediaMetadata({ title: r.text, artist: `${DATA.title} · ${v?.name || kind}`, album: DATA.languageName,
+  navigator.mediaSession.metadata = new MediaMetadata({ title: r.text, artist: `${DATA.title} · ${v?.name || kind}`, album: languageLabel,
     artwork: DATA.icon ? [{ src: new URL(DATA.icon, location.href).href, sizes: "512x512", type: "image/png" }] : [] });
 }
 if ("mediaSession" in navigator) {
@@ -687,10 +708,10 @@ function say(html, ms = 6000) {
 const text = () => $("#summary").value || "No flags: everything sounds right.";
 async function copy() {
   try { await navigator.clipboard.writeText(text()); say(escape(WORDS.sent)); }
-  catch { $("#summary").select(); document.execCommand("copy"); say("Copied."); }
+  catch { $("#summary").select(); document.execCommand("copy"); say(escape(t("Copied."))); }
 }
 async function share() {
-  try { await navigator.share({ title: `${DATA.title} · ${DATA.languageName}`, text: text() }); say("Sent. Thank you!"); }
+  try { await navigator.share({ title: `${DATA.title} · ${languageLabel}`, text: text() }); say(escape(t("Sent. Thank you!"))); }
   catch (err) { if (err.name !== "AbortError") copy(); }
 }
 function send() { openPanel(true); canShare ? share() : copy(); }
@@ -703,8 +724,8 @@ $("#clear").onclick = () => {
   const before = JSON.stringify(state);
   for (const id in state) Object.assign(state[id], { retake: {}, text: false, note: "", reaction: "" });
   noting.clear(); save(); render();
-  say('Cleared. <button class="quiet" id="undo">Undo</button>', 10000);
-  $("#undo").onclick = () => { state = JSON.parse(before); save(); render(); say("Restored."); };
+  say(`${escape(t("Cleared."))} <button class="quiet" id="undo">${escape(t("Undo"))}</button>`, 10000);
+  $("#undo").onclick = () => { state = JSON.parse(before); save(); render(); say(escape(t("Restored."))); };
 };
 
 $("#listen").onclick = () => listening ? stopListening() : listenFrom(current);
