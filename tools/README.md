@@ -22,7 +22,7 @@ or `$COMPANION_ROOT`); the schema is [`companion.schema.json`](companion.schema.
 | `screens.py` | The same screens on the Mac, Windows, iOS and Android in any languages, from one manifest (`screens` in `companion.json`: each canonical screen's shot on each platform): `capture` builds each platform once and runs them side by side (the Mac hidden, its languages side by side; Windows in the Parallels VM through `vm.sh check-layout`; iOS on simulators of its own on the newest runtime that runs each device, each booted once, each language one launch of the app in screenshot mode, as `check-layout-ios.py` runs it, side by side on clones when a device gets more than one simulator; Android on a headless emulator per platform (its `avd`), as `check-layout-android.py` runs it, from the AVD's snapshot (`--cold` boots cold and saves a new one), a shot's `camera` giving the emulator the host's webcam, the platform's `posture` folding a foldable and its `orientation` turning the screen; `--jobs` is the app processes, simulators and emulators at once in all, shared among the platforms in proportion to their runs, at least one each; `--themes` reaches every launch, so a capture of one theme never draws the other) into `build/screens/<platform>/<lang>/<screen>-<theme>.png`, with every platform's problems in one `problems.txt`; `compare` makes one sheet per screen, language and theme (desktops on top, devices below, one height per row) and an `index.html` to flip through them; `diff --against NAME` and `accept NAME` keep a perceptual hash per image, so a review looks only at what changed. Needs Pillow (re-runs under `/usr/bin/python3` when this Python lacks it). |
 | `install-dev.sh`, `dev-icon.swift` | The Debug build in `~/Applications/<devAppName>.app`; its DEV-banded icon. |
 | `conformance.sh` | Regenerates the app's vectors from its Swift core. |
-| `verify.sh`, `verify-lib.sh` | Runs the checks that apply to the changed paths, plus the pin check (`verify-lib.sh`: the check / skip harness it shares with Laching's own `scripts/verify.sh`). |
+| `verify.sh`, `verify-lib.sh`, `verify-lock.py` | Runs the checks that apply to changed paths, plus the pin check. The shared harness owns execution, progress, timeouts, process cleanup, named build locks and changed-path discovery; apps register their own checks. |
 | `setup-linux.sh` | Prepares a Linux container (cloud agents): submodules, .NET, landing dependencies, and for an app with an `android` section a JDK 17 and ktlint. |
 | `store/check.py`, `store/push.py`, `store/import.py`, `store/push-microsoft.py`, `store/push-google.py` | The store listing (`store` in `companion.json`): each field against the stores' limits (with `store.apple.ios`, the iPhone and iPad version page's too; with `store.google`, Google Play's `google.*` fields: title 30, short description 80, full description 4000, each product's name 55 and description 200; Google Play's push is `push-google.py`); App Store Connect (text, in-app purchases, screenshots, previews, review notes, and a universal app's iOS page and iPhone and iPad screenshots; `--status` reads only); a Partner Center import folder; the Microsoft Store through the Partner Center submission API (`push-microsoft.py status|prepare|commit`: the bundle, the listing text, screenshots and art into a new submission from the last published one, dry run without `--apply`; `store.microsoft.storeId`; the credentials of one Entra application for every app of the account, set up as `store/microsoft-api-setup.md` says); Google Play through the Play Developer API (`push-google.py status|prepare`: the listing text in every language, the icon, feature graphic and phone and tablet screenshots in one edit, and `store.apple.iaps` as one-time products priced in USD and converted per region; dry run without `--apply`; `store.google.packageName`; a service account's JSON key, set up as `store/google-api-setup.md` says). |
 | `landing/` | `@laching/landing`, an npm package (Node 24): a landing page's localized pages, legal pages, sitemap, `_headers` and social cards as Vite plugins. Published to npm by `release.yml`; the app's landing repository depends on it by version. |
@@ -36,6 +36,7 @@ or `$COMPANION_ROOT`); the schema is [`companion.schema.json`](companion.schema.
 | `windows/vm.sh` | On a Mac, the WinUI app built and checked in a Parallels Windows VM from the working tree as it is (uncommitted changes too): `build` (x64 and ARM64), `test`, `screenshots <folder>` (the PNGs back on the Mac), `check-layout [lang…]` (`check-layout.ps1`, the shots back in `<windows.dir>/build/layout-check`), `smoke`, `run -- <command>`, `status`. Without prlctl or the VM it says so in one line and exits 3. One run at a time on the VM, from any app or worktree: another waits, naming the run it waits for (its command and checkout); `status` names it and exits 4, so a caller can skip instead. |
 | `hooks/hook.py` | Agent guardrails: generated files, the stop-time checks (ktlint over the Kotlin files an agent edits), the Windows and Android parity reminders. |
 | `skills/` | `localization`, `add-phrase`, `add-setting`, `conformance`, `voice`, `windows-port`, `release-mac`, `release-ios` (a universal app's iPhone and iPad version), `release-windows`, `review-invariants`. |
+| `ci-macos.py`, `../.github/workflows/macos-app.yml` | Reusable Mac CI: project generation, formatting, release pins, enabled content checks, core tests and app tests from `companion.json`; below, *Mac apps*. |
 | `../.github/workflows/windows-release.yml`, `windows-app.yml` | Reusable workflows (`workflow_call`) an app's own short workflows call at the release it pins: the Store release (both packages, the bundle as the artifact, the optional push, the tag) and the WinUI build check (the traps, the tests, both packages, every window). Below, *Windows apps*. |
 
 Tests: `python3 tools/tests/run.py` (over `tools/tests/fixture-app`, a minimal app, the files side by side, `--jobs N`
@@ -238,7 +239,7 @@ fail when the app drifts from the tools (each rule: `conform.py`'s docstring):
   vectors) goes in `conform.allow`, with why.
 - **The reusable workflows**, at the release the app pins: an app with `windows.app` calls both
   `windows-release.yml` and `windows-app.yml`, and no workflow of its own publishes, smoke-tests or bundles Store
-  packages.
+  packages. Every call of a Laching reusable workflow, including `macos-app.yml`, must name the pinned release.
 - **Linked skills.** A skill in `.agents/skills` named like one of `tools/skills` is a link to
   `../../laching/tools/skills/<name>`; the app's own words for it go in `.agents/notes/<name>.md`.
 - **`store.microsoft`** is the schema's shape: `shots` and `publisher`, and `storeId` for the submission API.
@@ -248,6 +249,47 @@ The app's own checks, which a copied `verify.sh` used to hold, are `verify.check
 `--fast` skips. `companion.py apps` (or `bump-apps.sh --report`), in the Laching checkout, lists the apps next to it:
 the release each pins, how far behind the newest, and its conform problems; it exits 1 while they pin different
 releases.
+
+The shared `verify-lib.sh` also supports app-owned check selection: source it from the repository root, call
+`discover_changes "$root" "$landing"` after parsing `mode`, `base` and `paths`, then register `check`, `skip`,
+`summary` and `finish` calls. `find_tool <name> <package-dir>` resolves a global CLI or the package's
+`node_modules/.bin` installation. Submodule discovery removes the parent Git hook's repository variables.
+
+Each check runs in its own process group. Progress appears after ten seconds and every five minutes; after
+`LACHING_CHECK_SECONDS` (default 1800), the check fails and its process group is stopped. Interrupting the verifier
+also stops its active group. `LACHING_PROGRESS_SECONDS` and `LACHING_PROGRESS_INTERVAL` change progress intervals;
+`LACHING_VERIFY_TIMING=1` adds elapsed times. `check "name" locked <build-name> <command...>` serializes a build
+across verifier sessions in this checkout. Locks live in `build/verify-locks` (or `LACHING_VERIFY_LOCK_DIR`);
+`verify-lock.py` holds an OS advisory lock in a process group separate from the build. The verifier stops the build
+and its descendants before releasing the lock, including on timeout or interruption. OS locks also release if their
+holder crashes. The persistent
+lock files are diagnostic and can contain an old PID; stale contents never prevent acquisition. Keep these files in
+place while builds are running, so every process locks the same file.
+
+## Mac apps
+
+An app can keep its `workflow_dispatch`, permissions and concurrency policy in a short workflow and call the shared
+Mac checks at the release it pins:
+
+```yaml
+jobs:
+  test:
+    uses: vmihalachi/laching/.github/workflows/macos-app.yml@vX.Y.Z
+    with:
+      hosted: ${{ inputs.hosted }}
+      submodules: "true"  # also checks out bundled recorded voices
+```
+
+The self-hosted runner defaults to `["self-hosted","macOS"]`; `runner` accepts another JSON label list. `hosted: true`
+uses `macos-26` and selects the latest stable Xcode. `laching-path` defaults to `laching` and must match the profile's
+`laching.path`. Both `companion.py bump` and `pins` include this workflow reference; `conform` reports a drifting ref.
+
+`ci-macos.py` runs named stages (`project`, `format`, `pins`, `content`, `core`, `test`). Paths and the test scheme come
+from `mac`; content checks follow the configured sounds, characters and voice, plus the phrase bank when present.
+An app without a core package skips that stage. Swift formatting includes existing shared and platform source roots.
+Every command is an argument list, so app names and paths with spaces retain their meaning; the workflow accepts no
+shell command input. Output streams to the job and `mac.dir/build/ci-<stage>.log`; failure uploads these logs. Apps with
+other platform checks keep those in their own workflows.
 
 ## Windows apps
 

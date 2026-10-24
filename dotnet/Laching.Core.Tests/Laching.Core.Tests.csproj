@@ -15,6 +15,11 @@
     <Using Include="Laching.Testing.Conformance" />
   </ItemGroup>
   <ItemGroup>
+    <!-- These shell bookkeeping helpers have no Windows dependency; exercise reentrancy and listener lifetime on every OS. -->
+    <Compile Include="../Laching.Windows/Shell/WindowLifetime.cs" Link="WindowsShell/WindowLifetime.cs" />
+    <Compile Include="../Laching.Windows/Shell/ChangeListeners.cs" Link="WindowsShell/ChangeListeners.cs" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\Laching.Core\Laching.Core.csproj" />
     <ProjectReference Include="..\Laching.Testing\Laching.Testing.csproj" />
   </ItemGroup>

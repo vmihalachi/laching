@@ -1,11 +1,9 @@
 using Laching.Companion.Shell.App;
 using Laching.Windows.Companion.Views;
-using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Windows.Graphics;
-using Win32 = Laching.Windows.Shell.NativeMethods;
 
 namespace Laching.Windows.Companion.Shell;
 
@@ -20,7 +18,7 @@ namespace Laching.Windows.Companion.Shell;
 public sealed class WindowManager<TWindow> : IWindowHost<TWindow>
     where TWindow : notnull
 {
-    private readonly Dictionary<TWindow, Entry> windows = [];
+    private readonly Laching.Windows.Shell.WindowManager<TWindow, EntryWindow> windows;
     private readonly Func<TWindow, WindowSpec> spec;
     private readonly Func<TWindow, UIElement> content;
     private readonly string? iconPath;
@@ -34,6 +32,8 @@ public sealed class WindowManager<TWindow> : IWindowHost<TWindow>
         this.spec = spec;
         this.content = content;
         this.iconPath = iconPath;
+        windows = new(Make, window => window.View as IDisposable, id => this.spec(id).IsExclusive, BringToFront);
+        windows.Closed = id => OnClose?.Invoke(id);
     }
 
     public Action<TWindow>? OnClose { get; set; }
@@ -53,69 +53,41 @@ public sealed class WindowManager<TWindow> : IWindowHost<TWindow>
         set
         {
             theme = value;
-            foreach (var entry in windows.Values)
+            foreach (var entry in windows.Snapshot())
                 ApplyTheme(entry);
         }
     }
 
-    public bool IsOpen(TWindow id) => windows.ContainsKey(id);
+    public bool IsOpen(TWindow id) => windows.Find(id) is not null;
 
     /// <summary>The open window, for the odd call this class doesn't cover.</summary>
-    public Window? Find(TWindow id) => windows.TryGetValue(id, out var entry) ? entry.Window : null;
+    public Window? Find(TWindow id) => windows.Find(id);
 
-    public bool ShowOpenWindows()
-    {
-        if (windows.Count == 0)
-            return false;
-        foreach (var entry in windows.Values.ToArray())
-            BringToFront(entry);
-        return true;
-    }
+    public bool ShowOpenWindows() => windows.ShowOpenWindows();
 
-    public void Show(TWindow id)
-    {
-        if (windows.TryGetValue(id, out var existing))
-        {
-            CloseOtherExclusive(id);
-            BringToFront(existing);
-            return;
-        }
-        var entry = Make(id);
-        windows[id] = entry;
-        CloseOtherExclusive(id);
-        BringToFront(entry);
-    }
+    public void Show(TWindow id) => windows.Show(id);
 
-    public void Close(TWindow id)
-    {
-        if (windows.TryGetValue(id, out var entry))
-            entry.Window.Close();
-    }
+    public void Close(TWindow id) => windows.Close(id);
 
-    public void CloseAll()
-    {
-        foreach (var entry in windows.Values.ToArray())
-            entry.Window.Close();
-    }
+    public void CloseAll() => windows.CloseAll();
 
-    private Entry Make(TWindow id)
+    private EntryWindow Make(TWindow id)
     {
         var spec = this.spec(id);
         var view = content(id);
         var root = WindowFrame.Make(view);
-        var window = new Window
+        var presenter = OverlappedPresenter.Create();
+        presenter.IsMaximizable = false;
+        presenter.IsAlwaysOnTop = spec.IsAlwaysOnTop;
+        var entry = new EntryWindow(presenter, spec, root, view)
         {
             Title = spec.Title,
             Content = root,
             ExtendsContentIntoTitleBar = true,
         };
-        var presenter = OverlappedPresenter.Create();
-        presenter.IsMaximizable = false;
-        presenter.IsAlwaysOnTop = spec.IsAlwaysOnTop;
-        window.AppWindow.SetPresenter(presenter);
+        entry.AppWindow.SetPresenter(presenter);
         if (iconPath is not null)
-            window.AppWindow.SetIcon(iconPath);
-        var entry = new Entry(window, presenter, spec, root);
+            entry.AppWindow.SetIcon(iconPath);
         ApplyTheme(entry);
         Place(entry);
         // Moving to a display with another scale keeps the content's size in DIPs; the minimum follows it.
@@ -125,19 +97,6 @@ public sealed class WindowManager<TWindow> : IWindowHost<TWindow>
             root.XamlRoot.Changed += (_, _) => ApplyMinSize(entry);
         }
         root.Loaded += Loaded;
-        window.Closed += (_, _) =>
-        {
-            windows.Remove(id);
-            // The content is the manager's to end: a view's Unloaded isn't reliably raised when its window closes.
-            try
-            {
-                (view as IDisposable)?.Dispose();
-            }
-            finally
-            {
-                OnClose?.Invoke(id);
-            }
-        };
         return entry;
     }
 
@@ -145,7 +104,7 @@ public sealed class WindowManager<TWindow> : IWindowHost<TWindow>
     /// Sizes the content at <see cref="WindowSpec.Size"/> on the display it opens on (never past the work area, where it
     /// scrolls instead) and puts it in the middle or by the tray.
     /// </summary>
-    private void Place(Entry entry)
+    private void Place(EntryWindow entry)
     {
         var (cursorX, cursorY) = NativeMethods.Cursor();
         var display =
@@ -154,7 +113,7 @@ public sealed class WindowManager<TWindow> : IWindowHost<TWindow>
                 : DisplayArea.GetFromPoint(new PointInt32(cursorX, cursorY), DisplayAreaFallback.Primary);
         var area = display.WorkArea;
         var scale = NativeMethods.Scale(area.X + area.Width / 2, area.Y + area.Height / 2);
-        var appWindow = entry.Window.AppWindow;
+        var appWindow = entry.AppWindow;
         // On the display first, so the client size below is measured with its frame.
         appWindow.Move(new PointInt32(area.X, area.Y));
         NativeMethods.SetClientSize(
@@ -173,7 +132,7 @@ public sealed class WindowManager<TWindow> : IWindowHost<TWindow>
         ApplyMinSize(entry, scale);
     }
 
-    private static void ApplyMinSize(Entry entry, double? scale = null)
+    private static void ApplyMinSize(EntryWindow entry, double? scale = null)
     {
         if (entry.Spec.MinSize is not { } min)
             return;
@@ -182,10 +141,10 @@ public sealed class WindowManager<TWindow> : IWindowHost<TWindow>
         entry.Presenter.PreferredMinimumHeight = (int)Math.Round(min.Height * factor);
     }
 
-    private void ApplyTheme(Entry entry)
+    private void ApplyTheme(EntryWindow entry)
     {
         entry.Root.RequestedTheme = theme;
-        entry.Window.AppWindow.TitleBar.PreferredTheme = theme switch
+        entry.AppWindow.TitleBar.PreferredTheme = theme switch
         {
             ElementTheme.Light => TitleBarTheme.Light,
             ElementTheme.Dark => TitleBarTheme.Dark,
@@ -193,28 +152,21 @@ public sealed class WindowManager<TWindow> : IWindowHost<TWindow>
         };
     }
 
-    private void CloseOtherExclusive(TWindow id)
-    {
-        if (!windows[id].Spec.IsExclusive)
-            return;
-        foreach (var (other, entry) in windows.ToArray())
-            if (!EqualityComparer<TWindow>.Default.Equals(other, id) && entry.Spec.IsExclusive)
-                entry.Window.Close();
-    }
-
-    private void BringToFront(Entry entry)
+    private void BringToFront(EntryWindow entry)
     {
         if (OpensHidden)
         {
-            NativeMethods.ShowHidden(entry.Window.AppWindow);
+            NativeMethods.ShowHidden(entry.AppWindow);
             return;
         }
-        if (entry.Presenter.State == OverlappedPresenterState.Minimized)
-            entry.Presenter.Restore();
-        entry.Window.Activate();
-        // A tray app isn't the foreground app, so Windows would only flash the taskbar button.
-        Win32.SetForegroundWindow(Win32Interop.GetWindowFromWindowId(entry.Window.AppWindow.Id));
+        Laching.Windows.Shell.WindowManager<TWindow, EntryWindow>.BringToFront(entry);
     }
 
-    private sealed record Entry(Window Window, OverlappedPresenter Presenter, WindowSpec Spec, Grid Root);
+    private sealed partial class EntryWindow(OverlappedPresenter presenter, WindowSpec spec, Grid root, UIElement view) : Window
+    {
+        public OverlappedPresenter Presenter { get; } = presenter;
+        public WindowSpec Spec { get; } = spec;
+        public Grid Root { get; } = root;
+        public UIElement View { get; } = view;
+    }
 }

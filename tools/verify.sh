@@ -43,7 +43,7 @@ while [ $# -gt 0 ]; do
     --fast) fast=1 ;;
     --all) all=1 ;;
     --staged) mode=staged ;;
-    --base) mode=base; base="$2"; shift ;;
+    --base) [ $# -ge 2 ] || { echo "--base needs a Git ref" >&2; exit 2; }; mode=base; base="$2"; shift ;;
     --) shift; mode=paths; paths=("$@"); break ;;
     -h|--help) sed -n '2,31p' "$TOOLS/verify.sh" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1 (see --help)" >&2; exit 2 ;;
@@ -51,26 +51,8 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-case "$mode" in
-  worktree) changed="$(git diff --name-only HEAD 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null)" ;;
-  staged) changed="$(git diff --cached --name-only)" ;;
-  base) changed="$(git diff --name-only "$base"...HEAD; git diff --name-only HEAD; git ls-files --others --exclude-standard)" ;;
-  paths) changed="$(printf '%s\n' "${paths[@]}" | sed "s|^$ROOT/||")" ;;
-esac
-# subgit <dir> <args…>: git in a submodule. A pre-commit hook exports GIT_DIR, GIT_INDEX_FILE… for the app's
-# repository, and they win over -C (GIT_LOCAL_ENV, from companion.py, lists them).
-subgit() { local dir="$1"; shift; ( unset $GIT_LOCAL_ENV; git -C "$dir" "$@" ); }
-
-# A landing page kept in its own repository is a submodule: the parent only reports its path, so list the files
-# changed inside it since the commit the parent records (commits not recorded yet, and uncommitted work).
-if [ "$mode" != paths ] && [ -n "$LANDING_DIR" ] && [ -e "$LANDING_DIR/.git" ] &&
-  printf '%s\n' "$changed" | grep -qxF "$LANDING_DIR"; then
-  sub() { subgit "$LANDING_DIR" "$@"; }
-  recorded="$(git rev-parse -q --verify "${base:-HEAD}:$LANDING_DIR" 2>/dev/null || git rev-parse -q --verify "HEAD:$LANDING_DIR")"
-  changed="$changed
-$({ sub diff --name-only "$recorded" 2>/dev/null; sub ls-files --others --exclude-standard; } | sed "s|^|$LANDING_DIR/|")"
-fi
-changed="$(printf '%s\n' "$changed" | sed '/^$/d' | sort -u)"
+. "$TOOLS/verify-lib.sh"
+discover_changes "$ROOT" "$LANDING_DIR"
 
 # touched <extended regex>...: true when a changed path matches one of them. With --all, true unless each is empty or
 # $RE_NEVER (companion.py's pattern for a section the app doesn't have), so --all skips the checks of a missing section.
@@ -85,13 +67,7 @@ touched() {
 
 darwin=0; [ "$(uname)" = Darwin ] && darwin=1
 windows=0; case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) windows=1 ;; esac
-# shellcheck source=verify-lib.sh
-. "$TOOLS/verify-lib.sh"
-# The landing tool from PATH, or the one its node_modules brings (CI, cloud containers: setup-linux.sh).
-landing_tool="$LANDING_TOOL"
-if [ -n "$landing_tool" ] && ! has "$landing_tool" && [ -x "$ROOT/$LANDING_DIR/node_modules/.bin/$landing_tool" ]; then
-  landing_tool="$ROOT/$LANDING_DIR/node_modules/.bin/$landing_tool"
-fi
+landing_tool="$(find_tool "$LANDING_TOOL" "$ROOT/$LANDING_DIR")" || landing_tool="$LANDING_TOOL"
 xcodegen_in_sync() {
   (cd "$MAC_DIR" && xcodegen generate --quiet) || return 1
   if ! git diff --quiet -- "$MAC_DIR/$MAC_PROJECT"; then
@@ -294,7 +270,7 @@ if [ "$fast" = 0 ]; then
   fi
   if touched "$RE_SWIFT" "${CONFORMANCE_DIR:+^$CONFORMANCE_DIR/}"; then
     if [ "$darwin" = 1 ]; then
-      check "xcodebuild test" bash -c "cd \"$MAC_DIR\" && xcodebuild -project \"$MAC_PROJECT\" -scheme \"$MAC_SCHEME\" \
+      check "xcodebuild test" locked xcodebuild-macos bash -c "cd \"$MAC_DIR\" && xcodebuild -project \"$MAC_PROJECT\" -scheme \"$MAC_SCHEME\" \
         -destination 'platform=macOS' -derivedDataPath \"$ROOT/$DERIVED\" -quiet $XCODE_CACHE test"
     else skip "xcodebuild test: needs macOS + Xcode"; fi
   fi

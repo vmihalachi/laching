@@ -7,7 +7,7 @@ conform fails, one line per problem, when the app:
     tools replaced, such as store-packages.ps1) that isn't a thin wrapper: at most WRAPPER_LINES lines of code (comments
     and blank lines aside) that name `<laching.path>/tools/`;
   - builds or bundles its Store packages in a workflow of its own (GenerateAppxPackageOnBuild, makeappx, smoke-package)
-    instead of calling Laching's reusable windows-release.yml and windows-app.yml, or calls them at another release than
+    instead of calling Laching's reusable windows-release.yml and windows-app.yml, or calls any shared workflow at another release than
     the one it pins (`laching.tag`); with `windows.app`, it must call both;
   - has a skill in .agents/skills named like one of tools/skills that isn't a link into `<laching.path>/tools/skills/`
     (the app's own words for a skill go in .agents/notes/<skill>.md);
@@ -33,7 +33,7 @@ SCRIPT_SUFFIXES = {".py", ".sh", ".ps1"}
 RETIRED = {"store-packages": "windows/store-release.ps1"}
 # Where an app's workflow builds its own Store packages.
 FORKED_BUILD = re.compile(r"GenerateAppxPackageOnBuild|makeappx|smoke-package")
-REUSABLE = re.compile(r"uses:\s*['\"]?[\w.-]+/laching/\.github/workflows/(windows-release|windows-app)\.yml@([\w.-]+)")
+REUSABLE = re.compile(r"uses:\s*['\"]?[\w.-]+/laching/\.github/workflows/([\w.-]+)\.ya?ml@([\w.-]+)")
 SKIPPED_DIRS = {"node_modules", "build", ".git"}
 
 
