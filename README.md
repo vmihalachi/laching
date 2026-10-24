@@ -73,7 +73,7 @@ The package ships no strings, product ids or window lists: the app passes them i
   and a content provider; `NotificationPoster(categories:)` (also on iOS) takes action ids with already localized
   titles and reports `onAction(categoryID, actionID)`, or `onAnswer` with the request and its `userInfo`; for an app the
   system ends between reminders, `replacePending(prefix:with:)` schedules `ScheduledNotification`s ahead; `LoginItem` and
-  `LaunchContext.launchedAsLoginItem()` cover start-at-login. `FloatingWindow(content:size:anchor:)` floats SwiftUI
+  `LaunchContext.launchedAtLogin(appleEvent:)` cover start-at-login. `FloatingWindow(content:size:anchor:)` floats SwiftUI
   content above other windows on every Space (not full-screen ones) without activating the app: click, drag, right-click
   menu and pinch callbacks, fades, a window riding along beside it (a speech bubble), and `FloatingPlacement` for the
   math (kept on a screen when displays change, a side facing the middle, a platform-neutral top-left origin).
