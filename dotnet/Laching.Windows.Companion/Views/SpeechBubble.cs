@@ -18,7 +18,7 @@ namespace Laching.Windows.Companion.Views;
 /// A sticker card with a tail toward the character (Swift's <c>SpeechBubble</c>), in the look's display face at the
 /// control's <c>FontSize</c> (16 by default), in the look's colors. While the character thinks (no text) it shows "…".
 /// It fills the width it's given, or hugs its words when <see cref="FillsWidth"/> is false (wrapping only when they
-/// don't fit; <c>MaxWidth</c> caps it). With a <see cref="Countdown"/>, a tiny dial in its bottom-trailing corner runs
+/// don't fit; <c>MaxWidth</c> caps it); wrapped lines come out of even length (<see cref="BalancedWrap"/>). With a <see cref="Countdown"/>, a tiny dial in its bottom-trailing corner runs
 /// down until the bubble goes away (on the compositor, so it costs the UI thread nothing); <see cref="RoomForDial"/>
 /// keeps the words clear of that corner (set it where a countdown can appear, so the size doesn't change when it does).
 /// New words fade in over 0.15 s, unless Windows' animation effects are off. A <see cref="Header"/> sits above the words
@@ -66,7 +66,7 @@ public sealed partial class SpeechBubble : UserControl
         IsTabStop = false;
         backdrop.Children.Add(shadowHost);
         backdrop.Children.Add(outline);
-        lines.Children.Add(words);
+        lines.Children.Add(new BalancedLines { Children = { words } });
         card.Children.Add(lines);
         frame.Children.Add(backdrop);
         frame.Children.Add(card);

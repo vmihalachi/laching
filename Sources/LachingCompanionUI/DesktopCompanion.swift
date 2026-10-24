@@ -147,10 +147,13 @@
             CompanionStand(character: character, layout: layout)
         }
 
-        /// The desktop bubble the way the companion shows it; `tail` is `.trailing` when it sits left of the character.
+        /// The desktop bubble the way the companion shows it; `tail` is `.trailing` when it sits left of the character. At
+        /// most `bubbleMaxWidth` wide however it's asked, so a screenshot sheet's `.fixedSize()` gets the window's lines.
         public static func bubblePreview(text: String, tail: Edge, countdown: BubbleCountdown?, layout: DesktopLayout) -> some View {
-            SpeechBubble(text: text, tail: tail, size: bubbleTextSize, fillsWidth: false, countdown: countdown, roomForDial: true)
-                .padding(layout.bubbleMargin)
+            WidthLimit(width: layout.bubbleMaxWidth) {
+                SpeechBubble(text: text, tail: tail, size: bubbleTextSize, fillsWidth: false, countdown: countdown, roomForDial: true)
+            }
+            .padding(layout.bubbleMargin)
         }
 
         // MARK: Position
@@ -217,6 +220,24 @@
             CompanionStand(character: content, layout: layout)
                 .accessibilityElement(children: .combine)
                 .accessibilityAction(named: Text(verbatim: sayActionName)) { onSay.action?() }
+        }
+    }
+
+    /// Offers its one view at most `width`, even when asked for an ideal size (`.fixedSize()`), where
+    /// `.frame(maxWidth:)` offers no width at all and a `SpeechBubble`'s lines have nothing to even out against.
+    private struct WidthLimit: Layout {
+        let width: CGFloat
+
+        func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+            subviews.first?.sizeThatFits(offer(proposal)) ?? .zero
+        }
+
+        func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+            subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
+        }
+
+        private func offer(_ proposal: ProposedViewSize) -> ProposedViewSize {
+            ProposedViewSize(width: min(proposal.width ?? width, width), height: proposal.height)
         }
     }
 #endif
