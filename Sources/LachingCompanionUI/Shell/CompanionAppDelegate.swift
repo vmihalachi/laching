@@ -12,8 +12,10 @@
 
     extension CompanionAppModel: CompanionLaunching {}
 
-    /// Starts the app's model once the app has launched. Home is shown unless macOS started the app at login (the launch
-    /// Apple Event says so, and only while `applicationDidFinishLaunching` runs); the first run shows onboarding instead.
+    /// Starts the app's model once the app has launched. Home is shown unless macOS started the app at login
+    /// (`LaunchContext.launchedAtLogin(appleEvent:)`: the launch Apple Event, there only while
+    /// `applicationDidFinishLaunching` runs, or a login item started just after the session); the first run shows
+    /// onboarding instead.
     /// Tests host the app without launching it; a Debug screenshot run can take over instead (`runScreenshots()`).
     ///
     /// Not generic (AppKit calls a delegate through Objective-C): the app subclasses it, holds its own model and hands it
@@ -46,7 +48,7 @@
             // Read first: the launch Apple Event is gone once this returns (and not there yet in willFinishLaunching).
             let launchedAsLoginItem = LaunchContext.launchedAsLoginItem()
             guard !Self.isRunningTests, !runScreenshots() else { return }
-            companion.launch(showHome: !launchedAsLoginItem)
+            companion.launch(showHome: !LaunchContext.launchedAtLogin(appleEvent: launchedAsLoginItem))
         }
 
         /// Opening the app while it runs (Finder, Launchpad, Spotlight): Home again, or the open windows.
