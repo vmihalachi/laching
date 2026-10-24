@@ -1,0 +1,67 @@
+name: Companion Windows core checks
+
+on:
+  workflow_call:
+    inputs:
+      hosted:
+        description: Use a GitHub-hosted Linux runner
+        type: boolean
+        default: false
+      runner:
+        description: JSON labels for the self-hosted runner
+        type: string
+        default: '["self-hosted","macOS"]'
+      laching-path:
+        description: Laching submodule path, matching companion.json
+        type: string
+        default: laching
+      submodules:
+        description: Checkout submodules, including recorded voices when the app tests need them
+        type: string
+        default: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ${{ inputs.hosted && 'ubuntu-latest' || fromJSON(inputs.runner) }}
+    timeout-minutes: 20
+    env:
+      COMPANION_ROOT: ${{ github.workspace }}
+      LACHING_PATH: ${{ inputs.laching-path }}
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: ${{ inputs.submodules }}
+      - name: Check out the pinned Laching tools
+        run: git submodule update --init -- "$LACHING_PATH"
+      - uses: actions/setup-dotnet@v6
+        if: inputs.hosted
+        with:
+          dotnet-version: "10.0.x"
+      - uses: actions/setup-python@v7
+        if: inputs.hosted
+        with:
+          python-version: "3.12"
+      - name: Check release pins and shared tooling
+        run: python3 "./$LACHING_PATH/tools/ci-windows-core.py" pins
+      - name: Check strings and phrase keys
+        run: python3 "./$LACHING_PATH/tools/ci-windows-core.py" content
+      - name: Check generated Windows strings
+        run: python3 "./$LACHING_PATH/tools/ci-windows-core.py" strings
+      - name: Check C# formatting
+        run: python3 "./$LACHING_PATH/tools/ci-windows-core.py" format
+      - name: Check WinUI AOT pitfalls
+        run: python3 "./$LACHING_PATH/tools/ci-windows-core.py" lint
+      - name: Core tests
+        run: python3 "./$LACHING_PATH/tools/ci-windows-core.py" core
+      - name: App model tests when configured
+        run: python3 "./$LACHING_PATH/tools/ci-windows-core.py" app
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: windows-core-logs
+          path: "**/build/ci-windows-core-*.log"

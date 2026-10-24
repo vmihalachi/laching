@@ -104,6 +104,15 @@ class ConformTests(FixtureAppTestCase):
                    "    uses: vmihalachi/laching/.github/workflows/macos-app.yml@v0.5.0\n")
         self.assertEqual(self.problems(), [])
 
+    def test_windows_core_workflow_ref_is_checked_against_the_same_release(self):
+        self.write(".github/workflows/windows-core.yml", "jobs:\n  test:\n"
+                   "    uses: vmihalachi/laching/.github/workflows/windows-core.yml@v0.4.0\n")
+        self.assertIn(".github/workflows/windows-core.yml: calls windows-core.yml@v0.4.0, but the app pins Laching v0.5.0: "
+                      "call it @v0.5.0", self.problems())
+        self.write(".github/workflows/windows-core.yml", "jobs:\n  test:\n"
+                   "    uses: vmihalachi/laching/.github/workflows/windows-core.yml@v0.5.0\n")
+        self.assertEqual(self.problems(), [])
+
     def test_skills_link_into_laching(self):
         git(self.root, "init", "-q")
         skills = self.root / ".agents" / "skills"

@@ -123,6 +123,15 @@ class BumpTests(PinsTestCase):
         self.assertIn("macos-app.yml@v0.6.0", workflow.read_text("utf8"))
         self.assertTrue(companion.pins_agree(companion.pins(companion.load())))
 
+    def test_bump_moves_the_reusable_windows_core_workflow_pin(self):
+        workflow = self.root / ".github/workflows/windows-core.yml"
+        workflow.write_text("jobs:\n  test:\n    uses: vmihalachi/laching/.github/workflows/windows-core.yml@v0.5.0\n", "utf8")
+        self.assertIn((".github/workflows/windows-core.yml windows-core.yml@", "v0.5.0"), companion.pins(companion.load()))
+        code, out = self.cli("bump", "0.6.0")
+        self.assertEqual(code, 0, out)
+        self.assertIn("windows-core.yml@v0.6.0", workflow.read_text("utf8"))
+        self.assertTrue(companion.pins_agree(companion.pins(companion.load())))
+
     def test_an_android_app_pins_the_submodules_kotlin_build(self):
         manifest = self.root / "companion.json"
         data = json.loads(manifest.read_text("utf8"))

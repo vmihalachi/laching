@@ -124,6 +124,15 @@ class ConfigurationTests(L10nTestCase):
         self.assertIn("Keep every format specifier", l10n.RULES, "the generic rules")
         self.assertTrue(l10n.RULES.endswith("Keep the names Fixy as they are."))
 
+    def test_configured_landing_without_initialized_submodule_does_not_change_content_check(self):
+        before = l10n.collect()
+        config = companion.load()
+        config.data["l10n"]["landing"] = "uninitialized-site/src/i18n"
+        l10n.configure(config)
+        self.assertFalse(l10n.LANDING_I18N.exists())
+        self.assertEqual(l10n.landing_languages(), [])
+        self.assertEqual(l10n.collect(), before)
+
     def test_scoped_phrases(self):
         self.assertEqual(l10n.SCOPED, {"phrase.ciao": {"it"}})
         self.assertTrue(l10n.in_scope("phrase.ciao", "it"))
