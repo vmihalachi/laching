@@ -180,6 +180,8 @@
           },
           "additionalProperties": false
         },
+        "reactions": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2, "description": "Two labels friends rate each line (a joke once, after its punchline) with on the review site, the good one first, e.g. [\"Funny\", \"Meh\"]. Unset: no ratings." },
+        "siteIcon": { "type": "string", "description": "A square PNG (at least 256 px) the review site shows as its icon and in link previews, e.g. the app icon." },
         "siteCopyright": { "type": "string", "description": "The rights sentence on the review site, after \"Shared with friends who help review <character>'s voice.\" (default: © displayName, all rights reserved)." },
         "copyrightHolder": { "type": "string", "description": "Who holds the copyright in the voices repository's LICENSE line, e.g. \"2026 Jane Doe\" (default: displayName)." },
         "extraClips": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Clip id → source text of clips that aren't phrases." },

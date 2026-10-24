@@ -783,8 +783,12 @@ def write_page(path: Path, title: str, intro: str, rows: list[tuple[str, str, st
 
 REVIEW_COLOR_TOKENS = ("paper", "card", "ink", "ink-soft", "line", "accent", "accent-soft", "on-accent", "done",
                        "done-soft", "flag", "flag-soft", "link")
-SITE_DEFAULT_COLORS = (":root{--paper:#FFF8E7;--ink:#3D2B1F;--ink-soft:#7A6555;--link:#6B5000}"
-                       "@media(prefers-color-scheme:dark){:root{--paper:#1F1B17;--ink:#EFE6D8;--ink-soft:#B3A592;--link:#E2B93F}}")
+GAP = 0.45  # seconds between lines in the review page's listen-through (its GAP)
+
+
+def default_colors() -> str:
+    """The template's default color block, which the index shares so both pages look the same."""
+    return REVIEW_TEMPLATE.read_text("utf8").split("<style>", 1)[1].split("/*COLORS*/", 1)[0]
 
 
 def review_colors() -> str:
@@ -803,6 +807,49 @@ def review_colors() -> str:
     return css
 
 
+def review_reactions() -> list[str]:
+    """The two labels a friend rates a line with (`voice.reactions`, e.g. ["Funny", "Meh"]); none when unset."""
+    labels = APP.get("voice.reactions") or []
+    if labels and (len(labels) != 2 or not all(isinstance(l, str) and l.strip() for l in labels)):
+        fail("voice.reactions: give two labels, the good one first, e.g. [\"Funny\", \"Meh\"]")
+    return labels
+
+
+def site_icon() -> bytes | None:
+    """The PNG the friends' site shows as its icon and link preview (`voice.siteIcon`, at least 256 px square)."""
+    path = APP.path("voice.siteIcon")
+    if path is None:
+        return None
+    if not path.is_file() or path.suffix.lower() != ".png":
+        fail(f"voice.siteIcon: {rel(path)} isn't a PNG file")
+    return path.read_bytes()
+
+
+def pages_url() -> str:
+    """The friends' site's address on GitHub Pages (from `voice.repo`), or empty when there's no repo."""
+    repo = APP.get("voice.repo") or ""
+    owner, _, name = repo.partition("/")
+    return f"https://{owner}.github.io/{name}/" if owner and name else ""
+
+
+def head_tags(title: str, description: str, path: str, icon: str) -> str:
+    """The site pages' favicon and link-preview tags: `path` is the page's and `icon` the icon's relative to the
+    site's root, made absolute for the previews (which need full addresses) when the site has one."""
+    base = pages_url()
+    tags = [f'<meta name="description" content="{html.escape(description)}">',
+            f'<meta property="og:title" content="{html.escape(title)}">',
+            f'<meta property="og:description" content="{html.escape(description)}">',
+            '<meta property="og:type" content="website">', '<meta name="twitter:card" content="summary">']
+    if base:
+        tags.append(f'<meta property="og:url" content="{html.escape(base + path)}">')
+    if site_icon() is not None:
+        up = "../" * path.count("/")
+        tags.insert(0, f'<link rel="icon" type="image/png" href="{up}{icon}"><link rel="apple-touch-icon" href="{up}{icon}">')
+        if base:
+            tags.append(f'<meta property="og:image" content="{html.escape(base + icon)}">')
+    return "\n".join(tags)
+
+
 def url_path(path: Path, start: Path) -> str:
     """`path` relative to the directory `start`, as a URL path: forward slashes on every OS, so a page generated on
     Windows is byte-identical to one generated on a Mac."""
@@ -813,6 +860,19 @@ def review_page(lang: str, kinds: list[str], page: Path, site: bool, config: dic
     """The review page's HTML for `lang` (clip paths relative to `page`) and how many lines it lists. A clip plays only
     while it says the current text; a line whose voices are all missing or stale is listed as waiting, text only.
     Each clip carries its render hash as a version, so the page busts caches and shows a new take as unheard."""
+    data = review_data(lang, kinds, page, site, config, manifest)
+    head = ""
+    if site:
+        head = head_tags(f"{REVIEW_TITLE} · {data['languageName']}",
+                         f"Listen to {CHARACTER}'s {data['languageName']} lines and flag anything that sounds off.",
+                         f"review/{lang}.html", "icon.png")
+    html_text = REVIEW_TEMPLATE.read_text("utf8").replace("<!--HEAD-->", head).replace(
+        "/*COLORS*/", review_colors()).replace("/*DATA*/null", json.dumps(data, ensure_ascii=False).replace("</", "<\\/"))
+    return html_text, sum(1 for r in data["rows"] if r["clips"])
+
+
+def review_data(lang: str, kinds: list[str], page: Path, site: bool, config: dict, manifest: dict) -> dict:
+    """What the review page shows for `lang`: its rows, voices, languages and labels."""
     keys = clip_keys(config, lang)
     texts, english = catalog_texts(lang, keys), catalog_texts(APP.source_language, keys)
     parts = clip_phrases()
@@ -838,47 +898,39 @@ def review_page(lang: str, kinds: list[str], page: Path, site: bool, config: dic
     languages = [{"code": code, "name": LANGUAGE_NAMES.get(code, code), "recorded": True}
                  for code in sorted(recorded, key=lambda code: LANGUAGE_NAMES.get(code, code))]
     flavors = list(dict.fromkeys(row["flavor"] for row in rows if row["flavor"]))
-    data = {"lang": lang, "languageName": LANGUAGE_NAMES.get(lang, lang), "voices": voices, "rows": rows, "site": site,
+    return {"lang": lang, "languageName": LANGUAGE_NAMES.get(lang, lang), "voices": voices, "rows": rows, "site": site,
             "languages": languages, "title": REVIEW_TITLE, "notice": SITE_NOTICE, "app": APP.require("name"),
-            "flavors": flavors}
-    html_text = REVIEW_TEMPLATE.read_text("utf8").replace("/*COLORS*/", review_colors()).replace(
-        "/*DATA*/null", json.dumps(data, ensure_ascii=False).replace("</", "<\\/"))
-    return html_text, sum(1 for r in rows if r["clips"])
+            "flavors": flavors, "reactions": review_reactions(), "source": APP.source_language,
+            "icon": "../icon.png" if site and site_icon() is not None else ""}
 
 
 def recorded_languages(config: dict, manifest: dict) -> list[str]:
     return sorted(lang for lang in manifest.get("languages", {}) if lang in config.get("languages", {}))
 
 
-def site_files(config: dict, manifest: dict) -> dict[Path, str]:
+def site_files(config: dict, manifest: dict) -> dict[Path, str | bytes]:
     """Everything the voices repository holds besides the clips, as it should be now: a review page per recorded
-    language (both voices), the index linking them, robots.txt, README and LICENSE. Pages serves it for friends."""
+    language (both voices), the index linking them, the icon, robots.txt, README and LICENSE. Pages serves it for
+    friends."""
     site = VOICE.parent
-    files = {}
-    langs = recorded_languages(config, manifest)
-    for lang in langs:
+    files: dict[Path, str | bytes] = {}
+    entries = []
+    for lang in recorded_languages(config, manifest):
         page = site / "review" / f"{lang}.html"
         kinds = [k for k in KINDS if manifest_clips(manifest, lang, k)]
         files[page] = review_page(lang, kinds, page, True, config, manifest)[0]
-    links = "".join(f'<li><a href="review/{html.escape(l)}.html">{html.escape(LANGUAGE_NAMES.get(l, l))}</a></li>'
-                    for l in langs)
-    title = html.escape(f"{REVIEW_TITLE} review", quote=False)
-    files[site / "index.html"] = (
-        '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, '
-        f'initial-scale=1"><meta name="robots" content="noindex, nofollow, noarchive"><title>{title}</title>'
-        f"<style>{SITE_DEFAULT_COLORS}{review_colors()}body{{font:16px/1.5 system-ui;max-width:640px;margin:3em auto;"
-        "padding:0 16px;background:var(--paper);color:var(--ink)}a{color:var(--link)}small{color:var(--ink-soft)}</style>"
-        f"<h1>{title}</h1><p>Thanks for helping! Pick a language, listen, and flag anything that sounds "
-        f"off. When you're done, copy your notes and send them back.</p><ul>{links}</ul>"
-        f"<p><small>{html.escape(SITE_NOTICE)}</small></p></html>\n")
+        entries.append(index_entry(lang, kinds, config, manifest))
+    icon = site_icon()
+    if icon is not None:
+        files[site / "icon.png"] = icon
+    files[site / "index.html"] = index_page(entries, icon is not None)
     files[site / "robots.txt"] = "User-agent: *\nDisallow: /\n"
     files[site / ".nojekyll"] = ""
     name, display = APP.require("name"), APP.require("displayName")
     # "<character>, in <app>"; just the character when the app is named after it.
     whose = CHARACTER if CHARACTER == display else f"{CHARACTER}, in {display}"
     holder = APP.get("voice.copyrightHolder") or display
-    repo = APP.get("voice.repo")
-    pages = f": https://{repo.split('/')[0]}.github.io/{repo.split('/')[1]}/" if repo and "/" in repo else ""
+    pages = f": {pages_url()}" if pages_url() else ""
     files[site / "README.md"] = (
         f"# {CHARACTER}'s voices\n\n"
         f"The recorded lines of {whose}, made with ElevenLabs:\n\n"
@@ -896,6 +948,108 @@ def site_files(config: dict, manifest: dict) -> dict[Path, str]:
     return files
 
 
+def index_entry(lang: str, kinds: list[str], config: dict, manifest: dict) -> dict:
+    """A language's line on the index: how many lines are voiced, who reads them, and how long one voice takes."""
+    states = {k: pending(lang, k, config, manifest) for k in kinds}
+    ready = lambda k, clip: clip in states[k] and states[k][clip] is None
+    voiced = [clip for clip in clip_keys(config, lang) if any(ready(k, clip) for k in kinds)]
+    minutes = 0.0
+    if kinds:
+        clips = manifest_clips(manifest, lang, kinds[0])
+        seconds = sum(clips[c].get("duration", 0) + GAP for c in voiced if ready(kinds[0], c))
+        minutes = seconds / 60
+    names = [language(config, lang)["voices"][k].get("name") or k for k in kinds]
+    return {"lang": lang, "name": LANGUAGE_NAMES.get(lang, lang), "lines": len(voiced), "voices": names,
+            "minutes": minutes}
+
+
+def index_page(entries: list[dict], icon: bool) -> str:
+    """The site's front page: what to do, then each language with its size and the visitor's own progress (read from
+    the review page's local storage, so it never leaves their browser)."""
+    title = html.escape(f"{REVIEW_TITLE} review", quote=False)
+    character = html.escape(CHARACTER)
+    arrow = ('<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" '
+             'stroke-linecap="round" stroke-linejoin="round" d="m6 3.5 4.5 4.5-4.5 4.5"/></svg>')
+    items = []
+    for e in entries:
+        about = f"about {max(1, round(e['minutes']))} min" + (" per voice" if len(e["voices"]) > 1 else "")
+        voices = f" · read by {html.escape(' and '.join(e['voices']))}" if e["voices"] else ""
+        items.append(
+            f'<li><a href="review/{html.escape(e["lang"])}.html"><span class="text"><b>{html.escape(e["name"])}</b>'
+            f'<span class="meta">{e["lines"]} lines{voices} · {about}</span>'
+            f'<span class="you" data-lang="{html.escape(e["lang"])}" data-lines="{e["lines"]}"></span></span>'
+            f'<span class="go">Start{arrow}</span></a></li>')
+    image = '<img src="icon.png" alt="" width="72" height="72">' if icon else ""
+    head = head_tags(f"{REVIEW_TITLE} review", f"Help check {CHARACTER}'s recorded lines: listen, flag what sounds off.",
+                     "", "icon.png")
+    app = json.dumps(APP.require("name"))
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<title>{title}</title>
+{head}
+<style>{default_colors()}{review_colors()}
+  * {{ box-sizing: border-box; }}
+  body {{ margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }}
+  ::selection {{ background: var(--accent-soft); }}
+  :focus-visible {{ outline: 2px solid var(--ink); outline-offset: 3px; }}
+  main {{ max-width: 640px; margin: 0 auto; padding: max(48px, env(safe-area-inset-top)) 20px 48px; }}
+  img {{ border-radius: 16px; display: block; margin-bottom: 18px; }}
+  h1 {{ font-size: clamp(28px, 6vw, 36px); line-height: 1.1; letter-spacing: -.02em; margin: 0 0 10px; text-wrap: balance; }}
+  .lede {{ color: var(--ink-soft); font-size: 17px; margin: 0 0 28px; max-width: 52ch; text-wrap: pretty; }}
+  ol {{ margin: 0 0 32px; padding: 0; list-style: none; display: grid; gap: 10px; counter-reset: step; }}
+  ol li {{ counter-increment: step; display: grid; grid-template-columns: 28px 1fr; gap: 10px; align-items: baseline; }}
+  ol li::before {{ content: counter(step); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--on-accent); background: var(--accent); width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; }}
+  h2 {{ font-size: 15px; margin: 0 0 10px; color: var(--ink-soft); font-weight: 600; }}
+  ul {{ list-style: none; margin: 0 0 36px; padding: 0; display: grid; gap: 10px; }}
+  ul a {{ display: flex; gap: 14px; align-items: center; justify-content: space-between; text-decoration: none; color: inherit; background: var(--card, var(--paper)); border: 1.5px solid var(--line, var(--ink-soft)); border-radius: 14px; padding: 14px 16px; transition: border-color .15s, box-shadow .15s; }}
+  ul a:hover {{ border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }}
+  .text {{ display: grid; gap: 2px; min-width: 0; }}
+  .text b {{ font-size: 18px; }}
+  .meta, .you {{ color: var(--ink-soft); font-size: 13px; font-variant-numeric: tabular-nums; }}
+  .you:empty {{ display: none; }}
+  .you {{ color: var(--done); font-weight: 600; }}
+  .go {{ flex: none; display: inline-flex; align-items: center; gap: 4px; font-weight: 600; font-size: 14px; background: var(--accent); color: var(--on-accent); border-radius: 999px; padding: 6px 12px 6px 14px; }}
+  .go svg {{ width: 1em; height: 1em; }}
+  small {{ display: block; color: var(--ink-soft); font-size: 12px; max-width: 60ch; }}
+  @media (prefers-reduced-motion: reduce) {{ ul a {{ transition: none; }} }}
+</style>
+</head>
+<body>
+<main>
+{image}<h1>{title}</h1>
+<p class="lede">Thanks for lending an ear. These are the lines {character} says out loud; you're checking that each recording sounds right and reads well.</p>
+<ol>
+  <li><span><b>Pick a language</b> you know well.</span></li>
+  <li><span><b>Listen through</b> and flag anything that sounds off or reads wrong. It saves as you go, so you can stop and come back.</span></li>
+  <li><span><b>Send your notes</b> back to whoever shared this page with you.</span></li>
+</ol>
+<h2>Languages</h2>
+<ul>{"".join(items)}</ul>
+<small>{html.escape(SITE_NOTICE)}</small>
+</main>
+<script>
+// The visitor's progress from the review pages' own storage: it never leaves this browser.
+for (const you of document.querySelectorAll(".you")) {{
+  let state = {{}};
+  try {{ state = JSON.parse(localStorage.getItem(`${{{app}}}-review-${{you.dataset.lang}}`)) || {{}}; }} catch {{}}
+  const heard = Object.values(state).filter(e => e && e.heard && Object.values(e.heard).some(Boolean)).length;
+  const notes = Object.values(state).filter(e => e && (e.text || e.note || Object.values(e.retake || {{}}).some(Boolean))).length;
+  if (!heard && !notes) continue;
+  const lines = +you.dataset.lines;
+  you.textContent = heard >= lines ? `You've heard every line` + (notes ? `, ${{notes}} with notes` : "")
+    : `You've heard ${{heard}} of ${{lines}}` + (notes ? `, ${{notes}} with notes` : "");
+  you.closest("a").querySelector(".go").firstChild.textContent = "Continue";
+}}
+</script>
+</body>
+</html>
+"""
+
+
 def stale_site(config: dict, manifest: dict) -> list[Path]:
     """Site files that differ from what `site_files` would write (missing ones included), and old language pages."""
     files = site_files(config, manifest)
@@ -911,7 +1065,7 @@ def sync_site(config: dict, manifest: dict) -> list[Path]:
     return companion.write_outputs(files, check=False) + old
 
 
-def old_site_pages(files: dict[Path, str]) -> list[Path]:
+def old_site_pages(files: dict[Path, str | bytes]) -> list[Path]:
     """The review pages of languages the site no longer has."""
     return [p for p in sorted(VOICE.parent.glob("review/*.html")) if p not in files]
 
