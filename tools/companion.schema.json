@@ -37,6 +37,7 @@
         "core": { "type": "string", "description": "The core Swift package's folder, relative to mac.dir; an app without one leaves it out." },
         "coreModule": { "type": "string" },
         "tests": { "type": "string", "description": "The app's test target folder, relative to mac.dir." },
+        "format": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "Every owned Swift source root (directory or .swift file), relative to mac.dir, including shared/platform sources and core sources/tests. Required by Mac CI; missing roots fail instead of being skipped." },
         "devAppName": { "type": "string", "description": "The Debug app's name (install-dev, dev icon)." },
         "screenshotEnv": { "type": "string", "description": "The environment variable that starts a screenshot run." },
         "derivedData": { "type": "string", "description": "xcodebuild's -derivedDataPath, relative to the root." }

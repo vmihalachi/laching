@@ -16,6 +16,7 @@
     "core": "FixtureCore",
     "coreModule": "FixtureCore",
     "tests": "FixtureTests",
+    "format": ["Fixture"],
     "devAppName": "Fixture Dev",
     "screenshotEnv": "LACHING_SCREENSHOT_MODE",
     "derivedData": "macos/build/dd.noindex"

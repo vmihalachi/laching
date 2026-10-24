@@ -54,15 +54,24 @@ class MacCITests(FixtureAppTestCase):
         self.assertEqual(ci.commands(config, "core"), [])
         self.assertEqual(ci.commands(config, "project"), [])
 
-    def test_swift_format_covers_core_and_shared_sources(self):
-        config = self.config()
-        for folder in ("Shared", "FixtureTests", "FixtureCore/Sources", "FixtureCore/Tests"):
+    def test_swift_format_uses_all_explicit_roots_without_layout_assumptions(self):
+        roots = ["Application Code", "Library/Sources", "Phone App", "Cross Platform", "Testing", "Package.swift"]
+        config = self.config(format=roots + [roots[0]])
+        for folder in roots[:-1]:
             (config.mac_dir / folder).mkdir(parents=True, exist_ok=True)
+        (config.mac_dir / roots[-1]).write_text("// manifest\n")
         [(cwd, argv)] = ci.commands(config, "format")
         self.assertEqual(cwd, self.root)
-        for folder in ("Fixture", "FixtureTests", "FixtureCore/Sources", "FixtureCore/Tests", "Shared"):
-            self.assertIn(str(config.mac_dir / folder), argv)
-        self.assertNotIn(str(config.mac_dir / "iOS"), argv, "missing optional platform roots aren't passed to swift-format")
+        self.assertEqual(argv[argv.index("--configuration") + 2:], [str(config.mac_dir / path) for path in roots])
+
+    def test_format_fails_when_roots_are_absent_empty_or_stale(self):
+        config = self.config()
+        del config.data["mac"]["format"]
+        with self.assertRaisesRegex(companion.ConfigError, "mac.format"):
+            ci.commands(config, "format")
+        for roots in ([], ["Renamed Sources"]):
+            with self.subTest(roots=roots), self.assertRaisesRegex(companion.ConfigError, "mac.format"):
+                ci.commands(self.config(format=roots), "format")
 
     def test_failed_command_stops_stage_and_keeps_log(self):
         config = self.config()
@@ -70,7 +79,7 @@ class MacCITests(FixtureAppTestCase):
         process.__enter__.return_value = process
         process.stdout = io.StringIO("useful failure detail\n")
         process.wait.return_value = 9
-        with mock.patch.object(ci.subprocess, "Popen", return_value=process) as run, redirect_stdout(io.StringIO()):
+        with mock.patch.object(ci.companion_ci.subprocess, "Popen", return_value=process) as run, redirect_stdout(io.StringIO()):
             self.assertEqual(ci.run(config, "content"), 9)
         self.assertEqual(run.call_count, 1)
         self.assertEqual((config.work_dir / "ci-content.log").read_text(), "useful failure detail\n")

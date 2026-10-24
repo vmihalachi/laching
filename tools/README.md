@@ -37,6 +37,7 @@ or `$COMPANION_ROOT`); the schema is [`companion.schema.json`](companion.schema.
 | `hooks/hook.py` | Agent guardrails: generated files, the stop-time checks (ktlint over the Kotlin files an agent edits), the Windows and Android parity reminders. |
 | `skills/` | `localization`, `add-phrase`, `add-setting`, `conformance`, `voice`, `windows-port`, `release-mac`, `release-ios` (a universal app's iPhone and iPad version), `release-windows`, `review-invariants`. |
 | `ci-macos.py`, `../.github/workflows/macos-app.yml` | Reusable Mac CI: project generation, formatting, release pins, enabled content checks, core tests and app tests from `companion.json`; below, *Mac apps*. |
+| `ci-windows-core.py`, `../.github/workflows/windows-core.yml` | Portable Windows CI: pins, strings and phrase keys, generated `.resw`, C# formatting, WinUI lint, core tests and optional app model tests; below, *Portable Windows checks*. |
 | `../.github/workflows/windows-release.yml`, `windows-app.yml` | Reusable workflows (`workflow_call`) an app's own short workflows call at the release it pins: the Store release (both packages, the bundle as the artifact, the optional push, the tag) and the WinUI build check (the traps, the tests, both packages, every window). Below, *Windows apps*. |
 
 Tests: `python3 tools/tests/run.py` (over `tools/tests/fixture-app`, a minimal app, the files side by side, `--jobs N`
@@ -286,10 +287,32 @@ uses `macos-26` and selects the latest stable Xcode. `laching-path` defaults to 
 
 `ci-macos.py` runs named stages (`project`, `format`, `pins`, `content`, `core`, `test`). Paths and the test scheme come
 from `mac`; content checks follow the configured sounds, characters and voice, plus the phrase bank when present.
-An app without a core package skips that stage. Swift formatting includes existing shared and platform source roots.
+An app without a core package skips that stage. Mac CI requires `mac.format`: an explicit, nonempty array of every
+owned Swift source directory or `.swift` file, relative to `mac.dir`, including shared/platform sources and core
+sources/tests. For example, `["Desktop", "Mobile", "Common", "Tests", "Core/Sources", "Core/Tests", "Core/Package.swift"]`.
+Missing roots fail the formatting stage; the helper makes no assumptions about folder names.
 Every command is an argument list, so app names and paths with spaces retain their meaning; the workflow accepts no
 shell command input. Output streams to the job and `mac.dir/build/ci-<stage>.log`; failure uploads these logs. Apps with
 other platform checks keep those in their own workflows.
+
+## Portable Windows checks
+
+An app's `windows-core.yml` keeps its dispatch, concurrency and runner policy and calls
+`vmihalachi/laching/.github/workflows/windows-core.yml@vX.Y.Z`. Its inputs match the Mac workflow: `hosted: true`
+selects `ubuntu-latest`; `runner` supplies the self-hosted JSON labels; `laching-path` must match the profile;
+`submodules: "false"` checks out only Laching explicitly, while `"true"` also initializes recorded voices for app tests.
+The self-hosted machine supplies .NET 10 and Python; hosted runs install them.
+
+`ci-windows-core.py` runs `pins`, `content`, `strings`, `format`, `lint`, `core` and `app`. Paths come from `windows.dir`,
+`windows.strings`, `windows.coreTests` and optional `windows.appTests`; test paths can name a project or its directory.
+Content checks include localization and an existing phrase bank. Generated `.resw` files are exported to a fresh
+scratch directory and compared as a complete tree, allowing CRLF on Windows. An app with `windows.app` gets WinUI
+lint; without `windows.appTests`, the model-test stage is empty. The app's catalog checks also work when its landing
+submodule is uninitialized. Logs go to `mac.dir/build/ci-windows-core-<stage>.log` and are uploaded on failure.
+
+Both CI drivers share command execution, release-pin commands and the pinned-tool-path guard in `companion_ci.py`.
+All subprocesses use argument lists; neither workflow accepts shell command inputs. `companion.py bump`, `pins` and
+`conform` cover both reusable workflow refs.
 
 ## Windows apps
 

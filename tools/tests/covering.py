@@ -36,6 +36,8 @@ COVERS: dict[str, tuple[str, ...]] = {
     "tools/check-layout-ios.py": ("test_scripts",),
     "tools/check-layout.sh": ("test_scripts",),
     "tools/ci-macos.py": ("test_ci_macos",),
+    "tools/ci-windows-core.py": ("test_ci_windows_core",),
+    "tools/companion_ci.py": ("test_ci_macos", "test_ci_windows_core"),
     "tools/conform.py": ("test_conform", "test_pins"),
     "tools/conformance.sh": ("test_scripts",),
     "tools/dev-icon.swift": ("test_scripts",),  # install-dev.sh
