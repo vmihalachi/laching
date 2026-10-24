@@ -5,7 +5,7 @@
     /// The Support window: first the one-time supporter purchase (shared with the family), then, once that's bought,
     /// the tips with their App Store prices. One ask at a time, and never right after a purchase: buying the supporter or
     /// a tip leaves only a thank-you until the window is opened again (each open builds a fresh view). Restore brings
-    /// the supporter back. The app opens it only on the user's request; every word and the look are the app's.
+    /// the supporter back, so it shows only until the supporter is owned. The app opens it only on the user's request; every word and the look are the app's.
     public struct SupportWindow<Primary: ButtonStyle, Outline: ButtonStyle>: View {
         let purchases: PurchaseStore
         let products: SupportProducts
@@ -71,13 +71,17 @@
                     .windowPadding(bottom: Space.group)
                 }
                 ActionBar {
-                    Button {
-                        Task { await purchases.restore() }
-                    } label: {
-                        copy.restore
+                    // Restore brings back only the supporter purchase (tips are consumables): nothing to restore once
+                    // it's owned.
+                    if !isSupporter {
+                        Button {
+                            Task { await purchases.restore() }
+                        } label: {
+                            copy.restore
+                        }
+                        .buttonStyle(look.outline)
+                        .disabled(purchases.isBusy)
                     }
-                    .buttonStyle(look.outline)
-                    .disabled(purchases.isBusy)
                     Spacer()
                     Button(action: onDone) { copy.done }
                         .buttonStyle(look.primary)
