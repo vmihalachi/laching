@@ -57,6 +57,7 @@ COVERS: dict[str, tuple[str, ...]] = {
     "tools/verify.sh": ("test_scripts", "test_hook"),
     "tools/voice.py": ("test_voice",),
     "tools/voice-review.html": ("test_voice",),
+    "tools/voice-review-strings.json": ("test_voice",),
     "tools/windows/vm.py": ("test_vm",),
     "tools/windows/vm.sh": ("test_vm", "test_scripts"),
     "tools/windows/vm-guest.ps1": ("test_vm",),

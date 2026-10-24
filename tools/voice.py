@@ -71,6 +71,7 @@ FORMAT = 1
 MOUTH_FPS = 12.5  # one mouth level per 80 ms
 STATUSES = ("testing", "shipping")
 REVIEW_TEMPLATE = Path(__file__).resolve().with_name("voice-review.html")
+REVIEW_STRINGS = Path(__file__).resolve().with_name("voice-review-strings.json")
 LANGUAGE_NAMES = {
     "ar": "Arabic", "ca": "Catalan", "cs": "Czech", "da": "Danish", "de": "German", "el": "Greek", "en": "English",
     "es": "Spanish", "fi": "Finnish", "fr": "French", "he": "Hebrew", "hi": "Hindi", "hu": "Hungarian",
@@ -113,12 +114,66 @@ def configure(config: companion.Config | None = None) -> None:
     KINDS = tuple(APP.require("voice.voices"))
     KEYCHAIN_SERVICE = APP.get("voice.keychainService") or f"{APP.require('name')}-elevenlabs"
     CHARACTER = APP.get("character") or APP.require("displayName")
-    REVIEW_TITLE = APP.get("voice.reviewTitle") or f"{CHARACTER}'s voice"
-    rights = APP.get("voice.siteCopyright") or f"The recordings and texts are © {APP.require('displayName')}, all rights reserved"
-    SITE_NOTICE = (
-        f"Shared with friends who help review {CHARACTER}'s voice. {rights.rstrip('.')}. "
-        "Please don't reuse, redistribute or train on them."
-    )
+    REVIEW_TITLE = review_title(None)
+    SITE_NOTICE = site_notice(None)
+
+
+# ---------------------------------------------------------------------------------------------- the site's languages
+
+def site_locale(lang: str | None) -> str | None:
+    """The translation of the friends' site that a page in `lang` speaks (voice-review-strings.json, the exact code
+    first, then the base language), or None for English."""
+    if not lang:
+        return None
+    table = json.loads(REVIEW_STRINGS.read_text("utf8"))
+    return next((code for code in (lang, base_language(lang)) if code in table and code != "$comment"), None)
+
+
+def site_strings(locale: str | None) -> dict:
+    """A translation's `languages` and `strings` (empty for English)."""
+    return json.loads(REVIEW_STRINGS.read_text("utf8")).get(locale, {}) if locale else {}
+
+
+def plural(locale: str | None, n: int) -> str:
+    """The plural category of `n`, as Intl.PluralRules gives it for the site's languages: one and other only."""
+    return "one" if n == 1 else "other"
+
+
+def say(locale: str | None, english: str, n: int | None = None, one: str | None = None, **values) -> str:
+    """`english` in the site's `locale` (English when it has no translation), its {placeholders} filled from `values`
+    and {n}. A plural translation picks its category; English says `one` when n is 1."""
+    text = site_strings(locale).get("strings", {}).get(english)
+    if isinstance(text, dict):
+        text = text.get(plural(locale, n or 0)) or text["other"]
+    elif text is None:
+        text = one if one is not None and n == 1 else english
+    if n is not None:
+        values["n"] = n
+    return re.sub(r"\{(\w+)\}", lambda m: str(values.get(m.group(1), m.group(0))), text)
+
+
+def language_name(code: str, locale: str | None) -> str:
+    """`code`'s name in the site's language, capitalized as a label."""
+    name = site_strings(locale).get("languages", {}).get(code) or LANGUAGE_NAMES.get(code, code)
+    return name[:1].upper() + name[1:]
+
+
+def app_text(locale: str | None) -> dict:
+    """The app's own words on the site in `locale` (companion.json → voice.siteText.<locale>): reviewTitle,
+    siteCopyright, voices, flavors, reactions."""
+    return (APP.get("voice.siteText") or {}).get(locale, {}) if locale else {}
+
+
+def review_title(locale: str | None) -> str:
+    return app_text(locale).get("reviewTitle") or APP.get("voice.reviewTitle") or say(locale, "{character}'s voice", character=CHARACTER)
+
+
+def site_notice(locale: str | None) -> str:
+    """Who the site is shared with and the rights in the recordings, on every page's footer and the README."""
+    rights = app_text(locale).get("siteCopyright") or APP.get("voice.siteCopyright") or say(
+        locale, "The recordings and texts are © {holder}, all rights reserved", holder=APP.require("displayName"))
+    return say(locale, "Shared with friends who help review {character}'s voice. {rights}. Please don't reuse, "
+               "redistribute or train on them.", character=CHARACTER, rights=rights.rstrip("."))
 
 
 def rel(path: Path) -> str:
@@ -866,12 +921,19 @@ def review_page(lang: str, kinds: list[str], page: Path, site: bool, config: dic
     while it says the current text; a line whose voices are all missing or stale is listed as waiting, text only.
     Each clip carries its render hash as a version, so the page busts caches and shows a new take as unheard."""
     data = review_data(lang, kinds, page, site, config, manifest)
-    head = ""
+    head, template = "", REVIEW_TEMPLATE.read_text("utf8")
     if site:
-        head = head_tags(f"{REVIEW_TITLE} · {data['languageName']}",
-                         f"Listen to {CHARACTER}'s {data['languageName']} lines and flag anything that sounds off.",
+        locale = site_locale(lang)
+        named = data["languageLabel"] if locale else data["languageName"]
+        title = f"{data['title']} · {data['languageLabel']}"
+        template = template.replace("<title>Voice review</title>", f"<title>{html.escape(title)}</title>", 1)
+        head = head_tags(title,
+                         say(locale, "Listen to {character}'s {language} lines and flag anything that sounds off.",
+                             character=CHARACTER, language=named.lower() if locale else named),
                          f"review/{lang}.html", "icon.png")
-    html_text = REVIEW_TEMPLATE.read_text("utf8").replace("<!--HEAD-->", head).replace(
+        if locale:
+            template = template.replace('<html lang="en">', f'<html lang="{html.escape(lang)}">', 1)
+    html_text = template.replace("<!--HEAD-->", head).replace(
         "/*COLORS*/", review_colors()).replace("/*DATA*/null", json.dumps(data, ensure_ascii=False).replace("</", "<\\/"))
     return html_text, sum(1 for r in data["rows"] if r["clips"])
 
@@ -882,7 +944,11 @@ def review_data(lang: str, kinds: list[str], page: Path, site: bool, config: dic
     texts, english = catalog_texts(lang, keys), catalog_texts(APP.source_language, keys)
     parts = clip_phrases()
     direction = direction_map()
-    voices = [{"kind": k, "name": language(config, lang)["voices"][k].get("name") or k} for k in kinds]
+    # A friend's page speaks its own language when the site has it; the owner's page and the notes stay English.
+    locale = site_locale(lang) if site else None
+    own = app_text(locale)
+    voices = [{"kind": k, "name": language(config, lang)["voices"][k].get("name") or k,
+               "label": own.get("voices", {}).get(k) or k[:1].upper() + k[1:]} for k in kinds]
     states = {k: pending(lang, k, config, manifest) for k in kinds}
     rows = []
     for clip in keys:
@@ -900,13 +966,19 @@ def review_data(lang: str, kinds: list[str], page: Path, site: bool, config: dic
                      "joke": line["id"] if count > 1 else "", "part": part, "parts": count,
                      "clips": clips, "versions": versions})
     recorded = set(manifest.get("languages", {})) & set(config.get("languages", {}))
-    languages = [{"code": code, "name": LANGUAGE_NAMES.get(code, code), "recorded": True}
-                 for code in sorted(recorded, key=lambda code: LANGUAGE_NAMES.get(code, code))]
+    languages = sorted(({"code": code, "name": language_name(code, locale), "recorded": True} for code in recorded),
+                       key=lambda l: l["name"])
     flavors = list(dict.fromkeys(row["flavor"] for row in rows if row["flavor"]))
-    return {"lang": lang, "languageName": LANGUAGE_NAMES.get(lang, lang), "voices": voices, "rows": rows, "site": site,
-            "languages": languages, "title": REVIEW_TITLE, "notice": SITE_NOTICE, "app": APP.require("name"),
-            "flavors": flavors, "reactions": review_reactions(), "source": APP.source_language,
+    reactions = review_reactions()
+    data = {"lang": lang, "languageName": LANGUAGE_NAMES.get(lang, lang), "languageLabel": language_name(lang, locale),
+            "voices": voices, "rows": rows, "site": site, "languages": languages, "title": review_title(locale),
+            "notice": site_notice(locale), "app": APP.require("name"), "flavors": flavors,
+            "flavorLabels": {f: own.get("flavors", {}).get(f, f) for f in flavors}, "reactions": reactions,
+            "reactionLabels": own.get("reactions") or reactions, "source": APP.source_language,
             "icon": "../icon.png" if site and site_icon() is not None else ""}
+    if locale:
+        data["ui"] = site_strings(locale)["strings"]
+    return data
 
 
 def recorded_languages(config: dict, manifest: dict) -> list[str]:
@@ -964,30 +1036,61 @@ def index_entry(lang: str, kinds: list[str], config: dict, manifest: dict) -> di
         seconds = sum(clips[c].get("duration", 0) + GAP for c in voiced if ready(kinds[0], c))
         minutes = seconds / 60
     names = [language(config, lang)["voices"][k].get("name") or k for k in kinds]
-    return {"lang": lang, "name": LANGUAGE_NAMES.get(lang, lang), "lines": len(voiced), "voices": names,
-            "minutes": minutes}
+    return {"lang": lang, "lines": len(voiced), "voices": names, "minutes": minutes}
+
+
+def index_main(entries: list[dict], icon: bool, locale: str | None) -> str:
+    """The index's content in the site's `locale` (English for None)."""
+    arrow = ('<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" '
+             'stroke-linecap="round" stroke-linejoin="round" d="m6 3.5 4.5 4.5-4.5 4.5"/></svg>')
+    items = []
+    for e in sorted(entries, key=lambda e: language_name(e["lang"], locale)):
+        many = len(e["voices"]) > 1
+        minutes = max(1, round(e["minutes"]))
+        about = say(locale, "about {n} min per voice" if many else "about {n} min", n=minutes)
+        names = html.escape(say(locale, " and ").join(e["voices"]))
+        voices = f" · {say(locale, 'read by {names}', names=names)}" if e["voices"] else ""
+        lines = say(locale, "{n} lines", n=e["lines"], one="{n} line")
+        items.append(
+            f'<li><a href="review/{html.escape(e["lang"])}.html"><span class="text">'
+            f'<b>{html.escape(language_name(e["lang"], locale))}</b>'
+            f'<span class="meta">{lines}{voices} · {about}</span>'
+            f'<span class="you" data-lang="{html.escape(e["lang"])}" data-lines="{e["lines"]}"></span></span>'
+            f'<span class="go">{say(locale, "Start")}{arrow}</span></a></li>')
+    image = '<img src="icon.png" alt="" width="72" height="72">' if icon else ""
+    title = html.escape(say(locale, "{title} review", title=review_title(locale)), quote=False)
+    character = html.escape(CHARACTER)
+    steps = ["<b>Pick a language</b> you know well.",
+             "<b>Listen through</b> and flag anything that sounds off or reads wrong. It saves as you go, so you can "
+             "stop and come back.",
+             "<b>Send your notes</b> back to whoever shared this page with you."]
+    return f"""{image}<h1>{title}</h1>
+<p class="lede">{say(locale, "Thanks for lending an ear. These are the lines {character} says out loud; you're checking that each recording sounds right and reads well.", character=character)}</p>
+<ol>
+{"".join(f"  <li><span>{say(locale, step)}</span></li>{chr(10)}" for step in steps)}</ol>
+<h2>{say(locale, "Languages")}</h2>
+<ul>{"".join(items)}</ul>
+<small>{html.escape(site_notice(locale))}</small>"""
 
 
 def index_page(entries: list[dict], icon: bool) -> str:
     """The site's front page: what to do, then each language with its size and the visitor's own progress (read from
-    the review page's local storage, so it never leaves their browser)."""
+    the review page's local storage, so it never leaves their browser). It's written in English and carries the site's
+    translations, which the browser's languages choose between."""
     title = html.escape(f"{REVIEW_TITLE} review", quote=False)
-    character = html.escape(CHARACTER)
-    arrow = ('<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" '
-             'stroke-linecap="round" stroke-linejoin="round" d="m6 3.5 4.5 4.5-4.5 4.5"/></svg>')
-    items = []
-    for e in entries:
-        about = f"about {max(1, round(e['minutes']))} min" + (" per voice" if len(e["voices"]) > 1 else "")
-        voices = f" · read by {html.escape(' and '.join(e['voices']))}" if e["voices"] else ""
-        items.append(
-            f'<li><a href="review/{html.escape(e["lang"])}.html"><span class="text"><b>{html.escape(e["name"])}</b>'
-            f'<span class="meta">{e["lines"]} lines{voices} · {about}</span>'
-            f'<span class="you" data-lang="{html.escape(e["lang"])}" data-lines="{e["lines"]}"></span></span>'
-            f'<span class="go">Start{arrow}</span></a></li>')
-    image = '<img src="icon.png" alt="" width="72" height="72">' if icon else ""
     head = head_tags(f"{REVIEW_TITLE} review", f"Help check {CHARACTER}'s recorded lines: listen, flag what sounds off.",
                      "", "icon.png")
     app = json.dumps(APP.require("name"))
+    progress = ["You've heard every line", "You've heard {heard} of {lines}", ", {n} with notes", "Continue"]
+    locales = {}
+    for locale in json.loads(REVIEW_STRINGS.read_text("utf8")):
+        if locale == "$comment":
+            continue
+        strings = site_strings(locale)["strings"]
+        locales[locale] = {"title": say(locale, "{title} review", title=review_title(locale)),
+                           "main": index_main(entries, icon, locale),
+                           "ui": {key: strings[key] for key in progress if key in strings}}
+    translations = json.dumps(locales, ensure_ascii=False).replace("</", "<\\/")
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -1025,18 +1128,32 @@ def index_page(entries: list[dict], icon: bool) -> str:
 </head>
 <body>
 <main>
-{image}<h1>{title}</h1>
-<p class="lede">Thanks for lending an ear. These are the lines {character} says out loud; you're checking that each recording sounds right and reads well.</p>
-<ol>
-  <li><span><b>Pick a language</b> you know well.</span></li>
-  <li><span><b>Listen through</b> and flag anything that sounds off or reads wrong. It saves as you go, so you can stop and come back.</span></li>
-  <li><span><b>Send your notes</b> back to whoever shared this page with you.</span></li>
-</ol>
-<h2>Languages</h2>
-<ul>{"".join(items)}</ul>
-<small>{html.escape(SITE_NOTICE)}</small>
+{index_main(entries, icon, None)}
 </main>
 <script>
+// The site's translations: the first of the browser's languages it has, before English.
+const LOCALES = {translations};
+const locale = (() => {{
+  for (const l of navigator.languages || [navigator.language]) {{
+    const base = l.split("-")[0];
+    if (l in LOCALES) return l;
+    if (base in LOCALES) return base;
+    if (base === "en") return null;
+  }}
+  return null;
+}})();
+const UI = locale ? LOCALES[locale].ui : {{}};
+if (locale) {{
+  document.documentElement.lang = locale;
+  document.title = LOCALES[locale].title;
+  document.querySelector("main").innerHTML = LOCALES[locale].main;
+}}
+const rules = new Intl.PluralRules(locale || "en");
+const t = (s, values = {{}}) => {{
+  let text = UI[s] ?? s;
+  if (typeof text === "object") text = text[rules.select(values.n)] ?? text.other;
+  return text.replace(/\\{{(\\w+)\\}}/g, (m, k) => k in values ? values[k] : m);
+}};
 // The visitor's progress from the review pages' own storage: it never leaves this browser.
 for (const you of document.querySelectorAll(".you")) {{
   let state = {{}};
@@ -1045,9 +1162,9 @@ for (const you of document.querySelectorAll(".you")) {{
   const notes = Object.values(state).filter(e => e && (e.text || e.note || Object.values(e.retake || {{}}).some(Boolean))).length;
   if (!heard && !notes) continue;
   const lines = +you.dataset.lines;
-  you.textContent = heard >= lines ? `You've heard every line` + (notes ? `, ${{notes}} with notes` : "")
-    : `You've heard ${{heard}} of ${{lines}}` + (notes ? `, ${{notes}} with notes` : "");
-  you.closest("a").querySelector(".go").firstChild.textContent = "Continue";
+  you.textContent = (heard >= lines ? t("You've heard every line") : t("You've heard {{heard}} of {{lines}}", {{ heard, lines }}))
+    + (notes ? t(", {{n}} with notes", {{ n: notes }}) : "");
+  you.closest("a").querySelector(".go").firstChild.textContent = t("Continue");
 }}
 </script>
 </body>

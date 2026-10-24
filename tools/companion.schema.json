@@ -183,6 +183,21 @@
         "reactions": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2, "description": "Two labels friends rate each line (a joke once, after its punchline) with on the review site, the good one first, e.g. [\"Funny\", \"Meh\"]. Unset: no ratings." },
         "siteIcon": { "type": "string", "description": "A square PNG (at least 256 px) the review site shows as its icon and in link previews, e.g. the app icon." },
         "siteCopyright": { "type": "string", "description": "The rights sentence on the review site, after \"Shared with friends who help review <character>'s voice.\" (default: © displayName, all rights reserved)." },
+        "siteText": {
+          "type": "object",
+          "description": "The app's own words on the review site's translated pages, per language the site speaks (tools/voice-review-strings.json, e.g. \"it\"): unset ones keep the English ones above, or the tool's translated default.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "reviewTitle": { "type": "string" },
+              "siteCopyright": { "type": "string" },
+              "voices": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Voice kind → its label, e.g. {\"male\": \"Maschile\"}." },
+              "flavors": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Flavor id → its name, lowercase." },
+              "reactions": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 }
+            },
+            "additionalProperties": false
+          }
+        },
         "copyrightHolder": { "type": "string", "description": "Who holds the copyright in the voices repository's LICENSE line, e.g. \"2026 Jane Doe\" (default: displayName)." },
         "extraClips": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Clip id → source text of clips that aren't phrases." },
         "required": { "type": "array", "items": { "type": "string" }, "description": "Clip ids every voiced language must have before shipping." }
