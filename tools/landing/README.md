@@ -37,8 +37,10 @@ export default defineConfig({ ...landing, fmt: {}, lint: {} });
 The template's `{{key}}` placeholders are the app's own (`placeholders`, asked first), then the generated ones:
 `langRedirectScript`, `storeButton`, `storeButtonBig`, `contactEmail`, `legal<Page>Url`, `jsonLd`,
 `languageSwitcher` (`"menu"`, `"inline"` or a function), `hreflangLinks`, `ogLocale`, `ogLocaleAlternates`, then the
-locale's dotted keys. Locale files must share the default's keys. `csp.mediaSrc` allows recorded audio, `headers` adds
-`_headers` rules, `extraPlugins` runs the app's own plugins between the hosting and social-asset ones.
+locale's dotted keys. Locale files must share the default's keys. `pages` adds hand-written pages beyond the legal ones
+(a comparison, a guide), each in the languages it lists, with canonical, hreflang and sitemap entries among those
+languages only. `csp.mediaSrc` allows recorded audio, `headers` adds `_headers` rules, `extraPlugins` runs the app's
+own plugins between the hosting and social-asset ones.
 
 Released from Laching's `release.yml` on each `vX.Y.Z` tag that changes `tools/landing` since the version on npm, at
 the tag's version (the `version` here is a placeholder), so its versions skip the Laching releases that leave it alone:

@@ -1,26 +1,37 @@
-import { alternates, legalPath } from "./legal.js";
+import { alternates, legalPath, xDefaultLanguage, type PageLanguages } from "./legal.js";
 import type { Language } from "./types.js";
 
-/** Every page (home and legal) in every language, each with its alternates. */
+/**
+ * Every page (home and legal) in every language, and the other hand-written pages in theirs, each with its
+ * alternates.
+ */
 export function renderSitemap(
   siteUrl: string,
   languages: readonly Language[],
   defaultLanguage: Language,
   legalPages: readonly string[],
+  pages: readonly PageLanguages[] = [],
 ) {
-  const pages: ((language: Language) => string)[] = [
-    ({ path }) => path,
-    ...legalPages.map((page) => (language: Language) => legalPath(language, page)),
+  const entries: { languages: readonly Language[]; pathFor: (language: Language) => string }[] = [
+    { languages, pathFor: ({ path }) => path },
+    ...[...legalPages.map((page) => ({ page, languages })), ...pages].map((entry) => ({
+      languages: entry.languages,
+      pathFor: (language: Language) => legalPath(language, entry.page),
+    })),
   ];
-  const urls = pages
-    .flatMap((pathFor) => {
-      const links = alternates(siteUrl, languages, defaultLanguage, pathFor)
+  const urls = entries
+    .flatMap(({ languages: pageLanguages, pathFor }) => {
+      // A page in one language has no translations to point to.
+      if (pageLanguages.length === 1)
+        return [`<url><loc>${siteUrl}${pathFor(pageLanguages[0]!)}</loc></url>`];
+      const xDefault = xDefaultLanguage(pageLanguages, defaultLanguage);
+      const links = alternates(siteUrl, pageLanguages, xDefault, pathFor)
         .map(
           ([hreflang, href]) =>
             `<xhtml:link rel="alternate" hreflang="${hreflang}" href="${href}"/>`,
         )
         .join("");
-      return languages.map(
+      return pageLanguages.map(
         (language) => `<url><loc>${siteUrl}${pathFor(language)}</loc>${links}</url>`,
       );
     })

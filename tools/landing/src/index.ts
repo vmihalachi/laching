@@ -10,7 +10,13 @@ import {
   renderTemplate,
   scriptJson,
 } from "./html.js";
-import { alternates, legalPageForPath, legalPath } from "./legal.js";
+import {
+  alternates,
+  legalPath,
+  pageForPath,
+  type PageLanguages,
+  xDefaultLanguage,
+} from "./legal.js";
 import { assertSameLocaleKeys } from "./locales.js";
 import { type OgCopy, socialAssetsPlugin } from "./og.js";
 import { renderSitemap } from "./sitemap.js";
@@ -29,7 +35,14 @@ export {
   renderTemplate,
   scriptJson,
 } from "./html.js";
-export { alternates, legalPageForPath, legalPath } from "./legal.js";
+export {
+  alternates,
+  legalPageForPath,
+  legalPath,
+  pageForPath,
+  xDefaultLanguage,
+  type PageLanguages,
+} from "./legal.js";
 export { renderSitemap } from "./sitemap.js";
 export { headersFile, hostingConfigPlugin, inlineScriptHashes } from "./hosting.js";
 export {
@@ -55,6 +68,12 @@ export interface CompanionLandingOptions<L extends Language = Language> {
   locales: Record<string, Locale>;
   /** Hand-translated pages at `<language path><page>/index.html`; `{{legal<Page>Url}}` links each. */
   legalPages?: readonly string[];
+  /**
+   * More hand-written pages (a comparison, a guide) at `<language path><page>/index.html`, each in the languages
+   * listed (every one when left out). They get the legal pages' canonical, hreflang and sitemap entries among their
+   * own languages only, so a page written in English alone points to no missing translations.
+   */
+  pages?: readonly { page: string; languages?: readonly L["code"][] }[];
   /** The home page template the other languages render from (`<root>/index.html`). */
   templatePath?: string;
   /** The app's own placeholders, asked first: a string fills `{{key}}`, undefined falls through. */
@@ -91,8 +110,8 @@ export interface CompanionLandingOptions<L extends Language = Language> {
 
 /**
  * A desk companion's landing page as Vite plugins and build inputs: every home page rendered from one template per
- * language (`{{key}}` from the locale files and generated values), the hand-translated legal pages given canonical and
- * hreflang links, `sitemap.xml`, the Cloudflare `_headers` with a CSP that hashes the inline scripts, and the social
+ * language (`{{key}}` from the locale files and generated values), the hand-written legal and other pages given
+ * canonical and hreflang links among the languages each exists in, `sitemap.xml`, the Cloudflare `_headers` with a CSP that hashes the inline scripts, and the social
  * cards and icons rendered from SVG. The app keeps its data, its page and its brand; spread the result into
  * `defineConfig`.
  */
@@ -104,6 +123,21 @@ export function companionLanding<L extends Language>(
   const defaultLanguage = languages.find(({ code }) => code === options.defaultLanguageCode);
   if (!defaultLanguage)
     throw new Error(`No language ${options.defaultLanguageCode} among the languages`);
+  const pages: PageLanguages<L>[] = (options.pages ?? []).map(({ page, languages: codes }) => ({
+    page,
+    languages: codes
+      ? codes.map((code) => {
+          const language = languages.find((candidate) => candidate.code === code);
+          if (!language) throw new Error(`No language ${code} among the languages, for ${page}`);
+          return language;
+        })
+      : languages,
+  }));
+  /** Every hand-written page: the legal ones in every language, then `pages` in theirs. */
+  const handWritten: PageLanguages<L>[] = [
+    ...legalPages.map((page) => ({ page, languages })),
+    ...pages,
+  ];
 
   function languageForPath(pathname: string): L {
     return (
@@ -177,15 +211,23 @@ export function companionLanding<L extends Language>(
       transformIndexHtml: {
         order: "pre",
         handler(html, ctx) {
-          // Legal pages are hand-written per language; give them the canonical and hreflang links the home page
-          // template has, so search engines treat them as translations, not duplicates.
-          const legal = legalPageForPath(languages, legalPages, ctx.path);
-          if (legal) {
+          // Legal and other hand-written pages are written per language; give them the canonical and hreflang
+          // links the home page template has, so search engines treat them as translations, not duplicates. A page
+          // in one language has no translations to point to.
+          const found = pageForPath(handWritten, ctx.path);
+          if (found) {
+            const { language: pageLanguage, entry } = found;
+            const pathFor = (language: Language) => legalPath(language, entry.page);
             const links: Record<string, string>[] = [
-              { rel: "canonical", href: `${siteUrl}${legalPath(legal.language, legal.page)}` },
-              ...alternates(siteUrl, languages, defaultLanguage!, (language) =>
-                legalPath(language, legal.page),
-              ).map(([hreflang, href]) => ({ rel: "alternate", hreflang, href })),
+              { rel: "canonical", href: `${siteUrl}${pathFor(pageLanguage)}` },
+              ...(entry.languages.length > 1
+                ? alternates(
+                    siteUrl,
+                    entry.languages,
+                    xDefaultLanguage(entry.languages, defaultLanguage!),
+                    pathFor,
+                  ).map(([hreflang, href]) => ({ rel: "alternate", hreflang, href }))
+                : []),
             ];
             return {
               html,
@@ -207,7 +249,7 @@ export function companionLanding<L extends Language>(
         this.emitFile({
           type: "asset",
           fileName: "sitemap.xml",
-          source: renderSitemap(siteUrl, languages, defaultLanguage!, legalPages),
+          source: renderSitemap(siteUrl, languages, defaultLanguage!, legalPages, pages),
         });
       },
     };
@@ -246,8 +288,8 @@ export function companionLanding<L extends Language>(
       ]),
     ),
     ...Object.fromEntries(
-      languages.flatMap((language) =>
-        legalPages.map((page) => [
+      handWritten.flatMap(({ page, languages: pageLanguages }) =>
+        pageLanguages.map((language) => [
           language === defaultLanguage ? page : `${language.code}-${page}`,
           resolve(root, `.${legalPath(language, page)}index.html`),
         ]),
