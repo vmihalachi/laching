@@ -901,18 +901,18 @@ class MicrosoftStoreScreenshotTests(FixtureAppTestCase):
         config = companion.load(self.root)
         folder = self.root / "build" / "store-captures" / "microsoft" / "it"
         shots = ["panel-light", "home-dark", "panel-dark"]
-        self.assertEqual(tool.windows_capture_command(config, folder, "it", shots, windows=False), [
+        self.assertEqual(tool.windows_capture_command(config, folder, ["it"], shots, windows=False), [
             str(TOOLS / "windows" / "vm.sh"), "screenshots", str(folder), "--",
             "-Only", "panel,home", "-Front", "-Language", "it",
         ])
-        on_windows = tool.windows_capture_command(config, folder, "it", shots, windows=True)
+        on_windows = tool.windows_capture_command(config, folder, ["it"], shots, windows=True)
         self.assertEqual(on_windows[:6], ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                                           str(TOOLS / "windows" / "screenshots.ps1")])
         self.assertEqual(on_windows[6:], ["-Out", str(folder), "-Only", "panel,home", "-Front", "-Language", "it"])
         own = self.root / "windows" / "scripts" / "screenshots.ps1"
         own.parent.mkdir(parents=True, exist_ok=True)
         own.write_text("# the app's own\n", "utf8")
-        self.assertEqual(tool.windows_capture_command(config, folder, "it", shots, windows=True)[5], str(own.resolve()))
+        self.assertEqual(tool.windows_capture_command(config, folder, ["it"], shots, windows=True)[5], str(own.resolve()))
 
         # A run for Italian clears the old captures, captures, then composes from them.
         self.window(folder / "panel-light.png", (50, 50))
@@ -938,6 +938,78 @@ class MicrosoftStoreScreenshotTests(FixtureAppTestCase):
             with self.assertRaises(SystemExit) as stop:
                 tool.main(["--canvas", "microsoft", "--lang", "de"])
         self.assertEqual(str(stop.exception), "store-screenshots: capturing the de windows failed")
+
+    def test_all_languages_are_captured_in_one_run(self):
+        tool = self.load_tool()
+        base = self.root / "build" / "store-captures" / "microsoft"
+        calls = []
+
+        def capture(command):
+            calls.append(command)
+            # Several languages land in <Out>/<language>.
+            for language in ("it", "de"):
+                for shot in ("panel-light", "home-dark"):
+                    self.window(base / language / f"{shot}.png", (320, 240))
+            return subprocess.CompletedProcess(command, 0)
+
+        with mock.patch.object(tool.subprocess, "run", capture), mock.patch.object(tool.os, "name", "posix"), \
+                mock.patch.dict(os.environ, {"COMPANION_ROOT": str(self.root)}), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(tool.main(["--canvas", "microsoft", "--lang", "all"]), 0)
+        self.assertEqual(calls, [[str(TOOLS / "windows" / "vm.sh"), "screenshots", str(base), "--",
+                                  "-Only", "panel,home", "-Front", "-Language", "it,de"]])
+        for language in ("en", "it", "de"):
+            self.assertEqual(sorted(path.name for path in (self.out / language).iterdir()),
+                             ["1-panel-light.png", "2-home-dark.png"], language)
+
+    def test_only_renders_those_shots_and_keeps_the_others(self):
+        tool = self.load_tool()
+        base = self.root / "build" / "store-captures" / "microsoft"
+        for language in ("en", "it", "de"):
+            for name in ("1-panel-light", "2-home-dark"):
+                self.window(self.out / language / f"{name}.png", (10, 10))
+        kept = {language: (self.out / language / "1-panel-light.png").read_bytes() for language in ("en", "it", "de")}
+        calls = []
+
+        def capture(command):
+            calls.append(command)
+            for language in ("it", "de"):
+                self.window(base / language / "home-dark.png", (320, 240))
+            return subprocess.CompletedProcess(command, 0)
+
+        with mock.patch.object(tool.subprocess, "run", capture), mock.patch.object(tool.os, "name", "posix"), \
+                mock.patch.dict(os.environ, {"COMPANION_ROOT": str(self.root)}), \
+                contextlib.redirect_stdout(io.StringIO()) as printed:
+            self.assertEqual(tool.main(["--canvas", "microsoft", "--lang", "all", "--only", "home"]), 0)
+        # One run for the other languages, of that window alone.
+        self.assertEqual(calls, [[str(TOOLS / "windows" / "vm.sh"), "screenshots", str(base), "--",
+                                  "-Only", "home", "-Front", "-Language", "it,de"]])
+        self.assertEqual(printed.getvalue().splitlines(), [
+            f"store-listing/microsoft/screenshots/{language}/2-home-dark.png ({size} window)"
+            for language, size in (("en", "601×451"), ("it", "320×240"), ("de", "320×240"))])
+        for language in ("en", "it", "de"):
+            self.assertEqual((self.out / language / "1-panel-light.png").read_bytes(), kept[language], "kept as it was")
+            self.assertEqual(self.Image.open(self.out / language / "2-home-dark.png").size, (3840, 2160))
+
+        # A capture's full name works too; a name that's none of the shots is a usage error.
+        exact = self.run_tool("--only", "panel-light")
+        self.assertEqual(exact.returncode, 0, exact.stderr)
+        self.assertEqual(exact.stdout.splitlines(), ["store-listing/microsoft/screenshots/en/1-panel-light.png (400×300 window)"])
+        unknown = self.run_tool("--only", "stats")
+        self.assertEqual(unknown.returncode, 2)
+        self.assertIn("--only stats: none of store.microsoft.shots (panel-light, home-dark)", unknown.stderr)
+
+    def test_only_refuses_a_folder_that_cannot_keep_the_rest(self):
+        self.window(self.out / "en" / "2-home-dark.png", (10, 10))
+        missing = self.run_tool("--only", "home")
+        self.assertEqual(missing.returncode, 1)
+        self.assertIn("store-listing/microsoft/screenshots/en lacks 1-panel-light.png: render en whole first", missing.stderr)
+        self.window(self.out / "en" / "1-panel-light.png", (10, 10))
+        self.window(self.out / "en" / "3-gone-light.png", (10, 10))
+        extra = self.run_tool("--only", "home")
+        self.assertEqual(extra.returncode, 1)
+        self.assertIn("holds 3-gone-light.png, which the set doesn't", extra.stderr)
+        # Nothing was written: the folder is as it was.
+        self.assertEqual(self.Image.open(self.out / "en" / "2-home-dark.png").size, (10, 10))
 
     def captioned(self, style="zine"):
         """store.microsoft.captioned, with captions for en and it whose first entry Windows shows from another shot."""
@@ -1098,6 +1170,32 @@ class IosStoreScreenshotTests(FixtureAppTestCase):
         self.assertIn("no build/store-captures/ios/iphone/it/today-light.png: capture the app's iOS screens first",
                       missing.stderr)
         self.assertFalse((self.root / "store-listing" / "apple" / "phone" / "it").exists())
+
+    def test_only_replaces_those_images_and_keeps_the_others(self):
+        out = self.root / "store-listing" / "apple" / "iphone" / "en"
+        self.screens("iphone", (1320, 2868))
+        self.assertEqual(self.run_tool("--canvas", "iphone").returncode, 0)
+        whole = {path.name: path.read_bytes() for path in out.iterdir()}
+        # The second screen changed: only its image is written, under its name in the whole set, and the first one's
+        # capture isn't needed.
+        captures = self.root / "build" / "store-captures" / "ios" / "iphone" / "en"
+        self.Image.new("RGB", (1320, 2868), (10, 120, 200)).save(captures / "panel-light.png")
+        (captures / "today-light.png").unlink()
+        result = self.run_tool("--canvas", "iphone", "--only", "panel")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.split(), ["store-listing/apple/iphone/en/2-panel-light.png"])
+        self.assertEqual(sorted(path.name for path in out.iterdir()), sorted(whole))
+        self.assertEqual((out / "1-today-light.png").read_bytes(), whole["1-today-light.png"])
+        self.assertNotEqual((out / "2-panel-light.png").read_bytes(), whole["2-panel-light.png"])
+        # A language never rendered whole can't take one image alone: push.py would upload a partial set.
+        self.screens("iphone", (1320, 2868), "it")
+        partial = self.run_tool("--canvas", "iphone", "--lang", "all", "--only", "panel-light")
+        self.assertEqual(partial.returncode, 1)
+        self.assertIn("store-listing/apple/iphone/it lacks 1-today-light.png: render it whole first", partial.stderr)
+        self.assertFalse((out.parent / "it").exists())
+        unknown = self.run_tool("--canvas", "iphone", "--only", "menu")
+        self.assertEqual(unknown.returncode, 2, "the iPhone shows today, not the Mac's menu")
+        self.assertIn("--only menu: none of the en captions (today-light, panel-light)", unknown.stderr)
 
     def test_rule_style_and_canvas_size(self):
         self.data["screenshots"]["store"].update({"style": "rule", "canvases": {"duo": [2007, 2853]}})

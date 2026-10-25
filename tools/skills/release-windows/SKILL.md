@@ -84,7 +84,16 @@ unsure):
 ```sh
 python3 laching/tools/store-screenshots.py --canvas microsoft             # the source language, from windows.screenshots
 python3 laching/tools/store-screenshots.py --canvas microsoft --lang all  # every language: ask first
+python3 laching/tools/store-screenshots.py --canvas microsoft --lang all --only session-webcam  # one window changed
 ```
+
+Every other language is captured in one screenshot run (from a Mac, one `vm.sh screenshots … -Language a,b,…`: one
+sync and one build), not one per language. When only some windows changed, `--only <shot>[,<shot>]` (a window in both
+appearances, or a capture's full name) captures just those and replaces just their images, keeping the folder's
+others under the same numbers: minutes instead of the whole set's hour. A language whose folder lacks one of the kept
+images (never rendered whole on this machine: the non-source languages are usually git-ignored) or holds a stray PNG
+stops the run before any capture; render it whole first. The source language composes from `windows.screenshots`, so
+re-capture that window there first (`vm.sh screenshots <windows.screenshots> -- -Only <window>`).
 
 With `store.microsoft.captioned` the images are laid out as the Mac App Store's, each caption of
 `screenshots.store.captions` (its `windows` object over its fields) beside the window in `screenshots.store.style`;
