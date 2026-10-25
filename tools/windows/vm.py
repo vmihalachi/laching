@@ -15,6 +15,8 @@ in the app's Windows workflow. `vm.sh` runs this file.
     laching/tools/windows/vm.sh smoke [x64|ARM64] [-- ARGS]    # publish the MSIX (Native AOT), then smoke-package.ps1
     laching/tools/windows/vm.sh run -- COMMAND…                # a PowerShell command in the VM's copy
 
+`vm.sh COMMAND --help` prints what one command does, its words and ARGS, and touches nothing.
+
 ARGS go as they are, in PowerShell syntax, to `dotnet build`, `dotnet test`, the screenshot script (`-Language fr`,
 `-Only home,settings`), check-layout.ps1 (`-Only home,settings`, `-Jobs 2`) or smoke-package.ps1 (`-SideBySide`). Those
 three scripts are the app's own (`<windows.dir>/scripts/screenshots.ps1`, `check-layout.ps1`, `smoke-package.ps1`) when
@@ -82,6 +84,47 @@ UNAVAILABLE = 3
 BUSY = 4
 PLATFORMS = ("x64", "ARM64")
 COMMANDS = ("status", "sync", "build", "test", "screenshots", "check-layout", "smoke", "run")
+# `vm.sh COMMAND --help`: each command's own usage, printed without syncing or touching the VM.
+HELP = {
+    "status": """vm.sh status
+
+Whether the VM can run commands, in one line. Exits 0 when it can, 3 when there is no VM to use here (no prlctl, no
+VM by that name, a stopped one or no one signed in) and 4 while another vm.sh run uses it, naming that run.""",
+    "sync": """vm.sh sync
+
+Mirrors the working tree (and a linked Laching checkout) into the VM's copy and stops. Every other command syncs
+first; this one takes no words.""",
+    "build": """vm.sh build [x64|ARM64…] [-- ARGS]
+
+Builds the WinUI app (windows.app in companion.json), Debug, for the platforms named (both by default). ARGS go to
+`dotnet build` as they are (`-- -p:Foo=bar`).""",
+    "test": """vm.sh test [-- ARGS]
+
+Runs windows.coreTests and windows.appTests with `dotnet test`; ARGS go to it as they are (`-- --filter Name~Stats`).""",
+    "screenshots": """vm.sh screenshots DIR [-- ARGS]
+
+Runs the screenshot script (<windows.dir>/scripts/screenshots.ps1, else Laching's) in the VM and copies its PNGs and
+problems.txt to DIR on the Mac, a folder (made when missing; a word starting with - is refused, so a mistyped flag
+never becomes the folder). With several languages (`-- -Language it,de`) each lands in DIR/<LANG>, all from one
+sync and one build. ARGS go to the script in PowerShell syntax: `-Only home,settings` (window prefixes), `-Front`,
+`-Hidden`, `-Language fr`, `-Platform ARM64` (the VM's own platform by default).
+
+    vm.sh screenshots build/shots -- -Only session-webcam -Front -Language de,fr,it""",
+    "check-layout": """vm.sh check-layout [LANG…] [-- ARGS]
+
+Runs check-layout.ps1 once for the languages named (every one of languages.all by default), side by side, and
+replaces each one's shots and problems.txt in <windows.dir>/build/layout-check/<LANG> on the Mac. ARGS go to the
+script: `-Only home,settings`, `-Jobs 2`.""",
+    "smoke": """vm.sh smoke [x64|ARM64] [-- ARGS]
+
+Publishes the MSIX (Release, Native AOT) for one platform (the VM's own by default), then runs smoke-package.ps1 on
+it; ARGS go to that script (`-- -SideBySide`).""",
+    "run": """vm.sh run -- COMMAND…
+
+Runs a PowerShell command in the VM's copy of the checkout, after the sync; exits with its exit code.
+
+    vm.sh run -- dotnet --info""",
+}
 
 
 class Unavailable(Exception):
@@ -614,8 +657,6 @@ def command_body(ctx: Context, command: str, words: list[str], extra: str) -> st
             raise Usage("screenshots needs one folder on the Mac for the PNGs (ARGS go after --)")
         return screenshots_body(ctx, shots_folder(words[0]), extra)
     if command == "check-layout":
-        if any(word.startswith("-") for word in words):
-            raise Usage("check-layout takes languages (ARGS go after --)")
         return check_layout_body(ctx, layout_folder(ctx), words, extra)
     if command == "smoke":
         platforms = parse_platforms(words)
@@ -642,13 +683,25 @@ def clear_shots(folder: Path, keep_pngs: bool = False) -> None:
             png.unlink()
 
 
+def check_words(command: str, words: list[str]) -> None:
+    """Refuses a flag where the command takes a folder, a platform or a language (ARGS go after --), before anything
+    runs: `screenshots --help` must never take --help for its folder and start a run."""
+    if flag := next((word for word in words if word.startswith("-")), None):
+        raise Usage(f"{command} takes no {flag!r} before -- (ARGS go after --; vm.sh {command} --help)")
+
+
 def main(argv: list[str]) -> int:
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__)
         return 0 if argv else 2
     command, (words, extra) = argv[0], split_extra(argv[1:])
+    if command in HELP and any(word in ("-h", "--help") for word in words):
+        print(HELP[command])
+        return 0
     vm = vm_name()
     try:
+        if command in COMMANDS:
+            check_words(command, words)
         if command == "status":
             print(f"vm.sh: {status(vm)}")
             return 0

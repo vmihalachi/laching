@@ -77,7 +77,9 @@ claims match what ships, and purchase UI is only where the app's rules allow.
    that the listing would look wrong; bug fixes rarely do. When unsure, ask the owner before rendering or uploading any.
    If needed: `laching/tools/screenshots.sh` when windows changed, then `python3 laching/tools/store-screenshots.py`
    (the source language; or the app's own scripts, per its notes); render `--lang all` (every language, slow) once the
-   owner has OK'd the source language's.
+   owner has OK'd the source language's. When only some windows changed, add `--only <shot>[,<shot>]` (a window, in
+   both appearances, or a capture's full name): just those windows are captured and their images replaced, the others
+   kept; a language whose folder lacks the rest stops the run before any capture, to be rendered whole.
 3. **Push** once the build has processed (the email, or the TestFlight tab):
    `python3 <store.dir>/apple/push.py --version <v> --create --build <n> --only text,iap,screenshots,review` prints the
    plan (drop `screenshots` when step 2 was skipped, `iap` when the in-app purchases' text didn't change); read it,

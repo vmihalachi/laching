@@ -438,11 +438,31 @@ echo "ran $*"
                             (["run"], "after --"), (["build", "x86"], "unknown platform"),
                             (["test", "fast"], "ARGS go after --"),
                             (["smoke", "x64", "ARM64"], "one platform"),
-                            (["check-layout", "-Only"], "takes languages")):
+                            (["check-layout", "-Only"], "check-layout takes no '-Only' before --"),
+                            # A flag is never a folder: this once started a full run into ./--help.
+                            (["screenshots", "-o"], "screenshots takes no '-o' before -- (ARGS go after --;"
+                                                    " vm.sh screenshots --help)"),
+                            (["build", "--x64"], "takes no '--x64'")):
             with self.subTest(args=args):
                 done = self.run_vm(*args)
                 self.assertEqual(done.returncode, 2, done.stderr)
                 self.assertIn(words, done.stderr)
+
+
+    def test_each_command_has_its_own_help(self):
+        # No prlctl at all: the help needs neither the VM nor a sync.
+        python = Path(sys.executable).parent
+        for command in vm.COMMANDS:
+            for flag in ("--help", "-h"):
+                with self.subTest(command=command, flag=flag):
+                    args = [command, "shots", flag] if command == "screenshots" else [command, flag]
+                    done = self.run_vm(*args, path=f"{self.bin}:{python}:/usr/bin:/bin")
+                    self.assertEqual(done.returncode, 0, done.stderr)
+                    self.assertTrue(done.stdout.startswith(f"vm.sh {command}"), done.stdout)
+        self.assertFalse((self.root / "--help").exists())
+        self.assertFalse((self.root / "shots").exists())
+        # After --, --help is the script's.
+        self.assertIn("-Language", vm.HELP["screenshots"])
 
 
 class LockTests(unittest.TestCase):

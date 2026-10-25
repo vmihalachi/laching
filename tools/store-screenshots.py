@@ -3,7 +3,7 @@
 the App Store's iPhone, iPad and iPhone Duo images, Google Play's or the Microsoft Store's with --canvas.
 
     python3 laching/tools/store-screenshots.py [--canvas mac|iphone|ipad|duo|android-phone|android-tablet|microsoft]
-        [--lang LANG|all]… [--out DIR] [captures-dir]
+        [--lang LANG|all]… [--only SHOT[,SHOT]] [--out DIR] [captures-dir]
 
 Each language's images land in <store.out>/<language> (<store.out>/<canvas>/<language> for an Android canvas; --out
 DIR for DIR/<language>), named <n>-<shot>-<appearance>.png in upload order: upload them from there. --lang (repeatable,
@@ -12,6 +12,13 @@ given (one language's), else for the Mac the committed captures in screenshots.o
 screenshots.sh first if the windows changed) and, for any other language, the windows its captions need, captured in
 that language first (`screenshots.sh --only … --front` into build/store-captures/apple/<language>); for an Android
 canvas, screenshots.out. Needs Pillow (pip3 install pillow).
+
+--only SHOT[,SHOT] re-renders just those images, in every language asked for, and keeps the folder's others: a shot
+is a capture's name (`session-webcam-light`) or a window's, in both appearances (`session-webcam`). Only those windows
+are captured, under the same numbers and names as in the whole set. Since the stores take a folder whole, a language
+whose folder lacks one of the images left alone (never rendered on this machine; the non-source ones are often
+git-ignored), or holds a PNG that isn't one of the set's, stops the run before anything is captured: render that
+language whole first.
 
 Each image is one capture on the paper of its appearance with a headline (`store.font`) and a short note
 (`store.noteFont`, else the same face) in the app's colors (`store.palette`: light/dark → paper, ink, accent,
@@ -50,10 +57,10 @@ its own size, never scaled so its text stays sharp, on a 3840 × 2160 backdrop w
 The images go to <store.dir>/<store.microsoft.screenshots, microsoft/screenshots by default>/<language> (--out DIR:
 DIR/<language>), named <n>-<shot>.png, where import.py takes them; the folder's old PNGs go first. --lang all is every
 language of the app. The captures: the folder given, else windows.screenshots for the source language and, for any
-other, the windows the shots need captured in that language first (`screenshots.ps1 -Only … -Front -Language` into
-build/store-captures/microsoft/<language>; from a Mac through `windows/vm.sh screenshots`). A capture larger than the
-canvas, or one flat color below its top quarter (a window captured before it drew), stops the run before anything is
-written.
+other, the windows the shots need captured in that language first, every such language in one run (`screenshots.ps1
+-Only … -Front -Language a,b,…` into build/store-captures/microsoft/<language>; from a Mac through one
+`windows/vm.sh screenshots`, so one sync and one build). A capture larger than the canvas, or one flat color below its
+top quarter (a window captured before it drew), stops the run before anything is written.
 
 `store.microsoft.captioned` lays the `microsoft` images out as the Mac's instead, for a listing that looks like the Mac
 App Store's: on the paper of `store.palette`, the window on the right, scaled to fit and enlarged at most 1.5×, the
@@ -166,25 +173,34 @@ class Settings:
         self.note_font = cjk or config.path("screenshots.store.noteFont") or self.headline_font
         self.note_size = self.metrics["note"] * (STYLES[self.style]["cjkNote"] if cjk else 1)
 
-    def render(self, captions: list[dict], root: Path) -> None:
-        """Writes the language's images, printing each one's path; exits when Google Play would refuse one, or (iOS)
-        when a capture is missing, before writing anything."""
+    def names(self, captions: list[dict]) -> list[str]:
+        """The language's image file names, in upload order."""
         captions = for_platform(captions, self.canvas)
+        digits = len(str(len(captions))) if self.canvas in IOS_CANVASES else 1  # 01-… past nine, sorting in order
+        return [f"{i:0{digits}}-{shot_name(caption)}.png" for i, caption in enumerate(captions, 1)]
+
+    def render(self, captions: list[dict], root: Path, only: set[int] | None = None) -> None:
+        """Writes the language's images (with `only`, those of its indexes alone, keeping the others), printing each
+        one's path; exits when Google Play would refuse one, or (iOS) when a capture is missing, before writing
+        anything."""
+        names = self.names(captions)
+        captions = for_platform(captions, self.canvas)
+        chosen = [i for i in range(len(captions)) if only is None or i in only]
         ios = self.canvas in IOS_CANVASES
         if ios:
-            for caption in captions:
-                if not (path := self.capture_path(caption)).is_file():
+            for i in chosen:
+                if not (path := self.capture_path(captions[i])).is_file():
                     sys.exit(f"store-screenshots: no {companion.rel(path, root)}: capture the app's iOS screens first")
         self.out.mkdir(parents=True, exist_ok=True)
         # push.py uploads every PNG of an iOS folder: an earlier run's must not stand in for a shot that's gone.
-        for stale in self.out.glob("*.png") if ios else ():
+        for stale in self.out.glob("*.png") if ios and only is None else ():
             stale.unlink()
-        digits = len(str(len(captions))) if ios else 1  # 01-… past nine, so the names sort in upload order
         if self.portrait:
+            # Every caption of the language, rendered or not, so a re-rendered screen lines up with the kept ones.
             measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
             text_height = max(self.portrait_text(measure, caption)[-1] for caption in captions)
-        for i, caption in enumerate(captions, 1):
-            path = self.out / f"{i:0{digits}}-{caption['shot']}-{caption.get('appearance', 'light')}.png"
+        for i in chosen:
+            caption, path = captions[i], self.out / names[i]
             image = self.compose_portrait(caption, text_height) if self.portrait else self.compose(caption)
             if self.canvas in ANDROID_CANVASES and (problem := play_problem(image)):
                 sys.exit(f"store-screenshots: {path.name} {problem} (store.canvases)")
@@ -341,6 +357,48 @@ def for_platform(captions: list[dict], canvas: str) -> list[dict]:
     return [{**caption, **caption.get(platform, {})} if platform else caption for caption in captions]
 
 
+def shot_name(caption: dict) -> str:
+    """A caption's capture name: its shot and appearance (`session-webcam-light`)."""
+    return f"{caption['shot']}-{caption.get('appearance', 'light')}"
+
+
+def chosen_shots(parser: argparse.ArgumentParser, only: str | None, names: list[str], where: str) -> set[int] | None:
+    """The indexes of `names` (capture names, upload order) that --only picks, None without it: each word a name, or a
+    window's without its appearance; a word matching none is a usage error naming `where` the names came from."""
+    if only is None:
+        return None
+    picked = set()
+    for word in filter(None, (word.strip() for word in only.split(","))):
+        hits = {i for i, name in enumerate(names) if word in (name, APPEARANCE.sub("", name))}
+        if not hits:
+            parser.error(f"--only {word}: none of {where} ({', '.join(names)})")
+        picked |= hits
+    if not picked:
+        parser.error("--only needs a shot")
+    return picked
+
+
+def kept_problem(folder: Path, names: list[str], only: set[int], whole: bool = True) -> str | None:
+    """Why the images --only leaves in `folder` (the set's file `names`, upload order) can't stand beside the new
+    ones, or None: one of them is missing or, for a folder a whole render empties first (`whole`), a PNG there isn't
+    one of the set's."""
+    have = {path.name for path in folder.glob("*.png")}
+    if missing := [name for i, name in enumerate(names) if i not in only and name not in have]:
+        return f"lacks {', '.join(missing)}"
+    if whole and (extra := sorted(have - set(names))):
+        return f"holds {', '.join(extra)}, which the set doesn't"
+    return None
+
+
+def check_kept(folders: dict[str, Path], names: dict[str, list[str]], only: dict[str, set[int]], root: Path,
+               whole: bool = True) -> None:
+    """Exits before anything is captured when a language's folder can't keep the images --only leaves alone."""
+    for language, folder in folders.items():
+        if problem := kept_problem(folder, names[language], only[language], whole):
+            sys.exit(f"store-screenshots: {companion.rel(folder, root)} {problem}: render {language} whole first"
+                     " (without --only)")
+
+
 def mix(base: str, over: str, share: float) -> str:
     """`over` at `share` opacity on `base`, both #RRGGBB."""
     a, b = (tuple(int(color[i:i + 2], 16) for i in (1, 3, 5)) for color in (base, over))
@@ -362,10 +420,18 @@ class Microsoft:
         self.shadow = config.get("store.microsoft.shadow")
         self.margin = self.shadow.get("offset", 16) if self.shadow else 0
 
-    def render(self, root: Path) -> None:
-        """Checks every capture, then replaces the folder's images, printing each one's path; exits on a bad capture."""
-        windows = {}
-        for shot in self.shots:
+    @staticmethod
+    def names(shots: list[str]) -> list[str]:
+        """The image file names of `shots`, in upload order."""
+        digits = len(str(len(shots)))  # 01-… past nine, so the names sort in upload order
+        return [f"{i:0{digits}}-{shot}.png" for i, shot in enumerate(shots, 1)]
+
+    def render(self, root: Path, only: set[int] | None = None) -> None:
+        """Checks every capture, then replaces the folder's images (with `only`, those of its indexes alone, keeping
+        the others), printing each one's path; exits on a bad capture."""
+        windows, names = {}, Microsoft.names(self.shots)
+        chosen = [i for i in range(len(self.shots)) if only is None or i in only]
+        for shot in (self.shots[i] for i in chosen):
             path = self.captures / f"{shot}.png"
             if not path.is_file():
                 sys.exit(f"store-screenshots: no {companion.rel(path, root)} (store.microsoft.shots): capture it first")
@@ -376,12 +442,12 @@ class Microsoft:
             windows[shot] = window
         self.out.mkdir(parents=True, exist_ok=True)
         # import.py uploads every PNG there: an earlier run's must not stand in for a shot that's gone.
-        for stale in self.out.glob("*.png"):
+        for stale in self.out.glob("*.png") if only is None else ():
             stale.unlink()
-        digits = len(str(len(self.shots)))  # 01-… past nine, so the names sort in upload order
-        for i, shot in enumerate(self.shots, 1):
-            path = self.out / f"{i:0{digits}}-{shot}.png"
-            image = self.captioned[0].compose(self.captioned[1][i - 1]) if self.captioned else                 self.compose(windows[shot], appearance(shot))
+        for i in chosen:
+            shot, path = self.shots[i], self.out / names[i]
+            image = self.captioned[0].compose(self.captioned[1][i]) if self.captioned else \
+                self.compose(windows[shot], appearance(shot))
             image.save(path, optimize=True)
             print(f"{companion.rel(path, root)} ({windows[shot].width}×{windows[shot].height} window)")
 
@@ -545,7 +611,8 @@ def play_problem(image):
 
 
 def capture(config: companion.Config, language: str, captions: list[dict]) -> Path:
-    """The Mac windows `captions` show, captured in `language` (screenshots.sh) into build/store-captures/apple."""
+    """The Mac windows `captions` show (those --only picks), captured in `language` (screenshots.sh) into
+    build/store-captures/apple."""
     folder = config.root / "build" / "store-captures" / "apple" / language
     shots = ",".join(dict.fromkeys(caption["shot"] for caption in captions))
     command = companion.shell_command(TOOLS / "screenshots.sh")
@@ -556,23 +623,29 @@ def capture(config: companion.Config, language: str, captions: list[dict]) -> Pa
     return folder
 
 
-def windows_capture(config: companion.Config, language: str, shots: list[str]) -> Path:
-    """The Windows windows `shots` show, captured in `language` into build/store-captures/microsoft."""
-    folder = config.root / "build" / "store-captures" / "microsoft" / language
-    folder.mkdir(parents=True, exist_ok=True)
-    # The capture only adds shots: an earlier run's must not stand in for one that didn't render.
-    for stale in folder.glob("*.png"):
-        stale.unlink()
-    if subprocess.run(windows_capture_command(config, folder, language, shots)).returncode:
-        sys.exit(f"store-screenshots: capturing the {language} windows failed")
-    return folder
+def windows_capture(config: companion.Config, languages: list[str], shots: list[str]) -> dict[str, Path]:
+    """The Windows windows `shots` show, captured in each of `languages` into build/store-captures/microsoft/<language>,
+    all in one run of the screenshot script (one sync and one build in the VM); each language's folder."""
+    base = config.root / "build" / "store-captures" / "microsoft"
+    folders = {language: base / language for language in languages}
+    for folder in folders.values():
+        folder.mkdir(parents=True, exist_ok=True)
+        # The capture only adds shots: an earlier run's must not stand in for one that didn't render.
+        for stale in folder.glob("*.png"):
+            stale.unlink()
+    # Several languages go to <Out>/<language>, one straight to <Out>.
+    out = folders[languages[0]] if len(languages) == 1 else base
+    if subprocess.run(windows_capture_command(config, out, languages, shots)).returncode:
+        sys.exit(f"store-screenshots: capturing the {', '.join(languages)} windows failed")
+    return folders
 
 
-def windows_capture_command(config: companion.Config, folder: Path, language: str, shots: list[str],
+def windows_capture_command(config: companion.Config, folder: Path, languages: list[str], shots: list[str],
                             windows: bool = os.name == "nt") -> list[str]:
-    """screenshots.ps1 (the app's own <windows.dir>/scripts/screenshots.ps1, else Laching's) for `shots`, shown in front
-    as in use: run here on Windows, in the VM through vm.sh elsewhere."""
-    args = ["-Only", ",".join(dict.fromkeys(APPEARANCE.sub("", shot) for shot in shots)), "-Front", "-Language", language]
+    """screenshots.ps1 (the app's own <windows.dir>/scripts/screenshots.ps1, else Laching's) for `shots` in
+    `languages`, shown in front as in use: run here on Windows, in the VM through vm.sh elsewhere."""
+    args = ["-Only", ",".join(dict.fromkeys(APPEARANCE.sub("", shot) for shot in shots)), "-Front",
+            "-Language", ",".join(languages)]
     if not windows:
         return [str(TOOLS / "windows" / "vm.sh"), "screenshots", str(folder), "--", *args]
     own = config.path("windows.dir")
@@ -591,16 +664,20 @@ def microsoft(parser: argparse.ArgumentParser, args: argparse.Namespace, config:
     if args.captures and len(languages) > 1:
         parser.error("a captures folder is one language's: name one --lang")
     out = args.out or config.require_path("store.dir") / config.get("store.microsoft.screenshots", "microsoft/screenshots")
+    only = chosen_shots(parser, args.only, shots, "store.microsoft.shots")
     captions = captioned_shots(config, languages, shots) if config.get("store.microsoft.captioned") else {}
+    if only is not None:
+        check_kept({language: out / language for language in languages}, dict.fromkeys(languages, Microsoft.names(shots)),
+                   dict.fromkeys(languages, only), config.root)
+    others = [] if args.captures else [language for language in languages if language != config.source_language]
+    captured = windows_capture(config, others, [shots[i] for i in sorted(only)] if only else shots) if others else {}
     for language in languages:
         if args.captures:
             captures = args.captures
-        elif language != config.source_language:
-            captures = windows_capture(config, language, shots)
         else:
-            captures = config.require_path("windows.screenshots")
+            captures = captured.get(language) or config.require_path("windows.screenshots")
         layout = (Settings(config, "microsoft", captures, out / language, language), captions[language]) if captions else None
-        Microsoft(config, shots, captures, out / language, layout).render(config.root)
+        Microsoft(config, shots, captures, out / language, layout).render(config.root, only)
     return 0
 
 
@@ -629,6 +706,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--lang", action="append",
                         help="a language of the captions (microsoft: of the app), or all (repeatable; default: the source)")
     parser.add_argument("--out", type=Path, help="instead of the canvas's folder (see above): the images go to DIR/<lang>")
+    parser.add_argument("--only", metavar="SHOT[,SHOT]",
+                        help="re-render just these images (a capture's name, or a window's for both appearances), keeping"
+                             " the folder's others; only their windows are captured")
     args = parser.parse_args(argv)
     config = companion.load()
     if args.canvas == "microsoft":
@@ -646,16 +726,27 @@ def main(argv: list[str]) -> int:
         out = config.require_path("store.dir") / config.get(f"store.apple.ios.{args.canvas}Screenshots", f"apple/{args.canvas}")
     else:
         out = config.require_path("screenshots.store.out") / ("" if args.canvas == "mac" else args.canvas)
+    settings = {language: Settings(config, args.canvas, Path(), out / language, language) for language in languages}
+    only = {language: chosen_shots(parser, args.only, [shot_name(caption) for caption in shown], f"the {language} captions")
+            for language, shown in ((language, for_platform(captions[language], args.canvas)) for language in languages)}
+    if args.only is not None:
+        # Only an iOS folder is emptied by a whole render, as push.py uploads all of it.
+        check_kept({language: out / language for language in languages},
+                   {language: settings[language].names(captions[language]) for language in languages}, only, config.root,
+                   whole=args.canvas in IOS_CANVASES)
     for language in languages:
+        picked = only[language]
         if args.captures:
             captures = args.captures
         elif args.canvas == "mac" and language != config.source_language:
-            captures = capture(config, language, captions[language])
+            shown = for_platform(captions[language], args.canvas)
+            captures = capture(config, language, [caption for i, caption in enumerate(shown) if picked is None or i in picked])
         elif args.canvas in IOS_CANVASES:
             captures = config.root / "build" / "store-captures" / "ios" / args.canvas / language
         else:
             captures = config.require_path("screenshots.out")
-        Settings(config, args.canvas, captures, out / language, language).render(captions[language], config.root)
+        settings[language].captures = captures
+        settings[language].render(captions[language], config.root, picked)
     return 0
 
 
