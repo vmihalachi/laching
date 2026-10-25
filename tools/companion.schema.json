@@ -496,7 +496,8 @@
               "name": { "type": "string", "description": "The line verify.sh prints." },
               "paths": { "type": "string", "pattern": "^[^\t]+$", "description": "An extended regular expression over the changed root-relative paths; the check runs when one matches (and with --all)." },
               "run": { "type": "string", "pattern": "^[^\t]+$", "description": "The command, run by bash from the app's root." },
-              "slow": { "type": "boolean", "description": "Skipped by --fast." }
+              "slow": { "type": "boolean", "description": "Skipped by --fast." },
+              "docs": { "type": "boolean", "description": "Documentation changes (*.md, *.rst, …) count too; the checks leave them out otherwise, as the built-in app checks do." }
             }
           }
         }

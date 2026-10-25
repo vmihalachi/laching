@@ -324,6 +324,12 @@ def derived(config: Config) -> dict[str, str]:
         f"^{ere(windows)}/{ere(win_core)}(\\.Tests)?/|^{ere(conformance)}/" if windows and win_core else never
     )
     values["RE_WINDOWS_APP"] = f"^{ere(windows)}/{ere(values['WINDOWS_APP'])}/" if windows and values["WINDOWS_APP"] else never
+    # The WinUI build: the app, the core it references and the shared build settings and SDK pin.
+    values["RE_WINDOWS_BUILD"] = "|".join(part for part in [
+        values["RE_WINDOWS_APP"] if windows and values["WINDOWS_APP"] else "",
+        f"^{ere(windows)}/{ere(win_core)}/" if windows and win_core and values["WINDOWS_APP"] else "",
+        f"^{ere(windows)}/(Directory\\.(Build|Packages)\\.props|global\\.json)$" if windows and values["WINDOWS_APP"] else "",
+    ] if part) or never
     # The app's model tests compile the app's own files, so either side changing runs them.
     values["RE_WINDOWS_APP_TESTS"] = (
         f"^{ere(windows)}/({ere(values['WINDOWS_APP'])}|{ere(win_app_tests)})/" if windows and win_app_tests else never
@@ -1191,7 +1197,8 @@ def main(argv: list[str]) -> int:
         return conform.check(config)
     elif command == "checks":
         for entry in config.get("verify.checks", []):
-            print("	".join(["slow" if entry.get("slow") else "fast", entry["paths"], entry["name"], entry["run"]]))
+            print("	".join(["slow" if entry.get("slow") else "fast", "docs" if entry.get("docs") else "code",
+                             entry["paths"], entry["name"], entry["run"]]))
     elif (command, len(rest)) in (("bump", 1), ("link", 0), ("link", 1), ("unlink", 0)):
         try:
             if command == "bump":

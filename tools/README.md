@@ -247,16 +247,17 @@ fail when the app drifts from the tools (each rule: `conform.py`'s docstring):
 - **`store.microsoft`** is the schema's shape: `shots` and `publisher`, and `storeId` for the submission API.
 
 What `verify.sh` runs for a path (`--help` lists them): documentation (`.md`, `.markdown`, `.rst`, `.adoc`) leaves the
-app checks alone, so only the store listing's and the app's own checks see it, unless `--all`. The app's Swift is
+app checks alone, so only the store listing's check and the app's own checks marked `docs` see it, unless `--all`. The app's Swift is
 `mac.app`, `mac.tests` and `mac.format`'s folders outside the core package; with `mac.iosScheme`, `xcodebuild test`
 runs the iOS tests too, on `ios-destination.py --own "<name> verify"`. `--staged`, the pre-commit hook's mode,
 generates the Xcode project from the index in a scratch copy, so another session's untracked sources don't count.
-`--no-vm` (or `LACHING_NO_VM=1`) leaves the Parallels VM to a session that holds it. On a Mac, Gradle gets Homebrew's
+The WinUI app builds when the app, the Windows core it references, `Directory.Build.props`,
+`Directory.Packages.props` or `global.json` changes; `--no-vm` (or `LACHING_NO_VM=1`) leaves the Parallels VM to a session that holds it. On a Mac, Gradle gets Homebrew's
 openjdk@17 and Android Studio's SDK unless `JAVA_HOME` and `ANDROID_HOME` are set.
 
 The app's own checks, which a copied `verify.sh` used to hold, are `verify.checks` in `companion.json`: each a `name`, the
-`paths` that trigger it (an extended regular expression), the command to `run` (bash, from the root) and `slow` for one
-`--fast` skips. `companion.py apps` (or `bump-apps.sh --report`), in the Laching checkout, lists the apps next to it:
+`paths` that trigger it (an extended regular expression), the command to `run` (bash, from the root), `slow` for one
+`--fast` skips and `docs` for one that documentation changes trigger too (a skill folder's links, say). `companion.py apps` (or `bump-apps.sh --report`), in the Laching checkout, lists the apps next to it:
 the release each pins, how far behind the newest, and its conform problems; it exits 1 while they pin different
 releases.
 

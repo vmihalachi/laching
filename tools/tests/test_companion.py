@@ -133,6 +133,11 @@ class LookupTests(unittest.TestCase):
             for path in ("windows/Fixture.App/App/AppModel.cs", "windows/Fixture.App.Tests/AppModelTests.cs"):
                 self.assertRegex(path, names["RE_WINDOWS_APP_TESTS"])
             self.assertNotRegex("windows/Fixture.Core/A.cs", names["RE_WINDOWS_APP_TESTS"])
+            # The WinUI build: the app, the core it references, the shared build settings and the SDK pin.
+            for path in ("windows/Fixture.App/App.xaml", "windows/Fixture.Core/A.cs", "windows/Directory.Build.props",
+                         "windows/Directory.Packages.props", "windows/global.json"):
+                self.assertRegex(path, names["RE_WINDOWS_BUILD"])
+            self.assertNotRegex("windows/Fixture.Core.Tests/A.cs", names["RE_WINDOWS_BUILD"])
             for path in ("macos/Fixture/Resources/AppIcon.png", "macos/Fixture/Resources/AppIcon-Dev.png",
                          "windows/Fixture.App/Assets/StoreLogo.scale-100.png"):
                 self.assertRegex(path, names["RE_WINDOWS_ASSETS"])

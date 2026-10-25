@@ -525,7 +525,7 @@ while not (state / "killed").exists():
         config = self.root / "companion.json"
         data = json.loads(config.read_text("utf8"))
         data["verify"] = {"checks": [
-            {"name": "notes are short", "paths": "^notes/", "run": "test $(wc -l < notes/a.md) -lt 3"},
+            {"name": "notes are short", "paths": "^notes/", "run": "test $(wc -l < notes/a.md) -lt 3", "docs": True},
             {"name": "the slow one", "paths": "^notes/", "run": "echo ran > slow.txt", "slow": True},
         ]}
         config.write_text(json.dumps(data), "utf8")
@@ -541,7 +541,8 @@ while not (state / "killed").exists():
         slow = self.run_script("verify.sh", "--", "notes/a.md")
         self.assertEqual(slow.returncode, 1)
         self.assertIn("FAIL  notes are short", slow.stdout)
-        self.assertIn("ok    the slow one", slow.stdout)
+        self.assertNotIn("the slow one", slow.stdout, "documentation counts only for a check marked docs")
+        self.assertIn("ok    the slow one", self.run_script("verify.sh", "--", "notes/a.json").stdout)
         self.assertEqual((self.root / "slow.txt").read_text().strip(), "ran", "run from the app's root")
 
     def test_verify_all_skips_what_the_app_lacks(self):
@@ -588,6 +589,22 @@ while not (state / "killed").exists():
         for path in (art, "conformance/characters/tiny.json", rig):
             self.assertEqual(ran(self.run_script("verify.sh", "--fast", "--", path)), ["FAIL  character.py --check"], path)
         self.assertEqual(ran(self.run_script("verify.sh", "--fast", "--", "notes.md")), [])
+
+    def test_verify_compares_only_the_files_an_export_writes(self):
+        ran = lambda: [line for line in self.run_script("verify.sh", "--fast", "--", "companion.json").stdout.splitlines()
+                       if "match the catalog" in line]
+        self.assertEqual(self.run_script("l10n.py", "export-windows").returncode, 0)
+        strings = self.root / "windows" / "Fixture.App" / "Strings"
+        (strings / "Theme.xaml").write_text("<ResourceDictionary />\n", "utf8")
+        self.assertEqual(ran(), ["ok    .resw files match the catalog"], "the app's own files can sit beside them")
+        stale = strings / "fr" / "Resources.resw"
+        stale.parent.mkdir()
+        stale.write_text((strings / "de" / "Resources.resw").read_text("utf8"), "utf8")
+        self.assertEqual(ran(), ["FAIL  .resw files match the catalog"], "a language the catalog dropped")
+        stale.unlink()
+        resw = strings / "de" / "Resources.resw"
+        resw.write_text(resw.read_text("utf8").replace("</root>", "<!-- by hand --></root>"), "utf8")
+        self.assertEqual(ran(), ["FAIL  .resw files match the catalog"], "an edited file")
 
     def commit_app(self) -> None:
         """The fixture app as a repository, with laching/ a checkout of its own on the pinned tag."""

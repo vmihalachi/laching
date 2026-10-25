@@ -263,7 +263,8 @@ class StopAndParity(HookTestCase):
         self.assertEqual(set(kinds), {"xcodebuild-test", "conformance", "swift-test", "dotnet-test", "dotnet-app-test",
                                       "winui-build"}, "no landing")
         self.assertRegex("windows/Fixture.App/Views/HomeView.xaml", kinds["winui-build"])
-        self.assertNotRegex("windows/Fixture.Core/A.cs", kinds["winui-build"])
+        self.assertRegex("windows/Fixture.Core/A.cs", kinds["winui-build"], "the app references the core")
+        self.assertNotRegex("windows/Fixture.Core.Tests/A.cs", kinds["winui-build"])
         self.assertRegex("macos/FixtureCore/Sources/FixtureCore/A.swift", kinds["conformance"])
         self.assertRegex("windows/Fixture.Core/A.cs", kinds["dotnet-test"])
         self.assertNotRegex("windows/Fixture.App/A.cs", kinds["dotnet-test"])

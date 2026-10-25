@@ -12,7 +12,7 @@
 #   scripts/verify.sh --no-vm ...        # no WinUI build in the Parallels VM (or LACHING_NO_VM=1) while a session holds it
 #
 # Path → checks:
-#   documentation (*.md, *.rst, ...)     only the store listing's and the app's own checks (--all runs every check)
+#   documentation (*.md, *.rst, ...)     only the store listing's and the app's own checks marked `docs` (--all: all)
 #   the app's Swift (mac.app, mac.tests, mac.format outside mac.core), mac.projectSpec
 #                                          xcodegen (fails if project.pbxproj was stale; --staged generates from the
 #                                          index), swift-format lint, xcodebuild test, and the iOS tests (mac.iosScheme)
@@ -64,7 +64,7 @@ done
 discover_changes "$ROOT" "$LANDING_DIR"
 
 # Documentation beside code, vectors or resources doesn't affect the apps, so the app checks leave it out; the store
-# listing's and the app's own checks see every path. Text and data formats (.txt, .json, .xml, .svg) can be inputs.
+# listing's check and the app's own checks marked `docs` see every path. Text and data formats (.txt, .json, .xml, .svg) can be inputs.
 app_changed="$(printf '%s\n' "$changed" | grep -Eiv '\.(md|markdown|rst|adoc)$' || true)"
 
 # matches <paths> <extended regex>...: true when one of the paths matches one of them. With --all, true unless each is
@@ -182,8 +182,20 @@ voices_pointer_pushed() {
 
 # export_current <windows|android> <folder>: l10n.py export-<kind> into the logs matches the committed folder.
 export_current() {
-  python3 "$TOOLS/l10n.py" "export-$1" --out "$logdir/$1" >/dev/null &&
-    diff -r --strip-trailing-cr "$logdir/$1" "$2"
+  local out="$logdir/$1" f rc=0 names=()
+  python3 "$TOOLS/l10n.py" "export-$1" --out "$out" >/dev/null || return
+  # Only the files the export writes: an Android res/ folder holds the app's drawables and themes beside them. A file of
+  # one of those names that the export no longer writes (a dropped language) is stale.
+  while IFS= read -r f; do
+    if [ -f "$2/$f" ]; then diff --strip-trailing-cr "$out/$f" "$2/$f" || rc=1
+    else echo "missing: $2/$f"; rc=1; fi
+    names+=(-o -name "${f##*/}")
+  done < <(cd "$out" && find . -type f | sed 's|^\./||')
+  [ ${#names[@]} -gt 0 ] || return $rc
+  while IFS= read -r f; do
+    [ -f "$out/$f" ] || { echo "stale: $2/$f"; rc=1; }
+  done < <(cd "$2" && find . -type f \( "${names[@]:1}" \) | sed 's|^\./||')
+  return $rc
 }
 
 # Kotlin style (ktlint_official, the Android project's .editorconfig) of the changed Kotlin files, or all of them.
@@ -236,17 +248,18 @@ csharp_format() {
   fi
 }
 
-# The app's own checks (verify.checks): speed, paths, name and command per line.
-app_speed=() app_paths=() app_name=() app_run=()
-while IFS=$'	' read -r speed paths name run; do
+# The app's own checks (verify.checks): speed, whether documentation counts, paths, name and command per line.
+app_speed=() app_docs=() app_paths=() app_name=() app_run=()
+while IFS=$'	' read -r speed docs paths name run; do
   [ -n "$speed" ] || continue
-  app_speed+=("$speed"); app_paths+=("$paths"); app_name+=("$name"); app_run+=("$run")
+  app_speed+=("$speed"); app_docs+=("$docs"); app_paths+=("$paths"); app_name+=("$name"); app_run+=("$run")
 done <<< "$(python3 "$TOOLS/companion.py" checks)"
 app_checks() {
   local i
   [ ${#app_speed[@]} -gt 0 ] || return 0
   for i in "${!app_speed[@]}"; do
-    if [ "${app_speed[$i]}" = "$1" ] && touched_any "${app_paths[$i]}"; then
+    [ "${app_speed[$i]}" = "$1" ] || continue
+    if { [ "${app_docs[$i]}" = docs ] && touched_any "${app_paths[$i]}"; } || touched "${app_paths[$i]}"; then
       check "${app_name[$i]}" bash -c "${app_run[$i]}" </dev/null
     fi
   done
@@ -290,10 +303,10 @@ fi
 if touched "$RE_SOUNDS"; then
   check "synth.py --check" python3 "$TOOLS/synth.py" --check
 fi
-if [ -n "$WINDOWS_STRINGS" ] && [ -d "$WINDOWS_STRINGS" ] && touched "\.xcstrings$|^$WINDOWS_STRINGS/"; then
+if [ -n "$WINDOWS_STRINGS" ] && [ -d "$WINDOWS_STRINGS" ] && touched "\.xcstrings$|^$WINDOWS_STRINGS/|^companion\.json$|$RE_PIN"; then
   check ".resw files match the catalog" export_current windows "$WINDOWS_STRINGS"
 fi
-if [ -n "$ANDROID_STRINGS" ] && [ -d "$ANDROID_STRINGS" ] && touched "\.xcstrings$|^$ANDROID_STRINGS/"; then
+if [ -n "$ANDROID_STRINGS" ] && [ -d "$ANDROID_STRINGS" ] && touched "\.xcstrings$|^$ANDROID_STRINGS/|^companion\.json$|$RE_PIN"; then
   check "Android strings match the catalog" export_current android "$ANDROID_STRINGS"
 fi
 
@@ -351,7 +364,7 @@ if [ "$fast" = 0 ]; then
       check "dotnet test ($WINDOWS_APP_TESTS)" dotnet test "$WINDOWS_DIR/$WINDOWS_APP_TESTS/$WINDOWS_APP_TESTS.csproj" -v q --nologo
     else skip "dotnet test ($WINDOWS_APP_TESTS): needs the .NET SDK"; fi
   fi
-  if touched "$RE_WINDOWS_APP"; then
+  if touched "$RE_WINDOWS_BUILD"; then
     vm="left alone: $novm"
     if [ "$windows" = 1 ] && has dotnet; then
       # Debug, unpackaged, for this machine's architecture, named for a project without companion.targets.
