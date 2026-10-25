@@ -140,7 +140,8 @@
       "properties": {
         "dir": { "type": "string", "description": "The vectors folder (phrases.json lives here)." },
         "writeFlag": { "type": "string", "description": "The environment variable that makes the Swift tests write the vectors." },
-        "corePackagePath": { "type": "string", "description": "The Swift package whose tests generate the vectors." }
+        "corePackagePath": { "type": "string", "description": "The Swift package whose tests generate the vectors." },
+        "handEdited": { "type": "array", "items": { "type": "string" }, "description": "Paths inside dir (a folder ends in /) the app writes by hand or records rather than generates, left out of the hook's guard on the vectors: fixtures/, say." }
       }
     },
     "characters": {
