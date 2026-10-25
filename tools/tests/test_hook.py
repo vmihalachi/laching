@@ -73,6 +73,7 @@ class PreToolUse(HookTestCase):
         self.assertTrue(self.blocked("Write", file_path=str(root / "windows/Fixture.App/Strings/en/Resources.resw")))
         self.assertTrue(self.blocked("Write", file_path=str(root / "android/app/src/main/res/values-it/strings.xml")))
         self.assertFalse(self.blocked("Edit", file_path=str(root / "conformance/README.md")))
+        self.assertFalse(self.blocked("Edit", file_path=str(root / "conformance/fixtures/manifest.json")), "handEdited")
         self.assertFalse(self.blocked("Edit", file_path=str(root / "macos/project.yml")))
         self.assertTrue(self.blocked("Write", file_path=str(root / "voices/Voice/it/clown/hello.m4a")))
         self.assertTrue(self.blocked("Edit", file_path=str(root / "voices/Voice/manifest.json")))

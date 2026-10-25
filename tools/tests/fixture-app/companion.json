@@ -41,7 +41,7 @@
     "phraseComment": "{character} says this aloud ({tags}). Flavor {flavorNote}.{part}",
     "flavorNotes": { "a": "a: the first flavor", "b": "b: the second flavor" }
   },
-  "conformance": { "dir": "conformance", "writeFlag": "FIXTURE_WRITE_CONFORMANCE", "corePackagePath": "macos/FixtureCore" },
+  "conformance": { "dir": "conformance", "writeFlag": "FIXTURE_WRITE_CONFORMANCE", "corePackagePath": "macos/FixtureCore", "handEdited": ["fixtures/"] },
   "voice": {
     "dir": "voices",
     "config": "macos/scripts/voice-config.json",

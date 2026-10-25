@@ -1,5 +1,5 @@
 #if os(macOS)
-    import LachingShell
+    import LachingCore
     import XCTest
 
     final class KeyframesTests: XCTestCase {

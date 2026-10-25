@@ -5,13 +5,14 @@ import PackageDescription
 //
 //   LachingCore     Foundation only. Interval scheduler with active hours and weekdays, quiet hours, idle reset and
 //                    busy hold; the Clock / IdleTimeProvider / BusyStateProvider protocols; a seeded random source;
-//                    LocalizedKey; the typed SettingsStore. Builds and tests anywhere Swift runs.
+//                    LocalizedKey; the typed SettingsStore; the drawing math (SVG path sampling, wobble, keyframes,
+//                    polylines; Apple platforms). Builds and tests anywhere Swift runs.
 //   LachingSystem   The macOS implementations of those providers and the other system signals (camera or microphone
 //                    in use, full screen, power source, output mute and route, screen lock, appearance), read from
 //                    device state through CoreAudio, CoreMediaIO, CoreGraphics and IOKit, all without permission prompts.
 //   LachingShell    Menu bar app plumbing: window manager with the activation-policy dance, the floating desktop
 //                    window and its placement, login item, launch context, notification poster, font registration,
-//                    a layout check, drawing helpers, the status item, and speech (system voice or recorded clips,
+//                    a layout check, the status item, and speech (system voice or recorded clips,
 //                    jokes in beats) and chimes.
 //   LachingCompanion  Foundation and Observation only. The pure core of a desk companion: the phrase bank and
 //                    picker, chatter cadence, quiet rules and mood, settings, the coordinator, desktop presence,
