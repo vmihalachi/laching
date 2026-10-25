@@ -752,11 +752,11 @@ class MicrosoftStoreScreenshotTests(FixtureAppTestCase):
 
     def setUp(self):
         try:
-            from PIL import Image
+            from PIL import Image, ImageDraw
         except ImportError:
             self.skipTest("needs Pillow (pip3 install pillow)")
         super().setUp()
-        self.Image = Image
+        self.Image, self.ImageDraw = Image, ImageDraw
         self.config_path = self.root / "companion.json"
         self.data = json.loads(self.config_path.read_text("utf8"))
         self.data["store"]["microsoft"].update({"shots": ["panel-light", "home-dark"], "backdrop": {"light": "#102030"}})
@@ -769,9 +769,14 @@ class MicrosoftStoreScreenshotTests(FixtureAppTestCase):
     def write_config(self):
         self.config_path.write_text(json.dumps(self.data), "utf8")
 
-    def window(self, path: Path, size, body=(250, 248, 240), content=True):
-        """A window: a title band, a body and, unless `content` is off, something drawn in it."""
-        image = self.Image.new("RGB", size, body)
+    def window(self, path: Path, size, body=(250, 248, 240), content=True, border=None):
+        """A window: a title band, a body and, unless `content` is off, something drawn in it; with a `border` color,
+        edged like Windows 11's frame (a one-pixel border, transparent rounded corners)."""
+        if border:
+            image = self.Image.new("RGBA", size, (255, 255, 255, 0))
+            self.ImageDraw.Draw(image).rounded_rectangle((0, 0, size[0] - 1, size[1] - 1), 16, fill=body, outline=border)
+        else:
+            image = self.Image.new("RGB", size, body)
         image.paste((200, 200, 200), (0, 0, size[0], 32))
         if content:
             image.paste((240, 180, 40), (size[0] // 3, size[1] // 2, size[0] // 2, size[1] - 20))
@@ -834,6 +839,11 @@ class MicrosoftStoreScreenshotTests(FixtureAppTestCase):
         blank = self.run_tool()
         self.assertEqual(blank.returncode, 1)
         self.assertIn("screenshots/windows/home-dark.png is one flat color below its top quarter", blank.stderr)
+        # The same, edged by the frame's border and rounded corners, which Windows draws before the content.
+        self.window(self.captures / "home-dark.png", (600, 450), body=(0, 0, 0), content=False, border=(80, 80, 80))
+        edged = self.run_tool()
+        self.assertEqual(edged.returncode, 1)
+        self.assertIn("is one flat color below its top quarter", edged.stderr)
         # Larger than the canvas (never scaled down).
         self.window(self.captures / "home-dark.png", (3900, 400))
         large = self.run_tool()
