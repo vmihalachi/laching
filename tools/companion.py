@@ -245,6 +245,7 @@ def derived(config: Config) -> dict[str, str]:
         "MAC_DIR": mac,
         "MAC_PROJECT": config.get("mac.project", ""),
         "MAC_SCHEME": config.get("mac.scheme", ""),
+        "MAC_IOS_SCHEME": config.get("mac.iosScheme", ""),
         "MAC_SPEC": rel("mac.projectSpec", "mac.dir"),
         "MAC_APP_NAME": config.get("mac.app", ""),
         "SCREENSHOT_ENV": config.get("mac.screenshotEnv", ""),
@@ -297,7 +298,11 @@ def derived(config: Config) -> dict[str, str]:
     }
     never = "^$a"  # matches no path: a section the app doesn't have
     values["RE_NEVER"] = never  # verify.sh --all skips a check whose patterns are all this one
-    swift_roots = (app, tests) if core else (mac, app, tests)
+    # The app's own Swift: mac.app, mac.tests and `mac.format`'s folders outside the core package (shared and platform
+    # sources, an app split across several), or all of mac.dir without a core package.
+    formatted = [f"{mac}/{entry}".rstrip("/") for entry in config.get("mac.format", []) if not entry.endswith(".swift")]
+    outside = [d for d in formatted if not (d == core or d.startswith(f"{core}/"))]
+    swift_roots = list(dict.fromkeys([app, *outside, tests])) if core else [mac, app, tests]
     swift_dirs = "|".join(ere(d) for d in swift_roots if d)
     values["RE_SWIFT"] = (
         f"^({swift_dirs})/.*\\.swift$" + (f"|^{ere(values['MAC_SPEC'])}$" if values["MAC_SPEC"] else "")
@@ -305,12 +310,15 @@ def derived(config: Config) -> dict[str, str]:
     )
     values["RE_COREPKG"] = f"^{ere(core)}/" if core else never
     values["RE_PURE"] = f"^{ere(core)}/Sources/|^{ere(core)}/Tests/[^/]+/Conformance/" if core else never
-    str_root = app if core else (mac or app)
-    values["RE_STRINGS"] = "|".join(
-        part for part in (
-            f"^{ere(str_root)}/.*\\.swift$" if str_root else "", "\\.xcstrings$", f"^{ere(landing_i18n)}/" if landing_i18n else ""
-        ) if part
-    )
+    # The Swift that shows text (the app's and the core's sources, not tests), the catalogs, and what l10n.py reads
+    # besides: companion.json's languages and, on a pin bump, the tool itself.
+    str_roots = [d for d in swift_roots if d and d != tests] + [f"{core}/Sources"] if core else [mac or app]
+    pin = [f"^{ere(values['LACHING_PATH'])}$"] if values["LACHING_PATH"] else []
+    values["RE_PIN"] = pin[0] if pin else never
+    values["RE_STRINGS"] = "|".join(part for part in [
+        f"^({'|'.join(ere(d) for d in str_roots if d)})/.*\\.swift$" if any(str_roots) else "", "\\.xcstrings$",
+        f"^{ere(landing_i18n)}/" if landing_i18n else "", "^companion\\.json$", *pin,
+    ] if part)
     values["RE_CSHARP"] = f"^{ere(windows)}/.*\\.cs$" if windows else never
     values["RE_WINDOWS_CORE"] = (
         f"^{ere(windows)}/{ere(win_core)}(\\.Tests)?/|^{ere(conformance)}/" if windows and win_core else never
@@ -329,10 +337,14 @@ def derived(config: Config) -> dict[str, str]:
     values["RE_ANDROID_CORE"] = f"^{ere(android)}/{ere(android_core)}/|^{ere(conformance)}/" if android else never
     values["RE_ANDROID_APP"] = f"^{ere(android)}/{ere(android_app)}/" if android else never
     values["RE_LANDING"] = (
-        f"^{ere(landing)}/|^{ere(conformance)}/(phrases|settings)\\.json$|Localizable\\.xcstrings$" if landing else never
+        f"^{ere(landing)}/|^{ere(conformance)}/(phrases|settings|catalog)\\.json$|Localizable\\.xcstrings$" if landing else never
     )
     values["RE_STORE"] = f"^{ere(store)}/[^/]+\\.md$" if store else never
-    values["RE_PHRASES"] = f"^{ere(conformance)}/phrases\\.json$|Localizable\\.xcstrings$"
+    # phrases.py check only for an app with a phrase bank.
+    phrases = config.phrases_file
+    values["RE_PHRASES"] = (
+        f"^{ere(conformance)}/phrases\\.json$|Localizable\\.xcstrings$" if phrases and phrases.is_file() else never
+    )
     values["RE_VOICE"] = (
         f"Localizable\\.xcstrings$|^{ere(values['VOICE_DIR'])}($|/)|^{ere(conformance)}/phrases\\.json$"
         + (f"|^{ere(rel('voice.config'))}$" if config.get("voice.config") else "")
@@ -340,7 +352,6 @@ def derived(config: Config) -> dict[str, str]:
     )
     # The generators' inputs and outputs: an edit to either side reruns the --check. A pin bump can change the
     # generator itself, so the submodule counts too.
-    pin = [f"^{ere(values['LACHING_PATH'])}$"] if values["LACHING_PATH"] else []
     character_paths = [
         f"^{ere(values['CHARACTERS_DESIGN'])}/",
         f"^{ere(conformance)}/characters/" if conformance else "",

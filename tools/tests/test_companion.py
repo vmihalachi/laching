@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -140,6 +141,28 @@ class LookupTests(unittest.TestCase):
                 self.assertRegex(path, names["RE_SOUNDS"])
             self.assertNotRegex("macos/Fixture/Resources/Sounds/README.md", names["RE_SOUNDS"])
             self.assertEqual(names["RE_CHARACTERS"], "^$a", "no characters section")
+            for path in ("macos/Fixture/A.swift", "macos/FixtureCore/Sources/FixtureCore/A.swift", "companion.json",
+                         "laching", "macos/Fixture/Resources/Localizable.xcstrings"):
+                self.assertRegex(path, names["RE_STRINGS"])
+            for path in ("macos/FixtureTests/AppTests.swift", "macos/FixtureCore/Tests/A.swift"):
+                self.assertNotRegex(path, names["RE_STRINGS"], "tests show no text")
+            self.assertRegex("conformance/phrases.json", names["RE_PHRASES"])
+
+    def test_an_app_split_across_folders(self):
+        # mac.format names the app's sources when they live beside mac.app (shared and platform folders).
+        with fixture_app() as root:
+            manifest = root / "companion.json"
+            data = json.loads(manifest.read_text("utf8"))
+            data["mac"]["format"] = ["Shared", "macOS/", "iOS", "FixtureCore", "FixtureCore/Tests", "Package.swift"]
+            manifest.write_text(json.dumps(data), "utf8")
+            (root / "conformance" / "phrases.json").unlink()
+            names = companion.derived(companion.load())
+            for path in ("macos/Shared/A.swift", "macos/macOS/B.swift", "macos/iOS/C.swift", "macos/FixtureTests/T.swift"):
+                self.assertRegex(path, names["RE_SWIFT"])
+                self.assertEqual(bool(re.search(names["RE_STRINGS"], path)), "Tests" not in path, path)
+            for path in ("macos/FixtureCore/Sources/A.swift", "macos/FixtureCore/Tests/T.swift", "macos/Package.swift"):
+                self.assertNotRegex(path, names["RE_SWIFT"], "the core package is swift test's")
+            self.assertEqual(names["RE_PHRASES"], "^$a", "no phrase bank")
 
     def test_character_paths_and_patterns(self):
         with fixture_app() as root:

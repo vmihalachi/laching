@@ -23,6 +23,7 @@ or `$COMPANION_ROOT`); the schema is [`companion.schema.json`](companion.schema.
 | `install-dev.sh`, `dev-icon.swift` | The Debug build in `~/Applications/<devAppName>.app`; its DEV-banded icon. |
 | `conformance.sh` | Regenerates the app's vectors from its Swift core. |
 | `verify.sh`, `verify-lib.sh`, `verify-lock.py` | Runs the checks that apply to changed paths, plus the pin check. The shared harness owns execution, progress, timeouts, process cleanup, named build locks and changed-path discovery; apps register their own checks. |
+| `ios-destination.py` | The `-destination` for the iOS tests: an iPhone on the newest iOS this Xcode has, or with `--own NAME` a simulator of that name (the same model, made on first use) that the Simulator panel and the screenshot runs never boot. |
 | `setup-linux.sh` | Prepares a Linux container (cloud agents): submodules, .NET, landing dependencies, and for an app with an `android` section a JDK 17 and ktlint. |
 | `store/check.py`, `store/push.py`, `store/import.py`, `store/push-microsoft.py`, `store/push-google.py` | The store listing (`store` in `companion.json`): each field against the stores' limits (with `store.apple.ios`, the iPhone and iPad version page's too; with `store.google`, Google Play's `google.*` fields: title 30, short description 80, full description 4000, each product's name 55 and description 200; Google Play's push is `push-google.py`); App Store Connect (text, in-app purchases, screenshots, previews, review notes, and a universal app's iOS page and iPhone and iPad screenshots; `--status` reads only); a Partner Center import folder; the Microsoft Store through the Partner Center submission API (`push-microsoft.py status|prepare|commit`: the bundle, the listing text, screenshots and art into a new submission from the last published one, dry run without `--apply`; `store.microsoft.storeId`; the credentials of one Entra application for every app of the account, set up as `store/microsoft-api-setup.md` says); Google Play through the Play Developer API (`push-google.py status|prepare`: the listing text in every language, the icon, feature graphic and phone and tablet screenshots in one edit, and `store.apple.iaps` as one-time products priced in USD and converted per region; dry run without `--apply`; `store.google.packageName`; a service account's JSON key, set up as `store/google-api-setup.md` says). |
 | `landing/` | `@laching/landing`, an npm package (Node 24): a landing page's localized pages, legal pages, sitemap, `_headers` and social cards as Vite plugins. Published to npm by `release.yml`; the app's landing repository depends on it by version. |
@@ -244,6 +245,14 @@ fail when the app drifts from the tools (each rule: `conform.py`'s docstring):
 - **Linked skills.** A skill in `.agents/skills` named like one of `tools/skills` is a link to
   `../../laching/tools/skills/<name>`; the app's own words for it go in `.agents/notes/<name>.md`.
 - **`store.microsoft`** is the schema's shape: `shots` and `publisher`, and `storeId` for the submission API.
+
+What `verify.sh` runs for a path (`--help` lists them): documentation (`.md`, `.markdown`, `.rst`, `.adoc`) leaves the
+app checks alone, so only the store listing's and the app's own checks see it, unless `--all`. The app's Swift is
+`mac.app`, `mac.tests` and `mac.format`'s folders outside the core package; with `mac.iosScheme`, `xcodebuild test`
+runs the iOS tests too, on `ios-destination.py --own "<name> verify"`. `--staged`, the pre-commit hook's mode,
+generates the Xcode project from the index in a scratch copy, so another session's untracked sources don't count.
+`--no-vm` (or `LACHING_NO_VM=1`) leaves the Parallels VM to a session that holds it. On a Mac, Gradle gets Homebrew's
+openjdk@17 and Android Studio's SDK unless `JAVA_HOME` and `ANDROID_HOME` are set.
 
 The app's own checks, which a copied `verify.sh` used to hold, are `verify.checks` in `companion.json`: each a `name`, the
 `paths` that trigger it (an extended regular expression), the command to `run` (bash, from the root) and `slow` for one

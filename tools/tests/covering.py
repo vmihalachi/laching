@@ -44,6 +44,7 @@ COVERS: dict[str, tuple[str, ...]] = {
     "tools/fonts.py": ("test_scripts",),
     "tools/hooks/*": ("test_hook",),
     "tools/install-dev.sh": ("test_scripts",),
+    "tools/ios-destination.py": ("test_ios_destination",),
     "tools/l10n.py": ("test_l10n",),
     "tools/layoutcheck.py": ("test_screens", "test_scripts"),  # check-layout-ios.py and -android.py
     "tools/phrases.py": ("test_l10n",),

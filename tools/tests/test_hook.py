@@ -431,8 +431,9 @@ class StopAndParity(HookTestCase):
         self.assertEqual((done.returncode, done.stdout.strip()), (0, "{}"))
 
     def test_stop_runs_the_fast_checks_and_names_the_slow_ones(self):
-        event = {"session_id": "stop", "tool_name": "Edit",
-                 "tool_input": {"file_path": str(self.root / "macos/FixtureCore/Sources/FixtureCore/A.swift")}}
+        # A conformance test, which the vectors cover and the strings check doesn't (the fixture's German has gaps).
+        conformance = "macos/FixtureCore/Tests/FixtureCoreTests/Conformance/A.swift"
+        event = {"session_id": "stop", "tool_name": "Edit", "tool_input": {"file_path": str(self.root / conformance)}}
         self.assertEqual(self.run_hook("post", event).returncode, 0)
         done = self.run_hook("stop", {"session_id": "stop"})
         self.assertEqual(done.returncode, 2, done.stderr)
