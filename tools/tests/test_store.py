@@ -773,6 +773,11 @@ class StoreTests(FixtureAppTestCase):
         api.calls.clear()
         sync.duo_screenshots(localizations)
         self.assertEqual([c for c in api.calls if c[0] != "GET"], [], "a processing image is left alone")
+        for state in ("APPROVED", "PREPARE_FOR_SUBMISSION"):
+            again["attributes"]["state"] = state
+            api.calls.clear()
+            sync.duo_screenshots(localizations)
+            self.assertEqual([c for c in api.calls if c[0] != "GET"], [], f"an image in review state {state} is left alone")
 
         folder = self.listing.screenshots / "en"
         folder.mkdir(parents=True)

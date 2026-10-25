@@ -143,12 +143,13 @@ def changed(want, have):
 
 def stale(item):
     """True when App Store Connect will never finish an uploaded screenshot or asset library image, so it has to be
-    deleted and uploaded again: FAILED, or any state but COMPLETE and UPLOAD_COMPLETE, like an image left in
-    AWAITING_UPLOAD by an upload that was never committed (no checksum) or that the commit didn't move on. An item
-    without a state reads as fine."""
+    deleted and uploaded again: FAILED, or left in AWAITING_UPLOAD by an upload that was never committed (no checksum)
+    or that the commit didn't move on. Any other state reads as fine: a screenshot's UPLOAD_COMPLETE or COMPLETE, and
+    the review states an asset library image reports once processed (APPROVED, PREPARE_FOR_SUBMISSION), whose
+    placements on a live version can't be deleted. An item without a state reads as fine too."""
     attrs = item["attributes"]
     state = (attrs.get("assetDeliveryState") or {}).get("state") or attrs.get("state")
-    return state is not None and state not in ("COMPLETE", "UPLOAD_COMPLETE")
+    return state in ("FAILED", "AWAITING_UPLOAD")
 
 
 def md5(path):

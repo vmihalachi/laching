@@ -84,6 +84,9 @@ ANDROID_CANVASES = {"android-phone": (1080, 1920), "android-tablet": (2560, 1600
 IOS_CANVASES = {"iphone": (1320, 2868), "ipad": (2064, 2752), "duo": (1398, 2034)}
 # Partner Center takes desktop screenshots from 1366 × 768 up to this.
 MICROSOFT_CANVAS = (3840, 2160)
+# What the blank check leaves out at a Windows capture's sides and bottom, in px: the frame's border and rounded
+# corners, ScreenshotCapture.IsBlank's 8 DIPs at a display scale of up to 300%.
+BLANK_INSET = 24
 CANVASES = ("mac", *ANDROID_CANVASES, *IOS_CANVASES, "microsoft")
 # The simulator's status bar, cut off the iPad's captures: an overridden clock comes with the simulator's English date.
 STATUS_BAR = {"ipad": 48}
@@ -415,8 +418,10 @@ def window_problem(window: Image.Image, margin: int = 0, scaled: bool = False) -
     if not scaled and (window.width + margin > width or window.height + margin > height):
         return (f"is {window.width}×{window.height}, larger than the {width}×{height} canvas (captured at a display scale"
                 " over 200%?)")
-    # Hidden captures can land before the window draws: a title bar over plain white or black.
-    if window.convert("RGB").crop((0, window.height // 4, window.width, window.height)).getcolors(1):
+    # Hidden captures can land before the window draws: a title bar over plain white or black, edged by the frame's
+    # border and rounded corners, which Windows draws whether or not the content has, so they're left out.
+    box = (BLANK_INSET, window.height // 4, window.width - BLANK_INSET, window.height - BLANK_INSET)
+    if box[0] < box[2] and box[1] < box[3] and window.convert("RGB").crop(box).getcolors(1):
         return "is one flat color below its top quarter: captured before the window drew? Capture it again"
     return None
 
