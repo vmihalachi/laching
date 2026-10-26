@@ -119,9 +119,12 @@ from the last published submission). Add `screenshots` when step 6 ran, `art` wh
 edit an API-made submission in Partner Center: the API can't touch it after that (`prepare --replace-pending` deletes it
 and starts over). `store-release.ps1 -Store draft|submit` runs the package and text push right after the bundle.
 
-**By hand** (no credentials): `python3 laching/tools/store/import.py` builds the import folder; the user drags the
-`.msixbundle` into **Packages** (removing the previous one) and picks the folder in **Store listings > Import listings >
-Import folder** (the built-in browser can't pick files). You can fill **Additional Testing Information** (the notes for
+**By hand** (no credentials): `python3 laching/tools/store/import.py` builds the import folder in parts
+(`part1`, `part2`, …: at most 20 MB and 6 languages each, the source language in part1), since Partner Center fails on
+one big import. Always hand the user the parts, never one folder of every language. The user drags the `.msixbundle`
+into **Packages** (removing the previous one) and picks each part in turn in **Store listings > Import listings >
+Import folder** (the built-in browser can't pick files); after part1, check that a language outside it kept its
+listing. You can fill **Additional Testing Information** (the notes for
 certification). Check every section says complete, then **Submit** (ask first unless told to go ahead).
 
 ## 8. Wrap up

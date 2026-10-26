@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import csv
+import importlib.util
 import io
 import json
 import os
@@ -826,15 +827,53 @@ class StoreTests(FixtureAppTestCase):
                                 capture_output=True, encoding="utf8",
                                 env={**os.environ, "COMPANION_ROOT": str(self.root)})
         self.assertEqual(result.returncode, 0, result.stderr)
-        with open(out / "listings.csv", encoding="utf-8-sig", newline="") as f:
+        self.assertEqual(sorted(p.name for p in out.iterdir()), ["part1"], "a small listing fits one part")
+        with open(out / "part1" / "listings.csv", encoding="utf-8-sig", newline="") as f:
             rows = list(csv.reader(f))
         self.assertEqual(rows[0], ["Field", "ID", "Type (Type)", "default", "en", "it", "de"])
         values = {row[0]: row[4:] for row in rows[1:]}
         self.assertEqual(values["Title"], ["Fixture", "Fixture", "Fixture"])
         self.assertEqual(values["DevStudio"], ["Fixture Studio"] * 3)
-        self.assertEqual(values["DesktopScreenshot1"][1], "import/it/1.png")
+        self.assertEqual(values["DesktopScreenshot1"][1], "part1/it/1.png")
         self.assertEqual(values["DesktopScreenshotCaption2"][2], "Einstellungen")
-        self.assertTrue((out / "art" / "box-art.png").exists())
+        self.assertTrue((out / "part1" / "art" / "box-art.png").exists())
+
+    def test_import_always_splits_into_parts(self):
+        store = self.root / "store-listing"
+        for lang in self.listing.langs:
+            folder = store / "microsoft" / "screenshots" / lang
+            folder.mkdir(parents=True)
+            for name in ("1.png", "2.png"):
+                (folder / name).write_bytes(PNG)
+        art = store / "microsoft" / "art"
+        art.mkdir(parents=True)
+        for name in ("poster-art.png", "box-art.png", "super-hero-art.png"):
+            (art / name).write_bytes(PNG)
+        out = self.root / "build" / "import"
+        result = subprocess.run([sys.executable, str(TOOLS / "store" / "import.py"), "--out", str(out),
+                                 "--max-langs", "2", "de", "it", "en"],
+                                capture_output=True, encoding="utf8",
+                                env={**os.environ, "COMPANION_ROOT": str(self.root)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sorted(p.name for p in out.iterdir()), ["part1", "part2"])
+        heads = {}
+        for part in ("part1", "part2"):
+            with open(out / part / "listings.csv", encoding="utf-8-sig", newline="") as f:
+                rows = list(csv.reader(f))
+            heads[part] = rows[0][4:]
+            values = {row[0]: row[4:] for row in rows[1:]}
+            self.assertEqual(values["StoreLogo1080x1080"][0], f"{part}/art/box-art.png", "each part has its own art")
+            self.assertTrue((out / part / "art" / "box-art.png").exists())
+        self.assertEqual(heads, {"part1": ["en", "de"], "part2": ["it"]}, "the source language comes first")
+        self.assertFalse((out / "part1" / "it").exists())
+
+    def test_import_split_keeps_each_part_under_the_cap(self):
+        spec = importlib.util.spec_from_file_location("store_import", TOOLS / "store" / "import.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sizes = {"en": 5, "cs": 5, "da": 5, "de": 9, "es": 1}
+        self.assertEqual(module.split(list(sizes), sizes, 2, 13, 6), [["en", "cs"], ["da"], ["de", "es"]])
+        self.assertEqual(module.split(list(sizes), sizes, 0, 100, 2), [["en", "cs"], ["da", "de"], ["es"]])
 
     def test_import_refuses_a_language_without_its_screenshots(self):
         result = subprocess.run([sys.executable, str(TOOLS / "store" / "import.py"), "--out", str(self.root / "out")],
