@@ -504,12 +504,28 @@ while not (state / "killed").exists():
         self.assertEqual(quiet.returncode, 0, quiet.stdout)
         self.assertEqual(quiet.stdout.strip().splitlines(),
                          ["ok    Laching pins agree", "ok    Laching's tools, not copies (companion.py conform)"])
+        # Documentation beside the vectors leaves the app checks alone; the store listing's text is checked.
+        docs = self.run_script("verify.sh", "--fast", "--", "conformance/README.md", "store-listing/en.md")
+        self.assertEqual(docs.returncode, 0, docs.stdout + docs.stderr)
+        self.assertEqual([line.split(None, 1)[1] for line in docs.stdout.splitlines() if line.startswith("ok")],
+                         ["Laching pins agree", "Laching's tools, not copies (companion.py conform)",
+                          "store listing (store/check.py)"])
+
+    def test_verify_tests_the_core_package_on_vector_and_pin_changes(self):
+        self.fake("swift", f'echo "swift $*" >> "{self.log}"\n')
+        for path in ("macos/FixtureCore/Sources/FixtureCore/A.swift", "conformance/phrases.json", "laching"):
+            if self.log.exists():
+                self.log.unlink()
+            result = self.run_script("verify.sh", "--", path)
+            self.assertIn("ok    swift test (macos/FixtureCore)", result.stdout, path + result.stderr)
+            self.assertIn("swift test --package-path macos/FixtureCore", self.log.read_text())
+        self.assertNotIn("swift test", self.run_script("verify.sh", "--", "conformance/README.md").stdout)
 
     def test_verify_runs_the_apps_own_checks(self):
         config = self.root / "companion.json"
         data = json.loads(config.read_text("utf8"))
         data["verify"] = {"checks": [
-            {"name": "notes are short", "paths": "^notes/", "run": "test $(wc -l < notes/a.md) -lt 3"},
+            {"name": "notes are short", "paths": "^notes/", "run": "test $(wc -l < notes/a.md) -lt 3", "docs": True},
             {"name": "the slow one", "paths": "^notes/", "run": "echo ran > slow.txt", "slow": True},
         ]}
         config.write_text(json.dumps(data), "utf8")
@@ -525,7 +541,8 @@ while not (state / "killed").exists():
         slow = self.run_script("verify.sh", "--", "notes/a.md")
         self.assertEqual(slow.returncode, 1)
         self.assertIn("FAIL  notes are short", slow.stdout)
-        self.assertIn("ok    the slow one", slow.stdout)
+        self.assertNotIn("the slow one", slow.stdout, "documentation counts only for a check marked docs")
+        self.assertIn("ok    the slow one", self.run_script("verify.sh", "--", "notes/a.json").stdout)
         self.assertEqual((self.root / "slow.txt").read_text().strip(), "ran", "run from the app's root")
 
     def test_verify_all_skips_what_the_app_lacks(self):
@@ -573,6 +590,22 @@ while not (state / "killed").exists():
             self.assertEqual(ran(self.run_script("verify.sh", "--fast", "--", path)), ["FAIL  character.py --check"], path)
         self.assertEqual(ran(self.run_script("verify.sh", "--fast", "--", "notes.md")), [])
 
+    def test_verify_compares_only_the_files_an_export_writes(self):
+        ran = lambda: [line for line in self.run_script("verify.sh", "--fast", "--", "companion.json").stdout.splitlines()
+                       if "match the catalog" in line]
+        self.assertEqual(self.run_script("l10n.py", "export-windows").returncode, 0)
+        strings = self.root / "windows" / "Fixture.App" / "Strings"
+        (strings / "Theme.xaml").write_text("<ResourceDictionary />\n", "utf8")
+        self.assertEqual(ran(), ["ok    .resw files match the catalog"], "the app's own files can sit beside them")
+        stale = strings / "fr" / "Resources.resw"
+        stale.parent.mkdir()
+        stale.write_text((strings / "de" / "Resources.resw").read_text("utf8"), "utf8")
+        self.assertEqual(ran(), ["FAIL  .resw files match the catalog"], "a language the catalog dropped")
+        stale.unlink()
+        resw = strings / "de" / "Resources.resw"
+        resw.write_text(resw.read_text("utf8").replace("</root>", "<!-- by hand --></root>"), "utf8")
+        self.assertEqual(ran(), ["FAIL  .resw files match the catalog"], "an edited file")
+
     def commit_app(self) -> None:
         """The fixture app as a repository, with laching/ a checkout of its own on the pinned tag."""
         laching = self.root / "laching"
@@ -611,6 +644,13 @@ case "$1" in status) echo "VM $2 exist running" ;; exec) [ "$3" = --current-user
         self.assertIn("the copy into the VM failed", result.stdout)
         self.assertIn("powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \\\\Mac\\AllFiles",
                       self.log.read_text())
+        # --no-vm (or LACHING_NO_VM) leaves the VM to the session that holds it.
+        self.log.unlink()
+        for args, env in ((["--no-vm"], {}), ([], {"LACHING_NO_VM": "1"})):
+            result = self.run_script("verify.sh", *args, "--", app, env={"HOME": str(self.root), **env})
+            self.assertIn("skip  WinUI app: builds on Windows or in the Parallels VM (left alone: "
+                          f"{'--no-vm' if args else 'LACHING_NO_VM=1'})", result.stdout, result.stderr)
+            self.assertFalse(self.log.exists(), "the VM isn't asked")
 
     def test_verify_reads_the_submodules_under_a_git_hook(self):
         self.commit_app()
@@ -628,14 +668,21 @@ case "$1" in status) echo "VM $2 exist running" ;; exec) [ "$3" = --current-user
         project.write_text("// generated\n", "utf8")
         self.commit_app()
         # XcodeGen's group for a source outside mac.dir, named after the folder the app is checked out in ("app").
-        self.fake("xcodegen", f"printf '\\t\\tname = app;\\n' >> '{project}'\n")
+        self.fake("xcodegen", "printf '\\t\\tname = app;\\n' >> Fixture.xcodeproj/project.pbxproj\n")
         self.fake("xcrun", "exit 0\n")
         spec = self.root / "macos" / "project.yml"
         spec.write_text(spec.read_text("utf8") + "\n", "utf8")
         git(self.root, "add", "macos/project.yml")
+        # The pre-commit hook generates from the index, in a copy named as the checkout.
+        (self.root / "macos" / "Untracked.swift").write_text("// another session's\n", "utf8")
         result = self.run_script("verify.sh", "--fast", "--staged")
         self.assertIn("FAIL  xcodegen (project.pbxproj in sync)", result.stdout, result.stderr)
+        self.assertIn("stale: macos/Fixture.xcodeproj/project.pbxproj", result.stdout)
         self.assertIn("named after this checkout's folder (app)", result.stdout)
+        self.assertEqual(project.read_text("utf8"), "// generated\n", "the checkout's project is left alone")
+        result = self.run_script("verify.sh", "--fast", "--", "macos/project.yml")
+        self.assertIn("ok    xcodegen (project.pbxproj in sync)", result.stdout, result.stderr)
+        self.assertIn("name = app;", project.read_text("utf8"), "regenerated in place")
 
     @unittest.skipUnless(sys.platform == "darwin", "ditto and lsregister are macOS tools")
     def test_install_dev_copies_the_debug_build(self):

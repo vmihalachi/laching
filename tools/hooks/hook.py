@@ -116,7 +116,7 @@ def setup(root=None):
         ("dotnet-app-test", NAMES["RE_WINDOWS_APP_TESTS"],
          f"Windows app model tests (dotnet test {NAMES['WINDOWS_DIR']}/{NAMES['WINDOWS_APP_TESTS']})"),
         ("landing-build", NAMES["RE_LANDING"], f"landing build ({landing} build)"),
-        ("winui-build", NAMES["RE_WINDOWS_APP"],
+        ("winui-build", NAMES["RE_WINDOWS_BUILD"],
          f"WinUI app build ({tools}/windows/vm.sh build in the Parallels VM, or dotnet build on Windows)"),
         ("gradle-core-test", NAMES["RE_ANDROID_CORE"],
          f"Kotlin core tests (cd {NAMES['ANDROID_DIR']} && ./gradlew :{NAMES['ANDROID_CORE']}:test)"),

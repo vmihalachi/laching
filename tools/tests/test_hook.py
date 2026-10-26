@@ -263,7 +263,8 @@ class StopAndParity(HookTestCase):
         self.assertEqual(set(kinds), {"xcodebuild-test", "conformance", "swift-test", "dotnet-test", "dotnet-app-test",
                                       "winui-build"}, "no landing")
         self.assertRegex("windows/Fixture.App/Views/HomeView.xaml", kinds["winui-build"])
-        self.assertNotRegex("windows/Fixture.Core/A.cs", kinds["winui-build"])
+        self.assertRegex("windows/Fixture.Core/A.cs", kinds["winui-build"], "the app references the core")
+        self.assertNotRegex("windows/Fixture.Core.Tests/A.cs", kinds["winui-build"])
         self.assertRegex("macos/FixtureCore/Sources/FixtureCore/A.swift", kinds["conformance"])
         self.assertRegex("windows/Fixture.Core/A.cs", kinds["dotnet-test"])
         self.assertNotRegex("windows/Fixture.App/A.cs", kinds["dotnet-test"])
@@ -431,8 +432,9 @@ class StopAndParity(HookTestCase):
         self.assertEqual((done.returncode, done.stdout.strip()), (0, "{}"))
 
     def test_stop_runs_the_fast_checks_and_names_the_slow_ones(self):
-        event = {"session_id": "stop", "tool_name": "Edit",
-                 "tool_input": {"file_path": str(self.root / "macos/FixtureCore/Sources/FixtureCore/A.swift")}}
+        # A conformance test, which the vectors cover and the strings check doesn't (the fixture's German has gaps).
+        conformance = "macos/FixtureCore/Tests/FixtureCoreTests/Conformance/A.swift"
+        event = {"session_id": "stop", "tool_name": "Edit", "tool_input": {"file_path": str(self.root / conformance)}}
         self.assertEqual(self.run_hook("post", event).returncode, 0)
         done = self.run_hook("stop", {"session_id": "stop"})
         self.assertEqual(done.returncode, 2, done.stderr)

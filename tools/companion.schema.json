@@ -32,7 +32,7 @@
         "project": { "type": "string", "description": "The .xcodeproj, relative to mac.dir." },
         "projectSpec": { "type": "string", "description": "The XcodeGen spec, relative to mac.dir." },
         "scheme": { "type": "string" },
-        "iosScheme": { "type": "string", "description": "The iPhone and iPad app's scheme, when the project has one: `l10n.py sync` builds it too (for the iOS Simulator), so strings only it shows aren't marked stale." },
+        "iosScheme": { "type": "string", "description": "The iPhone and iPad app's scheme, when the project has one: `l10n.py sync` builds it too (for the iOS Simulator), so strings only it shows aren't marked stale, and `verify.sh` runs its tests on a simulator of their own." },
         "app": { "type": "string", "description": "The app target's folder, relative to mac.dir." },
         "core": { "type": "string", "description": "The core Swift package's folder, relative to mac.dir; an app without one leaves it out." },
         "coreModule": { "type": "string" },
@@ -496,7 +496,8 @@
               "name": { "type": "string", "description": "The line verify.sh prints." },
               "paths": { "type": "string", "pattern": "^[^\t]+$", "description": "An extended regular expression over the changed root-relative paths; the check runs when one matches (and with --all)." },
               "run": { "type": "string", "pattern": "^[^\t]+$", "description": "The command, run by bash from the app's root." },
-              "slow": { "type": "boolean", "description": "Skipped by --fast." }
+              "slow": { "type": "boolean", "description": "Skipped by --fast." },
+              "docs": { "type": "boolean", "description": "Documentation changes (*.md, *.rst, …) count too; the checks leave them out otherwise, as the built-in app checks do." }
             }
           }
         }
