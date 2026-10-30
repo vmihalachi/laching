@@ -17,6 +17,7 @@ The C# side mirrors Swift folder for folder and file for file. Port in the same 
 | `Sources/LachingSystem/<Name>.swift` | `dotnet/Laching.Windows/System/<Name>.cs` |
 | `Sources/LachingShell/<Name>.swift` | `dotnet/Laching.Windows/Shell/<Name>.cs` |
 | `Sources/LachingStore/<Name>.swift` | `dotnet/Laching.Core/Store/<Name>.cs`; the platform backend is `dotnet/Laching.Windows/Shell/StoreContextBackend.cs` |
+| `Sources/LachingTesting/MockStoreBackend.swift` | `dotnet/Laching.Core/Store/MockStoreBackend.cs` (apps use it in preview modes) |
 | `Sources/LachingCompanionUI/…` | by role, not file for file: the logic in `dotnet/Laching.Companion.Shell/`, the WinUI 3 half in `dotnet/Laching.Windows.Companion/` (`plans/0.8/README.md` maps every file) |
 | `Tests/LachingCoreTests/<Folder>/<Name>Tests.swift` | `dotnet/Laching.Core.Tests/<Folder>/<Name>Tests.cs` |
 | `Tests/LachingCoreTests/Conformance/` | `dotnet/Laching.Core.Tests/Conformance/` |

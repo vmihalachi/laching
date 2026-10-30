@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Laching: building blocks for menu bar and tray apps</title>
+<title>Laching: building blocks for menu bar, tray and phone apps</title>
 <meta name="description" content="Laching is an MIT Swift package, .NET packages and Kotlin modules with the parts every menu bar, tray or phone reminder app needs: a reminder scheduler, permission-free system signals, app-shell plumbing, a purchase store for the App Store, the Microsoft Store and Google Play, and the core of a desk companion.">
 <meta name="color-scheme" content="light dark">
 <link rel="canonical" href="https://vmihalachi.github.io/laching/">
@@ -45,7 +45,7 @@
   <div class="wrap hero-grid">
     <div class="hero-copy">
       <p class="version"><a href="https://github.com/vmihalachi/laching/releases">v0.20.11</a><span>Swift · .NET · Kotlin · MIT</span></p>
-      <h1>Building blocks for menu bar and tray apps</h1>
+      <h1>Building blocks for menu bar, tray and phone apps</h1>
       <p class="lede">The parts every little desktop or phone app needs and nobody wants to write twice: a reminder scheduler, permission-free system signals, app-shell plumbing and, for a desk companion, a character that talks and knows when to be quiet. Swift for macOS and iOS, .NET for Windows, Kotlin for Android.</p>
 
       <div class="install" data-tabs>
@@ -152,7 +152,7 @@
     </div>
     <div>
       <h2>Never phones home</h2>
-      <p>No network code anywhere in the package: no analytics, no update checks, no telemetry. The Swift package has no dependencies at all.</p>
+      <p>No network code in the app packages and modules: no analytics, no update checks, no telemetry; only the platform's own store talks to its service. The Swift package has no dependencies at all.</p>
     </div>
     <div>
       <h2>One behavior, three languages</h2>
@@ -369,7 +369,7 @@ dotnet add package Laching.Testing   <span class="c"># test projects</span></cod
       <div class="install-card">
         <h3>Gradle, for Android</h3>
         <p class="req">Android 8+ (API 26), JDK 17; not on Maven</p>
-<pre tabindex="0"><code><span class="c">// settings.gradle.kts, laching/ a git submodule</span>
+<pre tabindex="0"><code><span class="c">// android/settings.gradle.kts, with laching/ a submodule at the repo root</span>
 includeBuild(<span class="s">"../laching/kotlin"</span>) {
     dependencySubstitution {
         substitute(module(<span class="s">"laching:core"</span>))

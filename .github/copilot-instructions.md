@@ -14,6 +14,6 @@ The rules that matter most, for tools that only read this file (such as code rev
 - **Conformance vectors are generated, never edited by hand:** `conformance/` changes only through the Swift code and
   `scripts/conformance.sh`.
 - **Behavior changes are additive and vector-tested:** a config field whose default keeps every vector byte-identical,
-  a unit test, a vector case and the C# port, all in the same change.
+  a unit test, a vector case and the C# port (and the Kotlin one, for the scheduler), all in the same change.
 - **C# mirrors Swift** folder for folder and file for file (the deviations are in `docs/layout.md`), with
   source-generated JSON only: the apps publish with Native AOT.

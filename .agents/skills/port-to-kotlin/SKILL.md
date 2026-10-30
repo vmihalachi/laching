@@ -59,5 +59,7 @@ cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@17 ./gradlew :core:test :testin
 cd kotlin && ./gradlew :android:assembleDebug   # needs the Android SDK (ANDROID_HOME); otherwise kotlin.yml builds it
 ```
 
-`scripts/verify.sh` runs the first two when `kotlin/` or `conformance/` changed, finding a JDK 17 in `JAVA_HOME` or
-Homebrew's `openjdk@17`. The style is `kotlin/.editorconfig` (`ktlint_official`, 120 columns).
+The style is `kotlin/.editorconfig` (`ktlint_official`, 120 columns). `scripts/verify.sh` runs ktlint when `kotlin/`
+changed (and skips it for any version but the one `kotlin.yml` pins), and, without `--fast`, the `:core` and
+`:testing` tests when `kotlin/` or `conformance/` changed, on a JDK 17 from `JAVA_HOME`, else Homebrew's
+`openjdk@17`, else the `java` on `PATH`.
