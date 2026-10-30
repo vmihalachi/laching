@@ -334,7 +334,8 @@ section a JDK 17 and ktlint.
 
 ## The store listing: `store/`
 
-The store listing (`store` in `companion.json`), one tool per store.
+The store listing (`store` in `companion.json`): one check against every store's limits, then a tool per way it reaches
+a store (two for the Microsoft Store: the Partner Center import and the submission API).
 
 ### `store/check.py`
 
@@ -386,7 +387,9 @@ for raster skins, its asset folders (from `characters`); `synth.py`'s `.wav` fil
 over `hooks.bigFileLines` lines (600) whole: a `Read` without `offset`/`limit`, `cat`, or `sed` without a range; the
 refusal names the outline command (`grep -n '^\(func\|class\|...\)'`) to run first. On `Stop` it tells the user, once
 per compaction cycle, when Claude's context is past `hooks.longSessionTokens` (130000; 0 disables), so the next task
-goes to a fresh session.
+goes to a fresh session. On `SessionStart` after a compaction or a resume (`hook.py resume`) it prints where the session
+was, as the agent's context: the files it edited, the slow checks it ran, the branch, git status and the recent
+commits (nothing when the tree is clean and the session has no log).
 
 ## `skills/`
 
@@ -485,7 +488,8 @@ app builds, packages and checks the same way. Its `.csproj` sets its own propert
   WinUI half sits under `#if WINDOWS` (defined for `-windows` target frameworks only). A `net10.0` test project
   (`windows.appTests`) compiles those files by link and reads the app's English `.resw` through `ReswStrings`, so its
   assertions read the real words; `verify.sh` runs it when the app or it changes.
-- **Wrappers**, as for the shell scripts: `windows/scripts/screenshots.ps1` and `smoke-package.ps1`, e.g.
+- **Wrappers**, as for the shell scripts ([*Adopt the tools*](../docs/getting-started.md#adopt-the-tools), step 3):
+  `windows/scripts/screenshots.ps1` and `smoke-package.ps1`, e.g.
 
   ```powershell
   & "$PSScriptRoot/../../laching/tools/windows/screenshots.ps1" @args
@@ -581,8 +585,8 @@ short workflows call at the release it pins: the Store release (both packages, t
 push, the tag) and the WinUI build check (the traps, the tests, both packages, every window).
 
 **The Store release** is `store-release.ps1` on a PC, or the app's two short workflows in CI, each calling Laching's
-reusable one at the release the app pins (the `@vX.Y.Z` must be `laching.tag`; `companion.py bump` doesn't move it,
-`conform` says when it lags):
+reusable one at the release the app pins (the `@vX.Y.Z` must be `laching.tag`; `companion.py bump` moves it with
+the other pins, and `pins` and `conform` say when it lags):
 
 ```yaml
 # .github/workflows/windows-release.yml: inputs hosted (boolean), tag (boolean), store (none, draft, submit)

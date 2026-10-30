@@ -88,7 +88,9 @@ What each tool does: [`tools/README.md`](../tools/README.md).
        "Stop": [{ "hooks": [
          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/laching/tools/hooks/hook.py\" stop", "timeout": 180 }] }],
        "SessionStart": [{ "matcher": "startup", "hooks": [
-         { "type": "command", "command": "[ \"$CLAUDE_CODE_REMOTE\" != true ] || \"$CLAUDE_PROJECT_DIR/scripts/setup-linux.sh\"", "timeout": 600 }] }]
+         { "type": "command", "command": "[ \"$CLAUDE_CODE_REMOTE\" != true ] || \"$CLAUDE_PROJECT_DIR/scripts/setup-linux.sh\"", "timeout": 600 }] },
+         { "matcher": "compact|resume", "hooks": [
+         { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/laching/tools/hooks/hook.py\" resume", "timeout": 10 }] }]
      }
    }
    ```
@@ -120,7 +122,7 @@ What each tool does: [`tools/README.md`](../tools/README.md).
 7. **Android apps.** The Kotlin side (`kotlin/`: `:core`, the pure mirror of `LachingCore` and the store that replays
    the scheduler vectors; `:android`, the app plumbing; `:testing`) is not published to a Maven repository: the app's
    Gradle build includes it from the submodule, and `companion.py link` points it at a checkout instead through
-   `local.properties`. In the app's `settings.gradle.kts`:
+   `local.properties`. In `android/settings.gradle.kts` (the path below is relative to `android/`):
 
    ```kotlin
    val localProperties = java.util.Properties().apply {
