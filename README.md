@@ -25,7 +25,7 @@ others aren't monitored, and releases follow what the apps need.
 | `LachingTesting` | `Laching.Testing` | Fakes for every protocol, fixtures (a phrase bank, defaults, a vector and a raster skin) and the shared conformance vectors' helpers for the apps' own test targets: Swift generates an app's companion vectors, .NET replays them (each check returns its problems, so neither side needs a particular test framework). The standard picker and quiet case lists, `CompanionVectors` and `ConformanceSuite.companion` build an app's whole suite; `CompanionReplay` replays it. On .NET also the companion shell's fakes (`FakeHost`, `ManualTimers`, `FakeSpeaker`…), for testing an app model without a screen. |
 | `tools/` | `tools/` | Not a package: Python tools, shell scripts and agent skills for companion apps, which vendor this repo as a `laching/` git submodule pinned to the release. Localization, phrase sync, recorded voices, character art compiling, sounds, fonts, screenshots, verification (including a check that every Laching pin agrees), the store listing tools (field limits, App Store Connect, Partner Center) and agent hooks, all driven by the app's `companion.json`; and `@laching/landing`, the landing page's plumbing as Vite plugins, published to npm. See [`tools/README.md`](tools/README.md). |
 
-Kotlin, for Android (`kotlin/`, a Gradle build an app includes from the submodule; `tools/README.md`): `laching.core`
+Kotlin, for Android (`kotlin/`, a Gradle build an app includes from the submodule; [`kotlin/README.md`](kotlin/README.md)): `laching.core`
 mirrors `LachingCore` (the scheduler, the random source, plurals, settings, the store, and the drawing math .NET doesn't have),
 `laching.android` is the phone-side plumbing (Play Billing, alarms, notifications, reduce motion, the screenshot run)
 and `laching.testing` the fakes. No companion in Kotlin yet.
@@ -38,6 +38,9 @@ share nothing with the rest and no app here uses them; Adjudeca does. See [`web/
 Everything in `LachingSystem` reads state and never prompts. None of it talks to the network.
 
 ## Install
+
+A new app from zero (the packages, the submodule, `companion.json`, the hook and the skills) is
+[`docs/getting-started.md`](docs/getting-started.md).
 
 **Swift** (macOS 14+), in `Package.swift` or Xcode's package list, pinned to a tag:
 

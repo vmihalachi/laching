@@ -15,7 +15,7 @@ no app's strings. Change these together, in one pull request:
 | `tools/companion.schema.json` | A new or changed key, with its `type` and a `description` that states its default when it has one (the schema has no `default` keyword). `companion.py validate` checks every app against it, and the schema is the source of truth for every section. |
 | `tools/tests/test_<name>.py` | A test for the change, over `tools/tests/fixture-app/` (add the key there when the tool needs it) or a temporary folder. Tests never reach the network. |
 | `tools/tests/covering.py` | A new file gets a `COVERS` entry naming the tests that exercise it, or `test_covering` fails; a file every test leans on goes in `SHARED`. |
-| `tools/README.md` | The tool's line in the table and what the README says about it: commands, keys, what it never does. |
+| `tools/README.md` | The tool's line in the table (one short clause, linked to its section) and its section: commands, keys, what it never does. |
 
 ## Rules
 
