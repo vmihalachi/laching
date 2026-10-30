@@ -16,12 +16,15 @@ The C# side mirrors Swift folder for folder and file for file. Port in the same 
 | `Sources/LachingTesting/<Folder>/<Name>.swift` | `dotnet/Laching.Testing/<Folder>/<Name>.cs` (generators stay Swift; .NET gets the replay bodies in `Conformance/Companion/`) |
 | `Sources/LachingSystem/<Name>.swift` | `dotnet/Laching.Windows/System/<Name>.cs` |
 | `Sources/LachingShell/<Name>.swift` | `dotnet/Laching.Windows/Shell/<Name>.cs` |
+| `Sources/LachingStore/<Name>.swift` | `dotnet/Laching.Core/Store/<Name>.cs`; the platform backend is `dotnet/Laching.Windows/Shell/StoreContextBackend.cs` |
+| `Sources/LachingCompanionUI/…` | by role, not file for file: the logic in `dotnet/Laching.Companion.Shell/`, the WinUI 3 half in `dotnet/Laching.Windows.Companion/` (`plans/0.8/README.md` maps every file) |
 | `Tests/LachingCoreTests/<Folder>/<Name>Tests.swift` | `dotnet/Laching.Core.Tests/<Folder>/<Name>Tests.cs` |
 | `Tests/LachingCoreTests/Conformance/` | `dotnet/Laching.Core.Tests/Conformance/` |
 | `Tests/LachingCompanionTests/<Folder>/<Name>Tests.swift` | `dotnet/Laching.Companion.Tests/<Folder>/<Name>Tests.cs` |
 
 System and Shell names follow the platform where the concept differs (`ScreenLockWatcher` ↔ `SessionLockWatcher`).
-Some files exist on one side only (`LachingStore`, `TrayIconHost`); don't invent a twin for those.
+Some files exist on one side only (`StoreKitBackend`, `TrayIconHost`); don't invent a twin for those. The store is on
+both sides. `Sources/LachingCore/Drawing/` has no C# twin: the drawing math is Swift and Kotlin only (`port-to-kotlin`).
 
 ## Translation rules
 
@@ -38,9 +41,10 @@ Some files exist on one side only (`LachingStore`, `TrayIconHost`); don't invent
 
 ## Verify
 
+From the repository's root:
+
 ```sh
-cd dotnet && dotnet test Laching.Core.Tests        # replays conformance/scheduler; failures name the vector and step
-dotnet test Laching.Companion.Tests               # replays conformance/companion
+dotnet test dotnet/Laching.Tests.slnf   # Core, Companion, Companion.Shell and Testing; the vector failures name the vector and step
 dotnet format whitespace dotnet --folder
 ```
 

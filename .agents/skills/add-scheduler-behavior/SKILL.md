@@ -1,11 +1,11 @@
 ---
 name: add-scheduler-behavior
-description: Use when adding or changing how ReminderScheduler decides to remind, postpone or hold (a new SchedulerConfig field, a new busy reason, a new step op), in Swift or C#. Walks the additive, vector-tested path so existing conformance vectors stay byte-identical and the C# port lands in the same change.
+description: Use when adding or changing how ReminderScheduler decides to remind, postpone or hold (a new SchedulerConfig field, a new busy reason, a new step op), in Swift, C# or Kotlin. Walks the additive, vector-tested path so existing conformance vectors stay byte-identical and the C# and Kotlin ports land in the same change.
 ---
 
 # Add scheduler behavior
 
-Swift is the reference. Vectors are generated from it and replayed by C#. Do every step in one change.
+Swift is the reference. Vectors are generated from it and replayed by C# and Kotlin. Do every step in one change.
 
 ## 1. Config field (Swift)
 
@@ -57,7 +57,23 @@ Follow the `port-to-csharp` skill. For the scheduler that means:
   `OptionalDouble(c, "<key>", <default>)` (or a matching optional reader). New ops go in the replay `switch`.
 - `dotnet/Laching.Core.Tests/Scheduling/ReminderSchedulerTests.cs`: mirror the Swift unit tests.
 
-## 7. Finish
+## 7. Kotlin port
+
+Follow the `port-to-kotlin` skill. For the scheduler that means:
+
+- `kotlin/core/src/main/kotlin/laching/core/scheduling/SchedulerConfig.kt`: a `val` at the end of the data class, same
+  default, durations in `…Seconds` doubles.
+- `kotlin/core/src/main/kotlin/laching/core/scheduling/ReminderScheduler.kt`: the same logic as Swift.
+- `kotlin/core/src/test/kotlin/laching/core/scheduling/SchedulerConformanceTests.kt` → `config()`: read the key as an
+  optional with the default (`json["<key>"]?.jsonPrimitive?.doubleOrNull ?: <default>`). New ops go in `when (op)`.
+- `kotlin/core/src/test/kotlin/laching/core/scheduling/ReminderSchedulerTests.kt`: mirror the Swift unit tests.
+
+```sh
+cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@17 ./gradlew :core:test :testing:test   # a JDK 17, as verify.sh finds
+```
+
+## 8. Finish
 
 - The pull request's title names the field (the release notes are made from it); label it `breaking` if it is.
-- `scripts/verify.sh` (runs swift-format, swift test, vectors-current, dotnet format and dotnet test as applicable).
+- `scripts/verify.sh` (runs swift-format, swift test, vectors-current, dotnet format and dotnet test, ktlint and
+  gradle's `:core:test :testing:test` as applicable).
