@@ -5,7 +5,7 @@ The complete rules (moved from `AGENTS.md`, which keeps the short form).
 - **Public API is deliberate.** Every public type gets a doc comment saying what it does, what it needs and what it
   never does (for example "never prompts for a permission"). Keep type names that mybackhurts already uses
   (`ReminderScheduler`, `SchedulerConfig`, `Clock`, `BusyStateProvider`…) so adopting the package is an import swap.
-- **Swift 6 language mode** (strict concurrency; public value types are `Sendable`), macOS 14+, iOS 17+ (Swift), Windows 10+ (.NET), Android 8+ (Kotlin), no dependencies. `LachingCore` stays Foundation-only and `LachingCompanion`
+- **Swift 6 language mode** (strict concurrency; public value types are `Sendable`), macOS 14+, iOS 17+ (Swift), Windows 11 (.NET), Android 8+ (Kotlin), no dependencies. `LachingCore` stays Foundation-only and `LachingCompanion`
   Foundation and Observation only (both build on Linux); anything that imports AppKit, SwiftUI, CoreAudio, AVFoundation,
   IOKit or Carbon goes in `LachingSystem`, `LachingShell` or `LachingCompanionUI`.
 - **Classes an app drives are `@MainActor`; the protocols injected into them aren't `Sendable`.**
@@ -27,7 +27,7 @@ The complete rules (moved from `AGENTS.md`, which keeps the short form).
   or touch the network, it doesn't belong here.
 - **Behavior changes are additive and vector-tested.** New scheduler behavior gets a config field whose default keeps
   every existing vector byte-identical, a unit test, a vector case, and the C# port in the same change
-  (`cd dotnet && dotnet test` tells you what to port). New fields in a companion vector are optional and omitted at
+  (`dotnet test dotnet/Laching.Tests.slnf` tells you what to port). New fields in a companion vector are optional and omitted at
   their default, so the apps' committed vectors stay byte-identical; the C# loaders read an absent field as the default.
 - **`conformance/companion` pins mechanism, over fixtures.** The picker, cadence, quiet rules, coordinator, desktop
   presence and rig are pinned here over `LachingTesting`'s fixture bank, defaults and skins; each app pins its own
@@ -36,7 +36,7 @@ The complete rules (moved from `AGENTS.md`, which keeps the short form).
   draws under the same `affine` as a vector one. Pose vectors pin each layer's name, the six affine numbers and the
   content kind, never pixels; the menu bar glyph stays a vector line drawing for every skin.
 - **C# mirrors Swift** folder for folder and file for file (`Sources/LachingCore/Scheduling/ReminderScheduler.swift` ↔
-  `dotnet/Laching.Core/Scheduling/ReminderScheduler.cs`). Core folders: `Scheduling/`, `Random/`, `Localization/`, `Settings/`; Companion folders:
+  `dotnet/Laching.Core/Scheduling/ReminderScheduler.cs`). Core folders: `Scheduling/`, `Random/`, `Localization/`, `Settings/` (`Drawing/` is Swift and Kotlin only, with no C# twin); Companion folders:
   `Phrases/`, `Cadence/`, `Rules/`, `Settings/`, `Coordination/`, `Desktop/`, `Figures/`, `Skins/`. `LachingSystem`
   and `LachingShell` map onto `Laching.Windows/System/` and `Laching.Windows/Shell/`. Where the C# side deviates, the
   row in `docs/layout.md` says so: the store lives under `dotnet/Laching.Core/Store/`, `Laching.Testing` has a layout
@@ -80,5 +80,5 @@ The complete rules (moved from `AGENTS.md`, which keeps the short form).
   - When `web.yml`'s Monday check says Cloudflare's IPv4 ranges changed, update
     `src/Laching.Web.Aspire/cloudflare-ips-v4.txt` and release.
   - Tests never reach the network; the Jobs tests need PostgreSQL and each makes its own database.
-- Formatting is enforced in CI: `.swift-format` (4 spaces, 140 columns), `dotnet/.editorconfig` and
-  `web/.editorconfig`.
+- Formatting is enforced in CI: `.swift-format` (4 spaces, 140 columns), `dotnet/.editorconfig`, `web/.editorconfig`
+  and `kotlin/.editorconfig` (ktlint's `ktlint_official` style, 120 columns; `kotlin.yml` pins its version).

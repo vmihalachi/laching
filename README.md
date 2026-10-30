@@ -16,17 +16,17 @@ others aren't monitored, and releases follow what the apps need.
 
 | Swift product | .NET package | What it does |
 |---|---|---|
-| `LachingCore` | `Laching.Core` | Pure logic. `ReminderScheduler`: an interval timer with active hours and weekdays, quiet hours, an idle reset ("you were away, the timer restarts"), a hold while the user is busy with a grace period after, snooze, "after my next call" and pause. `Clock`, `IdleTimeProvider` and `BusyStateProvider` protocols so it runs on an injected clock. A seeded `SplitMix64` random source for deterministic jitter. No OS or UI dependencies, so it builds anywhere Swift, .NET or Kotlin runs. |
+| `LachingCore` | `Laching.Core` | Pure logic. `ReminderScheduler`: an interval timer with active hours and weekdays, quiet hours, an idle reset ("you were away, the timer restarts"), a hold while the user is busy with a grace period after, snooze, "after my next call" and pause. `Clock`, `IdleTimeProvider` and `BusyStateProvider` protocols so it runs on an injected clock. A seeded `SplitMix64` random source for deterministic jitter. The drawing math (SVG path sampling, keyframes, polylines, a hand-drawn wobble), in Swift and Kotlin only: it has no C# port. No OS or UI dependencies, so it builds anywhere Swift, .NET or Kotlin runs. |
 | `LachingCompanion` | `Laching.Companion` | The pure core of a desk companion: a phrase bank and picker (lines, jokes told in beats, tunes; scoped by skin, flavor and language), chatter cadence presets, quiet rules and mood, write-through settings an app subclasses, a coordinator that replays a whole day from a seed, desktop presence, skins, and a rig that animates vector or raster character art. The app injects its lines, defaults, skins and palette; the .NET side loads them from the JSON the Swift side writes (`PhraseBank.Parse`, `CharacterArt.Parse`). |
 | `LachingSystem` | `Laching.Windows` | The real providers. Idle time from the last input event. **Call detection without permissions:** whether another app is using the camera or the microphone, read from device state (CoreAudio's process list on macOS, the capability consent store on Windows), never by opening a device. Full-screen detection. Power source (battery, charging, level). Output muted and route. Screen locked. Appearance changes. |
-| `LachingShell` | `Laching.Windows` | Menu bar / tray app plumbing. A status item with a popover panel, a right-click menu and an animated glyph the app draws. Speech: a speaker (the system voice or a recorded clip), a sequencer that tells a joke in beats, a library of recorded voices that knows which clips are current, a chime player. A window manager that shows the Dock icon only while a window is open, a login item toggle, "was I launched at login?", a notification poster with categories and actions, a floating desktop window (macOS), a raw `Shell_NotifyIcon` tray icon host with a native menu, single-instance startup, a `.resw` lookup, drawing helpers (SVG path sampling, keyframes, a hand-drawn wobble). |
+| `LachingShell` | `Laching.Windows` | Menu bar / tray app plumbing. A status item with a popover panel, a right-click menu and an animated glyph the app draws. Speech: a speaker (the system voice or a recorded clip), a sequencer that tells a joke in beats, a library of recorded voices that knows which clips are current, a chime player. A window manager that shows the Dock icon only while a window is open, a login item toggle, "was I launched at login?", a notification poster with categories and actions, a floating desktop window (macOS), a raw `Shell_NotifyIcon` tray icon host with a native menu, single-instance startup and a `.resw` lookup; on Apple platforms it re-exports `LachingCore`'s drawing types. |
 | `LachingCompanionUI` | `Laching.Companion.Shell` + `Laching.Windows.Companion` | macOS: the companion on screen, over `LachingCompanion`. `SignalHub` (the snapshot and the events from the system signals), the menu bar glyph, `CharacterView` (vector and image parts, the wake spring), `DesktopCompanion` (the character and its speech bubble on the desktop), `DeliveryPerformer` (bubble, blip, speech in beats, the notification), `CompanionNotifier`, a `CompanionPalette` the app sets, the speech bubble and status pill, and `ScreenshotCapture` for screenshot runs. Since 0.7 also the companion shell an app subclasses: `CompanionAppModel` (the tick, the channels, the status item, the desktop, the windows, previews, mute and undo, the status line), its delegate and menus, the Settings rows and editors, the Support window, the window chrome and a `ScreenshotScript`; each takes its words from the app. Since 0.8 the same shell on Windows, in two packages: `Laching.Companion.Shell` (`net10.0`, tested on any OS) is the logic against small interfaces (the app model, the menus as data, speech in beats and recorded voices, the delivery performer, the signal hub, the desktop layout, a screenshot run's sample environment), and `Laching.Windows.Companion` (WinUI 3) implements them: the app's `Application`, the tray status item with its glyph and panel, the windows, the speaker, chime and notifier, the character on the desktop, and the character canvas, speech bubble, status pill, chrome, Settings rows, Support window and screenshot capture. |
 | `LachingStore` | `Laching.Core` (`Store/`) + `Laching.Windows` (`StoreContextBackend`, `AppFeedback`) | A purchase store for one-time unlockables and tips (StoreKit 2 on the Mac, the Microsoft Store on Windows), with the backend behind a protocol so tests use a mock. `ReviewLifecycle`: when an app may ask for a review, once, and never again after. |
 | `LachingTesting` | `Laching.Testing` | Fakes for every protocol, fixtures (a phrase bank, defaults, a vector and a raster skin) and the shared conformance vectors' helpers for the apps' own test targets: Swift generates an app's companion vectors, .NET replays them (each check returns its problems, so neither side needs a particular test framework). The standard picker and quiet case lists, `CompanionVectors` and `ConformanceSuite.companion` build an app's whole suite; `CompanionReplay` replays it. On .NET also the companion shell's fakes (`FakeHost`, `ManualTimers`, `FakeSpeaker`…), for testing an app model without a screen. |
 | `tools/` | `tools/` | Not a package: Python tools, shell scripts and agent skills for companion apps, which vendor this repo as a `laching/` git submodule pinned to the release. Localization, phrase sync, recorded voices, character art compiling, sounds, fonts, screenshots, verification (including a check that every Laching pin agrees), the store listing tools (field limits, App Store Connect, Partner Center) and agent hooks, all driven by the app's `companion.json`; and `@laching/landing`, the landing page's plumbing as Vite plugins, published to npm. See [`tools/README.md`](tools/README.md). |
 
 Kotlin, for Android (`kotlin/`, a Gradle build an app includes from the submodule; `tools/README.md`): `laching.core`
-mirrors `LachingCore` (the scheduler, the random source, plurals, settings, the store, the drawing math),
+mirrors `LachingCore` (the scheduler, the random source, plurals, settings, the store, and the drawing math .NET doesn't have),
 `laching.android` is the phone-side plumbing (Play Billing, alarms, notifications, reduce motion, the screenshot run)
 and `laching.testing` the fakes. No companion in Kotlin yet.
 
@@ -186,30 +186,22 @@ one (`kotlin/core` the scheduler's), so a change in behavior on one side fails t
 ## Develop
 
 ```sh
-swift build && swift test                       # macOS: the package and its tests
-scripts/conformance.sh                          # regenerate conformance/ from the Swift code
-cd dotnet && dotnet test Laching.Core.Tests    # .NET: Core builds and tests anywhere; Laching.Windows builds on Windows (its PRI tooling)
-cd dotnet && dotnet test Laching.Companion.Tests   # the companion vectors, anywhere
-cd dotnet && dotnet test Laching.Companion.Shell.Tests   # the companion shell's logic, anywhere
-cd dotnet && dotnet test Laching.Testing.Tests     # the mocks, conformance helpers and fixtures, anywhere
-cd dotnet && dotnet test Laching.Windows.Companion.Tests # Windows: the shell's Windows half
-dotnet run --project dotnet/Fixture.App         # Windows: the fixture app, a companion on the fixture bank
-scripts/fixture-screenshots.ps1                 # Windows: its windows to PNGs, light and dark (-Only home: hidden, a few seconds)
-python3 tools/tests/run.py                      # the tools' tests
-dotnet test web/Laching.Web.sln                 # the web packages (the Jobs tests need PostgreSQL: web/README.md)
-scripts/verify.sh                               # the checks that apply to what you changed
+swift build && swift test                 # macOS: the package and its tests
+dotnet test dotnet/Laching.Tests.slnf     # .NET: Core, Companion, Companion.Shell and Testing, anywhere
+cd kotlin && ./gradlew :core:test :testing:test   # Kotlin, with a JDK 17
+scripts/verify.sh                         # the checks that apply to what you changed
 ```
 
-Formatting: `xcrun swift-format format -i --configuration .swift-format <files>` and `dotnet format whitespace dotnet --folder`.
-Coding agents: read `AGENTS.md`.
+Every other command (the vectors, Windows, the fixture app, the tools' tests, the web packages, the formatters) is
+under *Commands* in [`AGENTS.md`](AGENTS.md), which coding agents read first.
 
 ## Releases
 
 Releases are made on demand: Actions → Release → Run workflow (`release.yml`, on master), with `dry_run` first to see
 the plan. The number comes from the pull requests merged since the last tag: a patch, or a minor while 0.x (a major
 from 1.0) when one is labelled `breaking`; the `bump` input can ask for another. Once what ships has been tested and
-packed, the run commits the bump to master as `X.Y.Z: release` and tags it. One tag per release: Swift and Kotlin take the tag; NuGet and npm get a new version only
-when their code changed since their last one. When the .NET packages changed since `LachingVersion`
+packed, the run commits the bump to master as `X.Y.Z: release` and tags it. Which sides get a new version is the versioning rule in
+[`docs/conventions.md`](docs/conventions.md). When the .NET packages changed since `LachingVersion`
 (`dotnet/Directory.Build.props`), the run packs all six at X.Y.Z and pushes them to NuGet.org through
 [Trusted Publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing) (no stored key: a policy on
 nuget.org for repository `vmihalachi/laching` and workflow `release.yml`, plus the `NUGET_USER` repository variable

@@ -20,38 +20,43 @@ sunnysays and Mister Pagliacci, who use it as a reference.
 
 ## Product Purpose
 
-Laching is an MIT Swift package plus .NET packages with the generic parts every menu bar / tray app needs: a pure
-reminder scheduler, permission-free system signals, app-shell plumbing, a purchase store (StoreKit 2 and the Microsoft
-Store) and, since 0.5.0, the companion layer: phrases, cadence, quiet rules, settings, skins, character rigs, speech
-and the tooling a companion app needs. Success for the site: a
+Laching is an MIT Swift package plus .NET packages and a Kotlin build with the generic parts every menu bar, tray or
+phone app needs: a pure reminder scheduler, permission-free system signals, app-shell plumbing, a purchase store
+(StoreKit 2, the Microsoft Store and Google Play) and, since 0.5.0, the companion layer: phrases, cadence, quiet rules,
+settings, skins, character rigs, speech and the tooling a companion app needs. Beside them, and sharing nothing with
+them, the `Laching.Web` packages for small ASP.NET Core sites behind Cloudflare. Success for the site: a
 visitor understands what is inside, trusts the permission-free and cross-platform promises, and copies the install line.
 
 ## Positioning
 
 - Call detection (camera or microphone in use by another app) read from device state, never by opening a device, so it
   never prompts for a permission. Nothing in it touches the network.
-- One behavior on two platforms: the Swift code is the reference, JSON conformance vectors are generated from it and the
-  C# port replays every one.
-- Extracted from two real apps (mybackhurts, which ships it, and sunnysays, in development), not designed in the
-  abstract. The companion layer is sunnysays' character skeleton made generic so a second companion app, Mister
-  Pagliacci (in design), can be built on it.
+- One behavior on every platform: the Swift code is the reference, JSON conformance vectors are generated from it, the
+  C# port replays every one and the Kotlin port the scheduler's.
+- Extracted from two real apps (mybackhurts, which ships it on macOS, iPhone and iPad, Windows and Android, and
+  sunnysays, in development), not designed in the abstract. The companion layer is sunnysays' character skeleton made
+  generic; Mister Pagliacci (in development, Mac and Windows) is built on it.
 
 ## Capabilities and Constraints
 
-Products: `LachingCore` / `Laching.Core` (scheduler, clock/idle/busy protocols, SplitMix64),
+Products: `LachingCore` / `Laching.Core` (scheduler, clock/idle/busy protocols, SplitMix64; the drawing math in Swift
+and Kotlin only),
 `LachingCompanion` / `Laching.Companion` (a desk companion's phrases, cadence, quiet rules, settings, coordinator,
 desktop presence, skins and vector or raster character rigs), `LachingSystem` / `Laching.Windows` (idle, busy, full-screen, power, audio output, screen lock, appearance),
 `LachingShell` / `Laching.Windows` (window manager, login item, notifications, tray icon, single
-instance, drawing helpers; on the Mac also the status item, speech and chimes), `LachingCompanionUI` (macOS: the
+instance; on the Mac also the status item, speech and chimes), `LachingCompanionUI` / `Laching.Companion.Shell` + `Laching.Windows.Companion` (the
 companion's views, desktop presence and delivery), `LachingStore` / `Laching.Core` `Store/` + `Laching.Windows` (one-time unlockables and tips: StoreKit 2 on the Mac,
-the Microsoft Store on Windows, both since 0.3.0), `LachingTesting` / `Laching.Testing` (fakes, fixtures, conformance generators and replays), and `tools/` (Python
-tools, scripts and agent skills a companion app vendors as a submodule).
+the Microsoft Store on Windows, both since 0.3.0), `LachingTesting` / `Laching.Testing` (fakes, fixtures, conformance generators and replays), the Kotlin modules for
+Android (`laching.core`, the scheduler, store and drawing; `laching.android`, Play Billing, alarms and notifications;
+`laching.testing`, the fakes), the six `Laching.Web.*` packages (jobs, the Cloudflare origin check and headers,
+Turnstile, Aspire ingress, Tailwind, images), and `tools/` (Python tools, scripts and agent skills a companion app
+vendors as a submodule).
 macOS 14+, iOS 17+, Windows 11 (.NET 10) and Android 8+ (Kotlin); menu bar, tray and phone. Version 0.x: minor versions may change public types. The package ships no strings.
 
 ## Brand Commitments
 
 Name: Laching. Voice: plain, precise, dry, first-hand ("the parts every such app needs and nobody wants to write
-twice"). No logo exists yet.
+twice"). The logo is `site/favicon.svg`: a dark rounded square with a white bar and a teal dot.
 
 ## Evidence on Hand
 
@@ -63,5 +68,5 @@ No testimonials, download counts, benchmarks or third-party adopters: never inve
 ## Product Principles
 
 - Never prompt, never phone home.
-- Behavior is specified once and proven on both platforms.
+- Behavior is specified once and proven on every platform.
 - The app owns its words; the package owns the plumbing.

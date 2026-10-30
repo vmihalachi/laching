@@ -5,8 +5,8 @@ description: Use when a Laching release (vX.Y.Z) is wanted, when checking what t
 
 # Releases
 
-One tag per release. Swift and Kotlin take the tag; NuGet and npm get a new version only when their code changed since
-their last one. There is no changelog file and nothing releases on its own: a change only merges, with a title that
+The versioning rule (one tag per release, which sides get a new version, no changelog file) is in
+`docs/conventions.md`, under *Versioning*. Nothing releases on its own: a change only merges, with a title that
 says what changed for an app and the label **`breaking`** when it breaks an API or an app's build; it never bumps the
 version or tags.
 

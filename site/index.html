@@ -4,15 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Laching: building blocks for menu bar and tray apps</title>
-<meta name="description" content="Laching is an MIT Swift package and .NET packages with the parts every menu bar or tray app needs: a reminder scheduler, permission-free system signals, app-shell plumbing, an App Store / Microsoft Store purchase store, and the core of a desk companion.">
+<meta name="description" content="Laching is an MIT Swift package, .NET packages and Kotlin modules with the parts every menu bar, tray or phone reminder app needs: a reminder scheduler, permission-free system signals, app-shell plumbing, a purchase store for the App Store, the Microsoft Store and Google Play, and the core of a desk companion.">
 <meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://vmihalachi.github.io/laching/">
 <meta property="og:title" content="Laching">
-<meta property="og:description" content="Building blocks for menu bar and tray apps. Swift for macOS, .NET for Windows. MIT.">
+<meta property="og:description" content="Building blocks for menu bar, tray and phone apps on macOS, iOS, Windows and Android, in Swift, .NET and Kotlin. MIT.">
 <meta property="og:type" content="website">
+<meta property="og:url" content="https://vmihalachi.github.io/laching/">
+<meta name="twitter:card" content="summary">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="preload" href="fonts/Geist-Variable.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/GeistMono-Variable.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -30,6 +32,7 @@
         <li><a href="#signals">Signals</a></li>
         <li><a href="#conformance">Conformance</a></li>
         <li><a href="#install">Install</a></li>
+        <li><a href="#web">Web</a></li>
         <li><a class="gh" href="https://github.com/vmihalachi/laching"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a></li>
       </ul>
     </nav>
@@ -41,23 +44,34 @@
 <section class="hero">
   <div class="wrap hero-grid">
     <div class="hero-copy">
-      <p class="version"><a href="https://github.com/vmihalachi/laching/releases">v0.20.11</a><span>Swift · .NET · MIT</span></p>
+      <p class="version"><a href="https://github.com/vmihalachi/laching/releases">v0.20.11</a><span>Swift · .NET · Kotlin · MIT</span></p>
       <h1>Building blocks for menu bar and tray apps</h1>
-      <p class="lede">The parts every little desktop app needs and nobody wants to write twice: a reminder scheduler, permission-free system signals, app-shell plumbing and, for a desk companion, a character that talks and knows when to be quiet. Swift for macOS, .NET for Windows.</p>
+      <p class="lede">The parts every little desktop or phone app needs and nobody wants to write twice: a reminder scheduler, permission-free system signals, app-shell plumbing and, for a desk companion, a character that talks and knows when to be quiet. Swift for macOS and iOS, .NET for Windows, Kotlin for Android.</p>
 
       <div class="install" data-tabs>
-        <div class="tablist" role="tablist" aria-label="Install with">
-          <button role="tab" id="i-swift" aria-selected="true" aria-controls="ip-swift">Swift</button>
-          <button role="tab" id="i-net" aria-selected="false" aria-controls="ip-net" tabindex="-1">.NET</button>
+        <div class="tablist" role="tablist" aria-label="Install for">
+          <button role="tab" id="i-swift" aria-selected="true" aria-controls="ip-swift">macOS</button>
+          <button role="tab" id="i-ios" aria-selected="false" aria-controls="ip-ios" tabindex="-1">iOS</button>
+          <button role="tab" id="i-net" aria-selected="false" aria-controls="ip-net" tabindex="-1">Windows</button>
+          <button role="tab" id="i-kotlin" aria-selected="false" aria-controls="ip-kotlin" tabindex="-1">Android</button>
         </div>
         <div class="install-line" role="tabpanel" id="ip-swift" aria-labelledby="i-swift">
           <code>.package(url: "https://github.com/vmihalachi/laching", exact: "0.20.11")</code>
           <button class="copy" type="button" aria-label="Copy the Swift package line">Copy</button>
         </div>
+        <div class="install-line" role="tabpanel" id="ip-ios" aria-labelledby="i-ios" hidden>
+          <code>https://github.com/vmihalachi/laching</code>
+          <button class="copy" type="button" aria-label="Copy the package URL for Xcode">Copy</button>
+        </div>
         <div class="install-line" role="tabpanel" id="ip-net" aria-labelledby="i-net" hidden>
           <code>dotnet add package Laching.Core</code>
           <button class="copy" type="button" aria-label="Copy the dotnet command">Copy</button>
         </div>
+        <div class="install-line" role="tabpanel" id="ip-kotlin" aria-labelledby="i-kotlin" hidden>
+          <code>git submodule add https://github.com/vmihalachi/laching laching</code>
+          <button class="copy" type="button" aria-label="Copy the git submodule command">Copy</button>
+        </div>
+        <p class="visually-hidden" role="status" aria-live="polite" id="copy-status"></p>
       </div>
 
       <div class="actions">
@@ -71,6 +85,7 @@
         <div class="tablist" role="tablist" aria-label="Language">
           <button role="tab" id="c-swift" aria-selected="true" aria-controls="cp-swift">Swift</button>
           <button role="tab" id="c-cs" aria-selected="false" aria-controls="cp-cs" tabindex="-1">C#</button>
+          <button role="tab" id="c-kt" aria-selected="false" aria-controls="cp-kt" tabindex="-1">Kotlin</button>
         </div>
         <span class="code-file">same scheduler, same decisions</span>
       </div>
@@ -108,6 +123,23 @@
 <span class="c">// Call every 20 s or so.</span>
 <span class="k">if</span> (scheduler.Tick() == <span class="t">SchedulerDecision</span>.Remind)
     ShowBreak();</code></pre>
+<pre role="tabpanel" id="cp-kt" aria-labelledby="c-kt" tabindex="0" hidden><code><span class="k">import</span> laching.core.scheduling.*
+
+<span class="k">val</span> scheduler = <span class="t">ReminderScheduler</span>(
+    config = <span class="t">SchedulerConfig</span>(
+        intervalSeconds = <span class="n">45.0</span> * <span class="n">60</span>,
+        quietHours = setOf(<span class="n">12</span>),
+    ),
+    clock = <span class="t">SystemClock</span>,
+    <span class="c">// A phone has no idle reading, and busy</span>
+    <span class="c">// defaults to NeverBusy.</span>
+    idle = { <span class="n">0.0</span> },
+)
+
+<span class="c">// Call when the reminder alarm wakes the app.</span>
+<span class="k">if</span> (scheduler.tick() == <span class="t">SchedulerDecision</span>.REMIND) {
+    showBreak()
+}</code></pre>
     </div>
   </div>
 </section>
@@ -123,8 +155,8 @@
       <p>No network code anywhere in the package: no analytics, no update checks, no telemetry. The Swift package has no dependencies at all.</p>
     </div>
     <div>
-      <h2>One behavior, two platforms</h2>
-      <p>The Swift code is the reference. JSON vectors generated from it are replayed by the C# port, so the two cannot quietly drift.</p>
+      <h2>One behavior, three languages</h2>
+      <p>The Swift code is the reference. JSON vectors generated from it are replayed by the C# port, and the scheduler's by the Kotlin port, so they cannot quietly drift.</p>
     </div>
   </div>
 </section>
@@ -133,29 +165,32 @@
   <div class="wrap">
     <div class="section-head">
       <h2>What's inside</h2>
-      <p>Seven Swift products and six NuGet packages. Take the pure logic alone, the whole shell, or the companion on top.</p>
+      <p>Seven Swift products, six NuGet packages and three Kotlin modules. Take the pure logic alone, the whole shell, or the companion on top.</p>
     </div>
 
     <div class="parts" role="table" aria-label="Products">
       <div class="parts-row parts-th" role="row">
-        <span role="columnheader">macOS (Swift)</span>
+        <span role="columnheader">macOS, iOS (Swift)</span>
         <span role="columnheader">Windows (.NET)</span>
+        <span role="columnheader">Android (Kotlin)</span>
         <span role="columnheader">What it does</span>
       </div>
 
       <div class="parts-row" role="row">
         <div role="cell" class="pkg"><code>LachingCore</code></div>
         <div role="cell" class="pkg"><code>Laching.Core</code></div>
+        <div role="cell" class="pkg"><code>laching.core</code></div>
         <div role="cell">
           <h3>Scheduling and pure logic</h3>
-          <p>An interval timer with active hours and weekdays, quiet hours, an idle reset ("you were away, the timer restarts"), a hold while the user is busy with a grace period after, snooze, "after my next call" and pause. Runs on an injected clock, so it builds and tests anywhere Swift or .NET runs.</p>
-          <p class="types"><code>ReminderScheduler</code> <code>SchedulerConfig</code> <code>Clock</code> <code>IdleTimeProvider</code> <code>BusyStateProvider</code> <code>SplitMix64</code></p>
+          <p>An interval timer with active hours and weekdays, quiet hours, an idle reset ("you were away, the timer restarts"), a hold while the user is busy with a grace period after, snooze, "after my next call" and pause. Runs on an injected clock, so it builds and tests anywhere Swift, .NET or Kotlin runs. Swift on Apple platforms and Kotlin also have the drawing math: SVG path sampling, keyframes, polylines and a hand-drawn wobble. It has no C# port.</p>
+          <p class="types"><code>ReminderScheduler</code> <code>SchedulerConfig</code> <code>Clock</code> <code>IdleTimeProvider</code> <code>BusyStateProvider</code> <code>SplitMix64</code> <code>SVGPath</code> <code>Wobble</code></p>
         </div>
       </div>
 
       <div class="parts-row" role="row">
         <div role="cell" class="pkg"><code>LachingCompanion</code></div>
         <div role="cell" class="pkg"><code>Laching.Companion</code></div>
+        <div role="cell" class="pkg none"><span>Not yet</span></div>
         <div role="cell">
           <h3>A desk companion's core</h3>
           <p>A phrase bank and picker (lines, jokes told in beats, tunes; scoped by skin, flavor and language), chatter cadence, quiet rules and mood, write-through settings your app extends, a coordinator that replays a whole day from a seed, desktop presence, skins, and a rig that animates vector or painted-layer character art. Your app brings the lines, skins and palette. Pure, so it builds and tests anywhere.</p>
@@ -166,6 +201,7 @@
       <div class="parts-row" role="row">
         <div role="cell" class="pkg"><code>LachingSystem</code></div>
         <div role="cell" class="pkg"><code>Laching.Windows</code></div>
+        <div role="cell" class="pkg none"><span>None</span></div>
         <div role="cell">
           <h3>System signals</h3>
           <p>Idle time since the last input. Whether another app is using the camera or microphone. Full-screen apps, power source and battery level, output muted and route, screen locked, light and dark appearance. Each exposes a current value and a change callback.</p>
@@ -176,16 +212,18 @@
       <div class="parts-row" role="row">
         <div role="cell" class="pkg"><code>LachingShell</code></div>
         <div role="cell" class="pkg"><code>Laching.Windows</code></div>
+        <div role="cell" class="pkg"><code>laching.android</code></div>
         <div role="cell">
           <h3>App shell</h3>
-          <p>A window manager that shows the Dock icon only while a window is open, a login item toggle and "was I launched at login?", notifications with categories and actions, a floating desktop window for a pet or a sticky note, a native tray icon and menu, single-instance startup, and drawing helpers for SVG paths, keyframes and a hand-drawn wobble. On the Mac also a status item with a popover and an animated glyph, and speech: the system voice or recorded clips, jokes told in beats, chimes. On Windows those come with the companion shell, below.</p>
-          <p class="types"><code>WindowManager</code> <code>NotificationPoster</code> <code>LoginItem</code> <code>FloatingWindow</code> <code>StatusItemController</code> <code>SpeechSequencer</code> <code>TrayIconHost</code> <code>SingleInstance</code></p>
+          <p>A window manager that shows the Dock icon only while a window is open, a login item toggle and "was I launched at login?", notifications with categories and actions, a floating desktop window for a pet or a sticky note, a native tray icon and menu, and single-instance startup. On the Mac also a status item with a popover and an animated glyph, and speech: the system voice or recorded clips, jokes told in beats, chimes. On Windows those come with the companion shell, below. On the phone: notifications on iOS, and on Android the alarm that wakes the app for the next reminder, the reminder notification, reduce motion, settings in SharedPreferences and a screenshot run.</p>
+          <p class="types"><code>WindowManager</code> <code>NotificationPoster</code> <code>LoginItem</code> <code>FloatingWindow</code> <code>StatusItemController</code> <code>SpeechSequencer</code> <code>TrayIconHost</code> <code>SingleInstance</code> <code>ReminderAlarms</code></p>
         </div>
       </div>
 
       <div class="parts-row" role="row">
         <div role="cell" class="pkg"><code>LachingCompanionUI</code></div>
         <div role="cell" class="pkg"><code>Laching.Companion<wbr>.Shell</code> + <code>Laching.Windows<wbr>.Companion</code></div>
+        <div role="cell" class="pkg none"><span>Not yet</span></div>
         <div role="cell">
           <h3>The companion on screen</h3>
           <p>The character view (vector and image parts), the character and its speech bubble on the desktop, the menu bar or tray glyph, delivery through bubble, voice, chime and notification, the system signals gathered into one snapshot, a palette your app sets, and a screenshot mode. And the shell your app subclasses: the model that runs the day, its delegate and menus, the Settings rows, the Support window and a screenshot script, every word passed in by your app. On Windows the logic is its own package, tested on any OS, and the WinUI 3 half draws it.</p>
@@ -196,19 +234,21 @@
       <div class="parts-row" role="row">
         <div role="cell" class="pkg"><code>LachingStore</code></div>
         <div role="cell" class="pkg"><code>Laching.Core</code> + <code>Laching.Windows</code></div>
+        <div role="cell" class="pkg"><code>laching.core</code> + <code>laching.android</code></div>
         <div role="cell">
           <h3>Purchases</h3>
-          <p>A store for one-time unlockables and tips, on StoreKit 2 on the Mac and the Microsoft Store on Windows, with the backend behind a protocol so your tests use a mock.</p>
-          <p class="types"><code>PurchaseStore</code> <code>ProductCatalog</code> <code>StoreBackend</code> <code>StoreContextBackend</code></p>
+          <p>A store for one-time unlockables and tips, on StoreKit 2 on the Mac and iPhone, the Microsoft Store on Windows and Google Play Billing on Android, with the backend behind a protocol so your tests use a mock. And when an app may ask for a review: once, and never again after.</p>
+          <p class="types"><code>PurchaseStore</code> <code>ProductCatalog</code> <code>StoreBackend</code> <code>StoreContextBackend</code> <code>PlayBillingBackend</code> <code>ReviewLifecycle</code></p>
         </div>
       </div>
 
       <div class="parts-row" role="row">
         <div role="cell" class="pkg"><code>LachingTesting</code></div>
         <div role="cell" class="pkg"><code>Laching.Testing</code></div>
+        <div role="cell" class="pkg"><code>laching.testing</code></div>
         <div role="cell">
           <h3>Fakes, fixtures and vectors for your tests</h3>
-          <p>A fake for every protocol, a fixture phrase bank and skins, and the conformance generators and replays: your app's Swift tests write its own companion vectors from the standard case lists plus its own, its .NET tests replay them.</p>
+          <p>A fake for every protocol, a fixture phrase bank and skins, and the conformance generators and replays: your app's Swift tests write its own companion vectors from the standard case lists plus its own, its .NET tests replay them. The Kotlin module has the fakes and the helpers that find and read the vectors.</p>
           <p class="types"><code>MockClock</code> <code>MockIdle</code> <code>MockBusy</code> <code>MockStoreBackend</code> <code>ConformanceSuite</code> <code>CompanionVectors</code> <code>CompanionReplay</code></p>
         </div>
       </div>
@@ -240,7 +280,7 @@
         <dd>The capability access consent store: Windows records when each app starts and stops using a device, and a start without a stop means it is in use now. No manifest capability needed.</dd>
       </div>
       <div>
-        <dt><span class="os">Both</span> Full screen</dt>
+        <dt><span class="os">macOS, Windows</span> Full screen</dt>
         <dd>A full-screen app, game or presentation holds the reminder too.</dd>
       </div>
     </dl>
@@ -250,8 +290,8 @@
 <section id="conformance" class="section">
   <div class="wrap">
     <div class="section-head">
-      <h2>Proven the same on both sides</h2>
-      <p>Each scheduler and companion behavior is written down once, as JSON generated from the Swift code. XCTest checks the Swift side reproduces it, xUnit replays every vector against the C# port. A change on one side fails the other side's build.</p>
+      <h2>Proven the same on every side</h2>
+      <p>Each scheduler and companion behavior is written down once, as JSON generated from the Swift code. XCTest checks the Swift side reproduces it, xUnit replays every vector against the C# port, and JUnit replays the scheduler's against the Kotlin port. A change on one side fails the others' tests.</p>
     </div>
 
     <figure class="vector" id="vector">
@@ -285,7 +325,8 @@
       <div class="verdict">
         <span class="pass"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Swift, XCTest</span>
         <span class="pass"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>C#, xUnit</span>
-        <span class="verdict-note">Same decision on every one of 109 ticks, same state after every step. One of 39 vectors.</span>
+        <span class="pass"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Kotlin, JUnit</span>
+        <span class="verdict-note">Same decision on every one of 109 ticks, same state after every step.</span>
       </div>
     </figure>
   </div>
@@ -295,44 +336,106 @@
   <div class="wrap">
     <div class="section-head">
       <h2>Install</h2>
-      <p>One tag per release: Swift takes the tag, and the NuGet packages get a new version only when they changed, so theirs can trail it. Laching is <code>0.x</code> until the second app has settled the API, so pin an exact version: minor releases may change public types.</p>
+      <p>One tag per release: Swift and Kotlin take the tag, and the NuGet packages get a new version only when they changed, so theirs can trail it. Laching is <code>0.x</code>, so pin an exact version: minor releases may change public types.</p>
     </div>
     <div class="install-grid">
       <div class="install-card">
         <h3>Swift Package Manager</h3>
-        <p class="req">macOS 14+, Swift 6 language mode, no dependencies</p>
+        <p class="req">macOS 14+ and iOS 17+, Swift 6 language mode, no dependencies</p>
 <pre tabindex="0"><code><span class="c">// Package.swift</span>
 .package(url: <span class="s">"https://github.com/vmihalachi/laching"</span>, exact: <span class="s">"0.20.11"</span>)
 
 <span class="c">// then, per target</span>
 .product(name: <span class="s">"LachingCore"</span>, package: <span class="s">"laching"</span>)</code></pre>
-        <p>Or in Xcode: File › Add Package Dependencies, paste the repository URL, pick <em>Exact Version</em>.</p>
+        <p>Every product builds for the Mac.</p>
+      </div>
+      <div class="install-card">
+        <h3>Xcode, for iOS</h3>
+        <p class="req">iOS 17+, the same package</p>
+        <p>File › Add Package Dependencies, paste <code>https://github.com/vmihalachi/laching</code>, pick <em>Exact Version</em> and the latest release.</p>
+        <p>On iOS, <code>LachingCore</code>, <code>LachingCompanion</code>, <code>LachingStore</code> and <code>LachingTesting</code> build whole. From <code>LachingShell</code> come the notification poster, the feedback links, font registration and the layout check. <code>LachingSystem</code> and the companion's views are macOS only.</p>
       </div>
       <div class="install-card">
         <h3>NuGet</h3>
         <p class="req">.NET 10; every package an app ships is Native AOT compatible</p>
 <pre tabindex="0"><code>dotnet add package Laching.Core
 dotnet add package Laching.Companion <span class="c"># a desk companion</span>
+dotnet add package Laching.Companion.Shell <span class="c"># its shell, any OS</span>
 dotnet add package Laching.Windows   <span class="c"># Windows 11</span>
 dotnet add package Laching.Windows.Companion <span class="c"># WinUI 3</span>
 dotnet add package Laching.Testing   <span class="c"># test projects</span></code></pre>
         <p><code>Laching.Core</code>, <code>Laching.Companion</code> and <code>Laching.Companion.Shell</code> build anywhere .NET runs. <code>Laching.Windows</code> adds the tray, idle and busy services, and <code>Laching.Windows.Companion</code> a companion app's whole shell on WinUI 3, with <code>Laching.Companion.Shell</code> under it. Those two need Windows 11 (<code>net10.0-windows10.0.22000.0</code>).</p>
       </div>
+      <div class="install-card">
+        <h3>Gradle, for Android</h3>
+        <p class="req">Android 8+ (API 26), JDK 17; not on Maven</p>
+<pre tabindex="0"><code><span class="c">// settings.gradle.kts, laching/ a git submodule</span>
+includeBuild(<span class="s">"../laching/kotlin"</span>) {
+    dependencySubstitution {
+        substitute(module(<span class="s">"laching:core"</span>))
+            .using(project(<span class="s">":core"</span>))
+        substitute(module(<span class="s">"laching:android"</span>))
+            .using(project(<span class="s">":android"</span>))
+    }
+}
+
+<span class="c">// then, per module</span>
+implementation(<span class="s">"laching:core"</span>)</code></pre>
+        <p>The app's build includes the Kotlin modules from the submodule, checked out at the release's tag. <code>laching.core</code> and <code>laching.testing</code> are plain Kotlin on the JVM, so their tests run on any machine; <code>laching.android</code> is the Android library. <a href="https://github.com/vmihalachi/laching/blob/master/tools/README.md">tools/README.md</a> has the whole setup.</p>
+      </div>
     </div>
   </div>
 </section>
 
-<section id="used-by" class="section">
+<section id="web" class="section">
+  <div class="wrap split">
+    <div class="split-copy">
+      <h2>And for the website: Laching.Web</h2>
+      <p>Six NuGet packages for small ASP.NET Core and Blazor sites on Azure Container Apps behind Cloudflare. They share nothing with the app packages, and no app here uses them; Adjudeca runs on them.</p>
+      <p>.NET 10. One version for all six, which moves only in a Laching release that changed them. <a href="https://github.com/vmihalachi/laching/blob/master/web/README.md">web/README.md</a> has the details.</p>
+<pre tabindex="0"><code>dotnet add package Laching.Web.AspNetCore
+dotnet add package Laching.Web.Jobs</code></pre>
+    </div>
+    <dl class="sources">
+      <div>
+        <dt><code>Laching.Web.AspNetCore</code></dt>
+        <dd>The Cloudflare origin check, security headers with a per-request CSP nonce, and shared-cache headers for public pages.</dd>
+      </div>
+      <div>
+        <dt><code>Laching.Web.Jobs</code></dt>
+        <dd>A job table in PostgreSQL: enqueued with the change that caused it, run once across replicas, retried with backoff.</dd>
+      </div>
+      <div>
+        <dt><code>Laching.Web.Cloudflare</code></dt>
+        <dd>Turnstile behind a human check, and cache purges.</dd>
+      </div>
+      <div>
+        <dt><code>Laching.Web.Aspire</code></dt>
+        <dd>Ingress that only Cloudflare reaches, and a job that runs before the apps roll out.</dd>
+      </div>
+      <div>
+        <dt><code>Laching.Web.Tailwind</code></dt>
+        <dd>Tailwind v4 in <code>dotnet build</code>, without Node.</dd>
+      </div>
+      <div>
+        <dt><code>Laching.Web.Images</code></dt>
+        <dd>Uploads: PNG, JPEG and WebP recognized, a size limit, re-encoding to WebP or JPEG.</dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<section id="used-by" class="section alt">
   <div class="wrap">
     <div class="section-head">
       <h2>Used by</h2>
-      <p>Laching was extracted from mybackhurts, which ships it, and sunnysays, in development, whose character skeleton became the companion layer. Mister Pagliacci is the second companion built on that layer.</p>
+      <p>Laching was extracted from mybackhurts, which ships it, and sunnysays, in development, whose character skeleton became the companion layer. Mister Pagliacci is built on that layer too.</p>
     </div>
     <div class="install-grid three">
       <div class="install-card">
         <h3><a href="https://mybackhurts.app">mybackhurts</a></h3>
-        <p class="req">A break reminder for the menu bar</p>
-        <p>The first app to use Laching. Its scheduler, system signals and shell plumbing were generalized into the package, and its 37 scheduler vectors are the first ones in the conformance suite.</p>
+        <p class="req">Posture and break reminders for macOS, iPhone and iPad, Windows and Android</p>
+        <p>The first app to use Laching. Its scheduler, system signals and shell plumbing were generalized into the package, and its scheduler vectors were the first in the conformance suite.</p>
       </div>
       <div class="install-card">
         <h3><a href="https://sunnysays.app">sunnysays</a></h3>
@@ -341,8 +444,8 @@ dotnet add package Laching.Testing   <span class="c"># test projects</span></cod
       </div>
       <div class="install-card">
         <h3><a href="https://pagliacci.app">Mister Pagliacci</a></h3>
-        <p class="req">A clown who tells jokes</p>
-        <p>The second companion app, and the first built on the companion layer from the start: his jokes, skins and recorded voice are his own, the mechanism is Laching's. In design.</p>
+        <p class="req">A clown who tells jokes from the Mac menu bar or the Windows notification area</p>
+        <p>A companion app built on the companion layer from the start: his jokes, skins and recorded voice are his own, the mechanism is Laching's. In development.</p>
       </div>
     </div>
     <div class="actions">
@@ -355,7 +458,7 @@ dotnet add package Laching.Testing   <span class="c"># test projects</span></cod
 
 <footer class="footer">
   <div class="wrap footer-inner">
-    <p>MIT licensed. © 2026 Vlad Mihalachi.</p>
+    <p>MIT licensed. © 2026 <a href="https://vmihalachi.com">Vlad Mihalachi</a>.</p>
     <ul>
       <li><a href="https://github.com/vmihalachi/laching">Source</a></li>
       <li><a href="https://github.com/vmihalachi/laching/releases">Releases</a></li>

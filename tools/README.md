@@ -153,8 +153,8 @@ reads strings from a build, and tests use `#filePath`, so both get the cache wit
    direction (`voice.config`, `voice.direction`), the sounds recipes (`sounds.recipes`), the store captions, the
    character design folder (`characters.design`).
 
-7. **Android apps.** The Kotlin side (`kotlin/`: `:core`, the pure scheduler and insights mirror that replays the
-   conformance vectors; `:android`, the app plumbing; `:testing`) is not published to a Maven repository: the app's
+7. **Android apps.** The Kotlin side (`kotlin/`: `:core`, the pure mirror of `LachingCore` and the store that replays
+   the scheduler vectors; `:android`, the app plumbing; `:testing`) is not published to a Maven repository: the app's
    Gradle build includes it from the submodule, and `companion.py link` points it at a checkout instead through
    `local.properties`. In the app's `settings.gradle.kts`:
 

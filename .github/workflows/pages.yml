@@ -1,6 +1,6 @@
 name: Pages
 
-# Publishes site/ (static HTML, no build step) to GitHub Pages. Needs Settings → Pages → Source: GitHub Actions.
+# Publishes site/ (static HTML, no build step; 404.html answers missing paths) to GitHub Pages. Needs Settings → Pages → Source: GitHub Actions.
 on:
   push:
     branches:
