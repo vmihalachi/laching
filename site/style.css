@@ -1,3 +1,19 @@
+/* Geist and Geist Mono (SIL OFL 1.1, fonts/OFL.txt), the variable fonts from the geist npm package. */
+@font-face {
+  font-family: "Geist";
+  src: url("fonts/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("fonts/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   --bg: #ffffff;
   --bg-alt: #f6f8f7;
@@ -98,6 +114,11 @@ h1, h2, h3 { margin: 0; text-wrap: balance; color: var(--fg); }
 p { margin: 0; text-wrap: pretty; }
 
 .wrap { max-width: var(--wrap); margin: 0 auto; padding: 0 24px; }
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
 
 .skip {
   position: absolute; left: 16px; top: -48px; z-index: 20;
@@ -220,7 +241,7 @@ pre ::selection { background: #2c6b5f; color: #fff; }
 /* Parts table */
 .parts { border-top: 1px solid var(--fg); }
 .parts-row {
-  display: grid; grid-template-columns: 190px 190px minmax(0, 1fr); gap: 32px;
+  display: grid; grid-template-columns: 170px 170px 150px minmax(0, 1fr); gap: 28px;
   padding: 30px 0; border-bottom: 1px solid var(--line);
 }
 .parts-th { padding: 12px 0; font-size: 12.5px; font-weight: 500; color: var(--fg-3); letter-spacing: .02em; }
@@ -237,6 +258,8 @@ pre ::selection { background: #2c6b5f; color: #fff; }
 .split { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 72px; align-items: start; }
 .split-copy p { margin-top: 18px; font-size: 17px; color: var(--fg-2); max-width: 32em; }
 .split-copy p:first-of-type { margin-top: 20px; }
+.split-copy pre { margin-top: 24px; border-radius: 10px; padding: 18px 20px; font-size: 13px; }
+.sources dt code { font-size: 15px; }
 .sources { margin: 0; display: grid; gap: 0; border-top: 1px solid var(--line-2); }
 .sources > div { padding: 22px 0; border-bottom: 1px solid var(--line-2); }
 .sources dt { font-weight: 600; font-size: 16.5px; display: flex; align-items: center; gap: 10px; }
@@ -337,7 +360,7 @@ pre ::selection { background: #2c6b5f; color: #fff; }
   .hero-grid { grid-template-columns: minmax(0, 1fr); gap: 44px; }
   .split { grid-template-columns: minmax(0, 1fr); gap: 36px; }
   .steps { grid-template-columns: repeat(2, 1fr); }
-  .parts-row { grid-template-columns: 1fr 1fr; gap: 6px 24px; }
+  .parts-row { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 24px; }
   .parts-row > div:last-child { grid-column: 1 / -1; margin-top: 12px; }
   .parts-th span:last-child { display: none; }
 }
@@ -352,6 +375,13 @@ pre ::selection { background: #2c6b5f; color: #fff; }
   .section-head { margin-bottom: 36px; }
   .lede { font-size: 17px; }
   .install-grid, .install-grid.three { grid-template-columns: minmax(0, 1fr); }
+  /* The parts table stacks: each package cell names its side, as the header row is hidden. */
+  .parts-row { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .parts-th { display: none; }
+  .pkg::before { display: inline-block; min-width: 64px; font: 500 11.5px var(--mono); color: var(--fg-3); }
+  .pkg:nth-child(1)::before { content: "Swift"; }
+  .pkg:nth-child(2)::before { content: ".NET"; }
+  .pkg:nth-child(3)::before { content: "Kotlin"; }
   .install-card { padding: 22px 18px; }
   pre { font-size: 12.5px; padding: 18px; }
   .timeline { padding: 28px 20px 14px 20px; overflow-x: auto; }

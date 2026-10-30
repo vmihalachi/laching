@@ -22,23 +22,28 @@
     });
   }
 
+  // The button's own text changes for sighted users; the live region says the same to a screen reader.
+  const status = document.getElementById("copy-status");
   for (const button of document.querySelectorAll(".copy")) {
     button.addEventListener("click", async () => {
       const text = button.parentElement.querySelector("code").textContent;
       try {
         await navigator.clipboard.writeText(text);
         button.textContent = "Copied";
+        if (status) status.textContent = "Copied to the clipboard.";
       } catch {
         button.textContent = "Select";
         const range = document.createRange();
         range.selectNodeContents(button.parentElement.querySelector("code"));
         getSelection().removeAllRanges();
         getSelection().addRange(range);
+        if (status) status.textContent = "Selected. Copy it with your keyboard.";
       }
       button.classList.add("done");
       setTimeout(() => {
         button.textContent = "Copy";
         button.classList.remove("done");
+        if (status) status.textContent = "";
       }, 1600);
     });
   }
