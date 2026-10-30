@@ -27,11 +27,12 @@ usage() { sed -n 's/^# \{0,1\}//; 2,22p' "$0" >&2; exit 2; }
 die() { echo "release.sh: $*" >&2; exit 1; }
 by_version() { sort -t. -k1,1n -k2,2n -k3,3n; }
 current() { sed -n 's/.*public static let version = "\([^"]*\)".*/\1/p' Sources/LachingCore/Laching.swift; }
-# The NuGet packages: the projects in dotnet/ with <IsPackable>true</IsPackable>, one name per line.
-projects() { grep -l '<IsPackable>true</IsPackable>' dotnet/*/*.csproj | sed 's#^dotnet/\([^/]*\)/.*#\1#'; }
+# The NuGet packages: the projects in dotnet/ with <IsPackable>true</IsPackable>, one name per line, in byte order
+# (a glob's order follows the locale).
+projects() { grep -l '<IsPackable>true</IsPackable>' dotnet/*/*.csproj | sed 's#^dotnet/\([^/]*\)/.*#\1#' | LC_ALL=C sort; }
 nuget_version() { sed -n 's/.*<LachingVersion[^>]*>\([^<]*\)<.*/\1/p' dotnet/Directory.Build.props; }
-# The web packages: the projects in web/src/ with <IsPackable>true</IsPackable>.
-web_projects() { grep -l '<IsPackable>true</IsPackable>' web/src/*/*.csproj | sed 's#^web/src/\([^/]*\)/.*#\1#'; }
+# The web packages: the projects in web/src/ with <IsPackable>true</IsPackable>, the same way.
+web_projects() { grep -l '<IsPackable>true</IsPackable>' web/src/*/*.csproj | sed 's#^web/src/\([^/]*\)/.*#\1#' | LC_ALL=C sort; }
 web_version() { sed -n 's/.*<LachingWebVersion[^>]*>\([^<]*\)<.*/\1/p' web/Directory.Build.props; }
 tagged() { git rev-parse -q --verify "refs/tags/v$1" >/dev/null; }
 
