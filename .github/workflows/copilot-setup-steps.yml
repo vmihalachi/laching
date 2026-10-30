@@ -32,11 +32,9 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
+      # The four test projects that run anywhere (what verify.sh runs).
       - name: Restore the test projects
-        run: |
-          dotnet restore dotnet/Laching.Core.Tests/Laching.Core.Tests.csproj
-          dotnet restore dotnet/Laching.Companion.Tests/Laching.Companion.Tests.csproj
-          dotnet restore dotnet/Laching.Testing.Tests/Laching.Testing.Tests.csproj
+        run: dotnet restore dotnet/Laching.Tests.slnf
 
       - uses: actions/setup-java@v5
         with:

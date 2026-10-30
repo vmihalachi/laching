@@ -28,7 +28,7 @@ class SchemaTests(unittest.TestCase):
 
     def test_the_fixture_app_and_sunnysays_draft_validate(self):
         self.assertEqual(self.check(FIXTURE_APP / "companion.json"), [])
-        self.assertEqual(self.check(HERE / "sunnysays.companion.json"), [])
+        self.assertEqual(self.check(HERE / "example.companion.json"), [])
 
     @unittest.skipUnless(PAGLIACCI.exists(), "../pagliacci isn't checked out next to laching")
     def test_pagliacci_validates(self):

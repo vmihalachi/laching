@@ -3,7 +3,7 @@
 Language-neutral test data that keeps the Swift package, the .NET port and the Kotlin side behaving the same. The Swift code
 is the reference: every file here is **generated** by `Tests/LachingCoreTests/Conformance` (`scheduler/`) and
 `Tests/LachingCompanionTests/Conformance` (`companion/`), and replayed by `dotnet/Laching.Core.Tests/Conformance`,
-`dotnet/Laching.Companion.Tests` (from sequence 3) and, for `scheduler/`, `kotlin/core`'s `SchedulerConformanceTests`
+`dotnet/Laching.Companion.Tests/Conformance` and, for `scheduler/`, `kotlin/core`'s `SchedulerConformanceTests`
 (no Companion in Kotlin yet).
 
 **Never edit a vector by hand.** Change the Swift code, then regenerate:

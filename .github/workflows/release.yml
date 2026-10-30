@@ -48,6 +48,7 @@ jobs:
   # Reads only. release is false when there is nothing to release or on a dry run, and every other job skips.
   plan:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: read  # the merged pull requests' labels
@@ -131,6 +132,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.nuget == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       VERSION: ${{ needs.plan.outputs.version }}
       TREE: ${{ needs.plan.outputs.tree }}
@@ -172,6 +174,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.nuget == 'true'
     runs-on: windows-latest
+    timeout-minutes: 30
     defaults:
       run:
         shell: bash
@@ -219,6 +222,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.web == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16
@@ -268,6 +272,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.landing == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: tools/landing
@@ -306,6 +311,7 @@ jobs:
       (needs.web.result == 'success' || needs.web.result == 'skipped') &&
       (needs.landing.result == 'success' || needs.landing.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
       actions: write  # the site's deploy
@@ -357,6 +363,7 @@ jobs:
     if: >-
       !cancelled() && needs.landing.result == 'success' && needs.tag.result == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: npm
     permissions:
       contents: read
@@ -388,6 +395,7 @@ jobs:
       !cancelled() && needs.tag.result == 'success' &&
       (needs.npm.result == 'success' || needs.npm.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
       id-token: write

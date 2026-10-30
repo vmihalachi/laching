@@ -25,7 +25,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # scripts/verify.sh reads KTLINT_VERSION too, and skips its ktlint check for any other version. A new version
+  # takes the new download's sha256 here.
   KTLINT_VERSION: "1.8.0"
+  KTLINT_SHA256: "a3fd620207d5c40da6ca789b95e7f823c54e854b7fade7f613e91096a3706d75"
 
 jobs:
   kotlin:
@@ -37,6 +40,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Every gradle-wrapper.jar in the checkout is one Gradle published.
+      - uses: gradle/actions/wrapper-validation@v6
+
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -45,7 +51,8 @@ jobs:
 
       - name: ktlint
         run: |
-          curl -sSL "https://github.com/pinterest/ktlint/releases/download/$KTLINT_VERSION/ktlint" -o "$RUNNER_TEMP/ktlint"
+          curl -fsSL "https://github.com/pinterest/ktlint/releases/download/$KTLINT_VERSION/ktlint" -o "$RUNNER_TEMP/ktlint"
+          echo "$KTLINT_SHA256  $RUNNER_TEMP/ktlint" | sha256sum -c -
           chmod a+x "$RUNNER_TEMP/ktlint"
           "$RUNNER_TEMP/ktlint" "**/*.kt" "**/*.kts" "!**/build/**"
 

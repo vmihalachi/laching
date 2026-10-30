@@ -9,4 +9,4 @@ The design and sequence briefs of three released versions, kept as the record of
   `0.8/README.md` is still how the C# shell mirrors the Swift one.
 
 Nothing new goes here. Planned work is in [GitHub Issues](https://github.com/vmihalachi/laching/issues): what 0.8 left
-unchecked or undecided is #6–#13.
+unchecked or undecided became #6–#13.

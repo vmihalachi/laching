@@ -28,7 +28,7 @@ SHARED = (
 # fnmatch patterns (`*` crosses folders), relative to the repository's root → the tests that cover them.
 COVERS: dict[str, tuple[str, ...]] = {
     "tools/tests/covering.py": ("test_covering",),
-    "tools/tests/sunnysays.companion.json": ("test_companion", "test_scripts"),
+    "tools/tests/example.companion.json": ("test_companion", "test_scripts"),
     "tools/avd.py": ("test_screens", "test_scripts"),  # check-layout-android.py
     "tools/bump-apps.sh": ("test_pins",),
     "tools/character.py": ("test_character", "test_scripts"),
@@ -72,6 +72,12 @@ COVERS: dict[str, tuple[str, ...]] = {
     "tools/landing/*": (),  # verify.sh's @laching/landing check tests it
     # The repository's fixture skins, which test_character compiles.
     "Tests/Fixtures/*": ("test_character",),
+    # The repository's own scripts verify.sh sends here: test_release runs release.sh, verify.sh --version and
+    # release.yml's plan step, test_covering verify.sh --fast; fixture-art.sh compiles the fixture skins.
+    "scripts/release.sh": ("test_release",),
+    "scripts/verify.sh": ("test_covering", "test_release"),
+    "scripts/fixture-art.sh": ("test_character",),
+    ".github/workflows/release.yml": ("test_release",),
 }
 
 

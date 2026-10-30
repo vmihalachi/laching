@@ -4,14 +4,18 @@
 #   scripts/verify.sh                    # working-tree changes vs HEAD, plus untracked files
 #   scripts/verify.sh --staged           # staged files
 #   scripts/verify.sh --all              # every check, regardless of what changed
-#   scripts/verify.sh --fast ...         # only the checks that take seconds (no swift test, dotnet test)
+#   scripts/verify.sh --fast ...         # only the checks that take seconds (no swift test, dotnet test, gradlew)
 #   scripts/verify.sh --version X.Y.Z    # only release.yml's gate: the version strings are X.Y.Z
 #
 # Path → checks:
 #   Package.swift, Sources/, Tests/     swift-format lint, swift build + test (macOS), vectors current
 #   dotnet/**, conformance/**           dotnet format whitespace, dotnet build + test
-#   tools/**, Tests/Fixtures/**         the tools' Python tests (with --fast, the ones that cover the changed paths:
-#                                       tools/tests/covering.py), fixture art current
+#   kotlin/**                           ktlint (the version kotlin.yml pins)
+#   kotlin/**, conformance/**           ./gradlew :core:test :testing:test on a JDK 17 (JAVA_HOME, else Homebrew's
+#                                       openjdk@17, else the java on PATH)
+#   tools/**, Tests/Fixtures/**,        the tools' Python tests (with --fast, the ones that cover the changed paths:
+#   scripts/{release,verify,            tools/tests/covering.py), fixture art current
+#   fixture-art}.sh, release.yml
 #   tools/landing/**                    @laching/landing: types, lint, format, tests (Node 24)
 #   web/**                              dotnet format (web's solution), its tests (the Jobs tests only with PostgreSQL:
 #                                       LACHING_WEB_TEST_POSTGRES, or localhost:5432), the Tailwind sample
@@ -27,7 +31,7 @@ while [ $# -gt 0 ]; do
     --all) all=1 ;;
     --staged) mode=staged ;;
     --version) [ $# -ge 2 ] || { echo "--version needs X.Y.Z (see --help)" >&2; exit 2; }; version="$2"; shift ;;
-    -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1 (see --help)" >&2; exit 2 ;;
   esac
   shift
@@ -39,7 +43,9 @@ touched() { [ "$all" = 1 ] || printf '%s\n' "$changed" | grep -Eq "$1"; }
 darwin=0; [ "$(uname)" = Darwin ] && darwin=1
 swift='^Package\.swift$|^Sources/|^Tests/|^\.swift-format$'
 dotnet='^dotnet/|^conformance/|^Tests/LachingCompanionTests/Resources/|^Tests/LachingShellTests/Resources/'
-tools='^tools/|^Tests/Fixtures/'
+kotlin='^kotlin/'
+# release.sh, verify.sh and release.yml are what test_release runs; fixture-art.sh is what the fixture art check runs.
+tools='^tools/|^Tests/Fixtures/|^scripts/(release|verify|fixture-art)\.sh$|^\.github/workflows/release\.yml$'
 web='^web/'
 tailwind='^web/(src/Laching\.Web\.Tailwind/|tests/Laching\.Web\.Tailwind\.Sample/|scripts/tailwind-sample\.sh$)'
 
@@ -73,6 +79,20 @@ tools_tests() {
     check "tools tests ($tests)" python3 tools/tests/run.py $tests
   fi
 }
+
+# kotlin.yml's ktlint step: the same files (the version is checked before).
+kotlin_lint() { (cd kotlin && ktlint "**/*.kt" "**/*.kts" "!**/build/**"); }
+
+# Gradle on a JDK 17, the toolchain :core and :testing ask for (kotlin/build.gradle.kts). jdk17 prints the first home
+# that is one: JAVA_HOME, Homebrew's openjdk@17 (keg-only, so nothing else finds it), then "" for the java on PATH.
+jdk17() {
+  local home
+  for home in "${JAVA_HOME:-}" /opt/homebrew/opt/openjdk@17 ""; do
+    if "${home:+$home/bin/}java" -version 2>&1 | grep -q 'version "17[."]'; then printf '%s' "$home"; return 0; fi
+  done
+  return 1
+}
+kotlin_tests() { (cd kotlin && JAVA_HOME="$1" ./gradlew :core:test :testing:test --console=plain); }
 
 landing_check() {
   (
@@ -139,6 +159,15 @@ if touched "$web"; then
   if has dotnet; then check "dotnet format whitespace (web)" dotnet format whitespace web --folder --verify-no-changes
   else skip "dotnet format (web): needs the .NET SDK"; fi
 fi
+if touched "$kotlin"; then
+  pinned="$(sed -n 's/^ *KTLINT_VERSION: "\(.*\)"$/\1/p' .github/workflows/kotlin.yml)"
+  if ! has ktlint; then skip "ktlint: needs ktlint $pinned, the version kotlin.yml pins (brew install ktlint)"
+  else
+    found="$(ktlint --version 2>&1 | head -n 1)"
+    if [ "$found" = "ktlint version $pinned" ]; then check "ktlint" kotlin_lint
+    else skip "ktlint: needs ktlint $pinned, the version kotlin.yml pins; this one says: $found"; fi
+  fi
+fi
 if touched "$tools"; then
   if has python3; then
     tools_tests
@@ -162,6 +191,10 @@ if [ "$fast" = 0 ]; then
       check "dotnet build + test (Core, Companion, Companion.Shell, Testing)" \
         dotnet test dotnet/Laching.Tests.slnf -v q --nologo
     else skip "dotnet test: needs the .NET SDK"; fi
+  fi
+  if touched "$kotlin|^conformance/"; then
+    if jdk="$(jdk17)"; then check "gradlew :core:test :testing:test" kotlin_tests "$jdk"
+    else skip "gradlew :core:test :testing:test: needs a JDK 17 (JAVA_HOME, or brew install openjdk@17)"; fi
   fi
   if touched "$web"; then
     if has dotnet; then
