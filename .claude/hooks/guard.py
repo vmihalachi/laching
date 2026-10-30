@@ -15,7 +15,11 @@ import sys
 from pathlib import Path
 
 BIG_LINES = 600  # a text file over this many lines is read by outline and range; 0 disables
-GENERATED = []  # regexes on the path: generated files read by grep or a range whatever their size, e.g. r"\.Designer\.cs$"
+GENERATED = [  # regexes on the path: generated files read by grep or a range whatever their size, e.g. r"\.Designer\.cs$"
+    r"(^|/)conformance/[^/]+/",  # the vectors (scripts/conformance.sh), not conformance/README.md
+    r"(^|/)Sources/LachingTesting/Fixtures/Fixture[^/]+Art\.swift$",  # scripts/fixture-art.sh, not FixtureArt.swift
+    r"(^|/)tools/landing/package-lock\.json$",
+]
 OUTLINE = r"grep -n '^\(func\|class\|struct\|extension\|public\|##\)'"
 WHOLE = re.compile(r"(^|[|;&(]\s*|\s)(cat|less|more|bat|nl|view)\b")  # readers that print a file whole
 SED_RANGE = re.compile(r"(\d+|/[^/]*/)\s*,\s*(\d+|\$|\+\d+|/[^/]*/)\s*[pP](?!\w)|\b\d+\s*[pP]\b|/[^/]*/\s*[pP](?!\w)")

@@ -701,7 +701,7 @@ case "$1" in status) echo "VM $2 exist running" ;; exec) [ "$3" = --current-user
 
 class FontsPlanTests(unittest.TestCase):
     def test_the_plan_comes_from_companion_json(self):
-        data = json.loads((HERE / "sunnysays.companion.json").read_text("utf8"))
+        data = json.loads((HERE / "example.companion.json").read_text("utf8"))
         root = Path("/app").resolve()  # the Config resolves its paths: Q:\app on Windows
         plan = fonts.Plan(companion.Config(data, root))
         self.assertEqual(plan.out, root / "macos/SunnySays/Resources/Fonts")
@@ -714,7 +714,7 @@ class FontsPlanTests(unittest.TestCase):
         self.assertIn("no kerning after the space", plan.description())
 
     def test_more_faces_share_the_license_and_the_checks(self):
-        data = json.loads((HERE / "sunnysays.companion.json").read_text("utf8"))
+        data = json.loads((HERE / "example.companion.json").read_text("utf8"))
         data["fonts"]["faces"] = [{"family": "FredokaUpright", "font": ["https://example.com/u.ttf", "0" * 64],
                                    "weights": {"Bold": 700}}]
         self.assertEqual(companion.validate(data), [])

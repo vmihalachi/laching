@@ -2,7 +2,11 @@
   "patterns": [
     "\\.(cs|razor|cshtml|resx|csproj|props|targets)$",
     "\\.swift$",
-    "^(Sources|Tests|dotnet|tools)/.*\\.(py|json)$"
+    "\\.(kt|kts)$",
+    "\\.(sh|yml)$",
+    "^(Sources|Tests|dotnet|tools)/.*\\.(py|json)$",
+    "^site/",
+    "^scripts/"
   ],
   "exclude": [
     "/(bin|obj)/"

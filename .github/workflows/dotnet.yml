@@ -38,6 +38,7 @@ env:
 jobs:
   core:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
@@ -73,6 +74,7 @@ jobs:
   # the job billed the same minutes; on Linux the restore takes a second.
   windows:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
