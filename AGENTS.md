@@ -29,6 +29,8 @@ The hook refuses these whole; read them as the table says.
 | How an issue is written and worked, the labels | `docs/issues.md` |
 | Vector formats | `conformance/README.md` |
 | The companion apps' tools | `tools/README.md` |
+| A new consumer app from zero: the packages, the submodule, `companion.json`, the hook, the skills | `docs/getting-started.md` |
+| The Kotlin side: its modules, how an Android app includes it, its commands | `kotlin/README.md` |
 | The web packages (`Laching.Web.*`) | `web/README.md` |
 | The companion landing page kit (`@laching/landing`) | `tools/landing/README.md` |
 | Who Laching is for, the project site's brief | `PRODUCT.md` |
