@@ -23,8 +23,8 @@ desktop presence, the rig) is pinned by Laching's own vectors; the app pins its 
    Linux session without one, dispatch the app's Regenerate vectors workflow and pull its commit). Commit them in the
    same change: `ConformanceTests` fails when they're stale.
 4. Port to the Windows core until its `dotnet test` passes (`windows-port` skill).
-5. A behavior change in Laching's mechanism belongs in Laching (its `add-scheduler-behavior` or `port-to-csharp`
-   skill), then a Laching release the app pins (`laching.tag`).
+5. A behavior change in Laching's mechanism belongs in Laching (its `add-scheduler-behavior`, `port-to-csharp` or
+   `port-to-kotlin` skill), then a Laching release the app pins (`laching.tag`).
 6. `scripts/verify.sh` runs everything that applies.
 
 ## Test setup

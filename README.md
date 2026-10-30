@@ -5,8 +5,8 @@ app needs and nobody wants to write twice. Swift for macOS and iOS, .NET for Win
 
 Laching grew out of [mybackhurts](https://mybackhurts.app), which ships it, and [sunnysays](https://sunnysays.app), a
 desk companion in development whose character became the companion layer. [Mister Pagliacci](https://pagliacci.app), a
-clown who tells jokes from the menu bar, is the second companion app built on that layer (in design). It is `0.x` until
-the second app has settled the API, so minor versions may change public types.
+clown who tells jokes from the menu bar or the tray, is the second companion app built on that layer (in development,
+for Mac and Windows). It is `0.x` until the second app has settled the API, so minor versions may change public types.
 
 **No support.** Laching is shared as is, for anyone to use, but it is built for these apps: its
 [issues](https://github.com/vmihalachi/laching/issues) are the owner's own plans, issues and pull requests from
@@ -16,7 +16,7 @@ others aren't monitored, and releases follow what the apps need.
 
 | Swift product | .NET package | What it does |
 |---|---|---|
-| `LachingCore` | `Laching.Core` | Pure logic. `ReminderScheduler`: an interval timer with active hours and weekdays, quiet hours, an idle reset ("you were away, the timer restarts"), a hold while the user is busy with a grace period after, snooze, "after my next call" and pause. `Clock`, `IdleTimeProvider` and `BusyStateProvider` protocols so it runs on an injected clock. A seeded `SplitMix64` random source for deterministic jitter. The drawing math (SVG path sampling, keyframes, polylines, a hand-drawn wobble), in Swift and Kotlin only: it has no C# port. No OS or UI dependencies, so it builds anywhere Swift, .NET or Kotlin runs. |
+| `LachingCore` | `Laching.Core` | Pure logic. `ReminderScheduler`: an interval timer with active hours and weekdays, quiet hours, an idle reset ("you were away, the timer restarts"), a hold while the user is busy with a grace period after, snooze, "after my next call" and pause. `Clock`, `IdleTimeProvider` and `BusyStateProvider` protocols so it runs on an injected clock. A seeded `SplitMix64` random source for deterministic jitter. The drawing math (SVG path sampling, keyframes, polylines, a hand-drawn wobble), in Swift on Apple platforms (over CoreGraphics) and in Kotlin only: it has no C# port. Otherwise no OS or UI dependencies, so it builds anywhere Swift, .NET or Kotlin runs. |
 | `LachingCompanion` | `Laching.Companion` | The pure core of a desk companion: a phrase bank and picker (lines, jokes told in beats, tunes; scoped by skin, flavor and language), chatter cadence presets, quiet rules and mood, write-through settings an app subclasses, a coordinator that replays a whole day from a seed, desktop presence, skins, and a rig that animates vector or raster character art. The app injects its lines, defaults, skins and palette; the .NET side loads them from the JSON the Swift side writes (`PhraseBank.Parse`, `CharacterArt.Parse`). |
 | `LachingSystem` | `Laching.Windows` | The real providers. Idle time from the last input event. **Call detection without permissions:** whether another app is using the camera or the microphone, read from device state (CoreAudio's process list on macOS, the capability consent store on Windows), never by opening a device. Full-screen detection. Power source (battery, charging, level). Output muted and route. Screen locked. Appearance changes. |
 | `LachingShell` | `Laching.Windows` | Menu bar / tray app plumbing. A status item with a popover panel, a right-click menu and an animated glyph the app draws. Speech: a speaker (the system voice or a recorded clip), a sequencer that tells a joke in beats, a library of recorded voices that knows which clips are current, a chime player. A window manager that shows the Dock icon only while a window is open, a login item toggle, "was I launched at login?", a notification poster with categories and actions, a floating desktop window (macOS), a raw `Shell_NotifyIcon` tray icon host with a native menu, single-instance startup and a `.resw` lookup; on Apple platforms it re-exports `LachingCore`'s drawing types. |
@@ -192,8 +192,9 @@ cd kotlin && ./gradlew :core:test :testing:test   # Kotlin, with a JDK 17
 scripts/verify.sh                         # the checks that apply to what you changed
 ```
 
-Every other command (the vectors, Windows, the fixture app, the tools' tests, the web packages, the formatters) is
-under *Commands* in [`AGENTS.md`](AGENTS.md), which coding agents read first.
+Every other command (the vectors, Windows, the fixture app, the tools' tests, the web packages, the style checks) is
+under *Commands* in [`AGENTS.md`](AGENTS.md), which coding agents read first. To format Swift:
+`xcrun swift-format format -i --configuration .swift-format <files>`.
 
 ## Releases
 

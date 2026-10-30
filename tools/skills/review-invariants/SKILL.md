@@ -1,6 +1,6 @@
 ---
 name: review-invariants
-description: "Review a diff in a Laching companion app against the rules tests don't catch: privacy (no camera or microphone, no network, nothing persisted beyond settings), stable identifiers, pure logic staying pure, localized text, palette tokens, Windows parity, generated files, concurrency, plus the app's own appendix. Use before committing a change to the Mac app, the Windows port or the landing page, or when asked to review against the project rules. Read-only; returns findings with file:line."
+description: "Review a diff in a Laching companion app against the rules tests don't catch: privacy (no camera or microphone, no network, nothing persisted beyond settings), stable identifiers, pure logic staying pure, localized text, palette tokens, Windows and Android parity, generated files, concurrency, plus the app's own appendix. Use before committing a change to the Mac app, the Windows port, the Android app or the landing page, or when asked to review against the project rules. Read-only; returns findings with file:line."
 ---
 
 # Review against the invariants
@@ -23,9 +23,11 @@ other sessions may share this checkout. Paths and names come from `companion.jso
 3. Go through every item the changed paths could touch, with the checks the items name (grep the added lines, read
    the surrounding code). An added line is only a finding if it breaks the rule in context: `Date()` in a view is
    fine, in the core package it isn't.
-4. Windows parity: compare user-visible Mac changes (`hooks.macUI` in companion.json, strings) with changes under the
-   Windows app (`hooks.windowsUI`). A missing port is a finding unless the change has no Windows counterpart.
-5. Pinned logic changed: check the vectors (`conformance.dir`) and the Windows core changed too.
+4. Windows and Android parity: compare user-visible Mac changes (`hooks.macUI` in companion.json, strings) with changes
+   under the Windows app (`hooks.windowsUI`) and, when `hooks.androidUI` is set, the Android app. A missing port is a
+   finding unless the change has no counterpart there.
+5. Pinned logic changed: check the vectors (`conformance.dir`), the Windows core and, when the app has an `android`
+   section, the Kotlin core (`android.core`) changed too.
 
 ## Report
 

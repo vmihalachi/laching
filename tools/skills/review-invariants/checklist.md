@@ -50,8 +50,9 @@ actually breaks. Tooling and docs are out of scope except item 13.
 11. Colors come from the app's palette (`CompanionPalette` on the Mac, palette resources on Windows), not system
     grays or hex literals; spacing uses `Space` steps; animations respect Reduce Motion and the character freezes on
     its still pose.
-12. User-visible Mac changes (`hooks.macUI`: screens, copy, flows, phrases) have a matching change under the Windows
-    app (`hooks.windowsUI`), or the diff says why there's no Windows counterpart.
+12. User-visible Mac changes (`hooks.macUI`: screens, copy, flows, phrases) have a matching change under the Windows app
+    (`hooks.windowsUI`) and, when `hooks.androidUI` is set, under the Android app, or the diff says why there's no
+    counterpart.
 
 ## Repo hygiene
 

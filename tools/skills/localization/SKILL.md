@@ -47,9 +47,10 @@ language) are in the app's `DESIGN.md` and `.agents/notes/localization.md` when 
    Don't read the work files yourself; wait for the one-line replies.
 5. **Apply**: `python3 laching/tools/l10n.py apply '<mac.dir>/build/l10n/*.json'`. If it rejects entries, send the
    error lines back to that language's sub-agent and apply again.
-6. **Verify**: `python3 laching/tools/l10n.py check` must print `ok` for every language. It also fails when the
-   Windows `.resw` (or Linux `.po`) exports are stale: run `l10n.py export-windows` and commit the output. Build the
-   app (or run the tests); when landing copy changed, build the landing page.
+6. **Verify**: `python3 laching/tools/l10n.py check` must print `ok` for every language. It also fails when the Windows
+   `.resw`, Linux `.po` or Android `strings.xml` exports are stale: run `l10n.py export-windows` (or `export-linux`,
+   `export-android`) and commit the output. Build the app (or run the tests); when landing copy changed, build the
+   landing page.
 7. **Report**: list the new or changed strings in the languages the owner reviews (`.agents/notes/localization.md`),
    source → translation, one line each, and anything the sub-agents flagged as unsure.
 

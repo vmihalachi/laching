@@ -12,23 +12,26 @@ no app's strings. Change these together, in one pull request:
 | Place | What changes |
 |---|---|
 | The tool (`tools/<name>.py`, `.sh`, `tools/store/`, `tools/windows/`, `tools/hooks/hook.py`) | The behavior, and its docstring's usage lines at the top (the commands and flags, one per line). |
-| `tools/companion.schema.json` | A new or changed key, with its `type`, `description` and default. `companion.py validate` checks every app against it, and the schema is the source of truth for every section. |
+| `tools/companion.schema.json` | A new or changed key, with its `type` and a `description` that states its default when it has one (the schema has no `default` keyword). `companion.py validate` checks every app against it, and the schema is the source of truth for every section. |
 | `tools/tests/test_<name>.py` | A test for the change, over `tools/tests/fixture-app/` (add the key there when the tool needs it) or a temporary folder. Tests never reach the network. |
 | `tools/tests/covering.py` | A new file gets a `COVERS` entry naming the tests that exercise it, or `test_covering` fails; a file every test leans on goes in `SHARED`. |
 | `tools/README.md` | The tool's line in the table and what the README says about it: commands, keys, what it never does. |
 
 ## Rules
 
-- **Read config through `companion.py`:** `config = companion.load()`, then `config.get("a.b")` or
-  `config.path("a.b")` (an absolute path, or `None`). Paths in `companion.json` are relative to the app's root.
+- **Read config through `companion.py`:** `config = companion.load()`, then `config.get("a.b")` or `config.path("a.b")`
+  (an absolute path, or `None`). Paths in `companion.json` are relative to the app's root unless the key's schema
+  description says otherwise: pass that folder's key as the second argument, as in `config.path("mac.core", "mac.dir")`.
 - **No app names.** `test_scripts.SharedFilesTests.test_no_app_is_named` reads every file under `tools/` outside the
   tests; app names, bundle ids and copy come from `companion.json`.
 - **Standard library only**, unless the tool's docstring names the extra (as `fonts.py` does fontTools), and Python
   3.10 or later.
 - **A new key's default keeps every app working unchanged**: the apps update their `companion.json` when they move
   to the release, not before.
-- **One copy.** An app calls the tool from its submodule (`python3 laching/tools/<name>.py`) or through a thin
-  wrapper; `companion.py conform` fails on a copy, so a new shared file it should guard goes in `tools/conform.py`.
+- **One copy.** An app calls the tool from its submodule (`python3 laching/tools/<name>.py`) or through a thin wrapper;
+  `companion.py conform` fails on a copy of any `.py`, `.sh` or `.ps1` under `tools/` (outside `tests/`, `skills/` and
+  `landing/`), found by name, so a new tool needs no edit there; a renamed or retired tool's old name goes in `RETIRED`
+  in `tools/conform.py`.
 - A skill that runs the tool (`tools/skills/`, which the apps symlink) says the new command or flag.
 
 ## Verify

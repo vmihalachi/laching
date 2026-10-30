@@ -33,9 +33,9 @@ visitor understands what is inside, trusts the permission-free and cross-platfor
   never prompts for a permission. Nothing in it touches the network.
 - One behavior on every platform: the Swift code is the reference, JSON conformance vectors are generated from it, the
   C# port replays every one and the Kotlin port the scheduler's.
-- Extracted from two real apps (mybackhurts, which ships it on macOS, iPhone and iPad, Windows and Android, and
-  sunnysays, in development), not designed in the abstract. The companion layer is sunnysays' character skeleton made
-  generic; Mister Pagliacci (in development, Mac and Windows) is built on it.
+- Extracted from two real apps (mybackhurts, which ships it on macOS, iPhone and iPad and Windows, with Android in
+  development, and sunnysays, in development), not designed in the abstract. The companion layer is sunnysays' character
+  skeleton made generic; Mister Pagliacci (in development, Mac and Windows) is built on it.
 
 ## Capabilities and Constraints
 

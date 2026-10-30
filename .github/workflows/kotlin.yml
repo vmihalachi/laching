@@ -1,6 +1,6 @@
 name: Kotlin
 
-# The Kotlin side (kotlin/): ktlint over every source, then :core's and :testing's tests (every conformance vector among
+# The Kotlin side (kotlin/): ktlint over every source, then :core's and :testing's tests (every scheduler vector among
 # them) and the :android debug build, on a hosted Ubuntu runner, whose image carries the Android SDK.
 on:
   push:

@@ -5,9 +5,11 @@ The complete rules (moved from `AGENTS.md`, which keeps the short form).
 - **Public API is deliberate.** Every public type gets a doc comment saying what it does, what it needs and what it
   never does (for example "never prompts for a permission"). Keep type names that mybackhurts already uses
   (`ReminderScheduler`, `SchedulerConfig`, `Clock`, `BusyStateProvider`…) so adopting the package is an import swap.
-- **Swift 6 language mode** (strict concurrency; public value types are `Sendable`), macOS 14+, iOS 17+ (Swift), Windows 11 (.NET), Android 8+ (Kotlin), no dependencies. `LachingCore` stays Foundation-only and `LachingCompanion`
-  Foundation and Observation only (both build on Linux); anything that imports AppKit, SwiftUI, CoreAudio, AVFoundation,
-  IOKit or Carbon goes in `LachingSystem`, `LachingShell` or `LachingCompanionUI`.
+- **Swift 6 language mode** (strict concurrency; public value types are `Sendable`), macOS 14+, iOS 17+ (Swift), Windows
+  11 (.NET), Android 8+ (Kotlin), no dependencies. `LachingCore` stays Foundation-only (plus CoreGraphics in `Drawing/`,
+  on Apple platforms only) and `LachingCompanion` Foundation and Observation only (both build on Linux); anything that
+  imports AppKit, SwiftUI, CoreAudio, AVFoundation, IOKit or Carbon goes in `LachingSystem`, `LachingShell` or
+  `LachingCompanionUI`.
 - **Classes an app drives are `@MainActor`; the protocols injected into them aren't `Sendable`.**
   `ReminderScheduler`, `CompanionCoordinator` and `CompanionSettings` (and so an app's subclass of it), like the UI's
   models and watchers, are isolated to the main actor, so a call from a background queue is a compile error rather
@@ -26,9 +28,10 @@ The complete rules (moved from `AGENTS.md`, which keeps the short form).
 - **No permission prompts, no network.** System signals read device and window state. If an API would prompt the user
   or touch the network, it doesn't belong here.
 - **Behavior changes are additive and vector-tested.** New scheduler behavior gets a config field whose default keeps
-  every existing vector byte-identical, a unit test, a vector case, and the C# port in the same change
-  (`dotnet test dotnet/Laching.Tests.slnf` tells you what to port). New fields in a companion vector are optional and omitted at
-  their default, so the apps' committed vectors stay byte-identical; the C# loaders read an absent field as the default.
+  every existing vector byte-identical, a unit test, a vector case, and the C# and Kotlin ports in the same change
+  (`dotnet test dotnet/Laching.Tests.slnf` and `cd kotlin && ./gradlew :core:test :testing:test` tell you what to port).
+  New fields in a companion vector are optional and omitted at their default, so the apps' committed vectors stay
+  byte-identical; the C# loaders read an absent field as the default.
 - **`conformance/companion` pins mechanism, over fixtures.** The picker, cadence, quiet rules, coordinator, desktop
   presence and rig are pinned here over `LachingTesting`'s fixture bank, defaults and skins; each app pins its own
   content (bank, defaults, picks, poses) with the same generators and replays.
