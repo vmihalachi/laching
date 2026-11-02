@@ -302,13 +302,16 @@ class ReleaseTests(unittest.TestCase):
         for job in ("swift", "kotlin"):
             self.assertNotIn(f"needs.{job}.result == 'skipped'", jobs[1])
             self.assertIn(f"  {job}:\n    needs: plan\n    if: needs.plan.outputs.release == 'true'\n"
-                          f"    uses: ./.github/workflows/{job}.yml\n    with:\n      ref: ${{{{ needs.plan.outputs.base }}}}\n",
+                          f"    uses: ./.github/workflows/{job}.yml\n    with:\n      commit: ${{{{ needs.plan.outputs.base }}}}\n",
                           jobs[0])
             called = (WORKFLOW.parent / f"{job}.yml").read_text("utf8")
             self.assertIn("  workflow_call:\n", called)
             # Called, github.workflow and github.ref are Release's: a call can't share, cancel or be cancelled by a group.
-            self.assertIn(f"group: ${{{{ inputs.ref && format('{job}-call-{{0}}', inputs.ref) ||", called)
-            self.assertIn("cancel-in-progress: ${{ !inputs.ref }}", called)
+            self.assertIn(f"${{{{ inputs.commit && format('{job}-call-{{0}}', inputs.commit)\n", called)
+            self.assertIn("cancel-in-progress: ${{ !inputs.commit }}", called)
+            # The checkout never takes the caller's input (CodeQL's cache poisoning rule): the branch's tip, then a check.
+            self.assertIn("ref: ${{ inputs.commit && github.ref || '' }}", called)
+            self.assertIn('[ "$(git rev-parse HEAD)" = "$COMMIT" ]', called)
 
         origin = self.origin()
         self.change("dotnet/Laching.Core/Clock.cs", pr=110)

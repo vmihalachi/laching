@@ -310,14 +310,14 @@ jobs:
     if: needs.plan.outputs.release == 'true'
     uses: ./.github/workflows/swift.yml
     with:
-      ref: ${{ needs.plan.outputs.base }}
+      commit: ${{ needs.plan.outputs.base }}
 
   kotlin:
     needs: plan
     if: needs.plan.outputs.release == 'true'
     uses: ./.github/workflows/kotlin.yml
     with:
-      ref: ${{ needs.plan.outputs.base }}
+      commit: ${{ needs.plan.outputs.base }}
 
   # The first remote write, once everything that ships has been tested and packed: the release commit and its tag.
   tag:

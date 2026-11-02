@@ -1,8 +1,8 @@
 name: Kotlin
 
 # The Kotlin side (kotlin/): ktlint over every source, then :core's and :testing's tests (every scheduler vector among
-# them) and the :android debug build, on a hosted Ubuntu runner, whose image carries the Android SDK. release.yml calls it
-# (workflow_call) with the commit it plans to tag, and tags nothing unless it passes.
+# them) and the :android debug build, on a hosted Ubuntu runner, whose image carries the Android SDK. release.yml calls
+# it (workflow_call) with the commit it plans to tag, and tags nothing unless it passes.
 on:
   push:
     branches:
@@ -19,8 +19,8 @@ on:
   workflow_dispatch:
   workflow_call:
     inputs:
-      ref:
-        description: "The commit to build and test (release.yml's planned base)"
+      commit:
+        description: "The commit the caller will tag: the run tests the branch's tip, which must be it"
         type: string
         required: true
 
@@ -30,8 +30,10 @@ permissions:
 # Called, github.workflow and github.ref are the caller's ("Release", master): a call gets a group of its own, which
 # no push or other call cancels, and cancels nothing.
 concurrency:
-  group: ${{ inputs.ref && format('kotlin-call-{0}', inputs.ref) || format('{0}-{1}', github.workflow, github.ref) }}
-  cancel-in-progress: ${{ !inputs.ref }}
+  group: >-
+    ${{ inputs.commit && format('kotlin-call-{0}', inputs.commit)
+    || format('{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: ${{ !inputs.commit }}
 
 env:
   # scripts/verify.sh reads KTLINT_VERSION too, and skips its ktlint check for any other version. A new version
@@ -47,9 +49,17 @@ jobs:
       run:
         working-directory: kotlin
     steps:
+      # Called, the branch's tip as it is now (as release.yml's plan job checks it out), else the default.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.ref }}  # empty, the default, but when called
+          ref: ${{ inputs.commit && github.ref || '' }}
+
+      - name: The branch's tip is the commit the caller planned
+        if: inputs.commit
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          [ "$(git rev-parse HEAD)" = "$COMMIT" ] || { echo "$GITHUB_REF moved since the plan"; exit 1; }
 
       # Every gradle-wrapper.jar in the checkout is one Gradle published.
       - uses: gradle/actions/wrapper-validation@v6

@@ -28,8 +28,8 @@ on:
   workflow_dispatch:
   workflow_call:
     inputs:
-      ref:
-        description: "The commit to build and test (release.yml's planned base)"
+      commit:
+        description: "The commit the caller will tag: the run tests the branch's tip, which must be it"
         type: string
         required: true
 
@@ -39,17 +39,27 @@ permissions:
 # Called, github.workflow and github.ref are the caller's ("Release", master): a call gets a group of its own, which
 # no push or other call cancels, and cancels nothing.
 concurrency:
-  group: ${{ inputs.ref && format('swift-call-{0}', inputs.ref) || format('{0}-{1}', github.workflow, github.ref) }}
-  cancel-in-progress: ${{ !inputs.ref }}
+  group: >-
+    ${{ inputs.commit && format('swift-call-{0}', inputs.commit)
+    || format('{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: ${{ !inputs.commit }}
 
 jobs:
   test:
     runs-on: macos-26
     timeout-minutes: 30
     steps:
+      # Called, the branch's tip as it is now (as release.yml's plan job checks it out), else the default.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.ref }}  # empty, the default, but when called
+          ref: ${{ inputs.commit && github.ref || '' }}
+
+      - name: The branch's tip is the commit the caller planned
+        if: inputs.commit
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          [ "$(git rev-parse HEAD)" = "$COMMIT" ] || { echo "$GITHUB_REF moved since the plan"; exit 1; }
 
       - uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -103,7 +113,7 @@ jobs:
           git diff --exit-code --stat -- conformance
 
       - name: Save .build
-        if: steps.restore.outputs.cache-hit != 'true' && !inputs.ref
+        if: steps.restore.outputs.cache-hit != 'true' && !inputs.commit
         uses: actions/cache/save@v6
         with:
           path: .build
@@ -116,7 +126,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.commit && github.ref || '' }}
+
+      - name: The branch's tip is the commit the caller planned
+        if: inputs.commit
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          [ "$(git rev-parse HEAD)" = "$COMMIT" ] || { echo "$GITHUB_REF moved since the plan"; exit 1; }
 
       - name: Build LachingCore, LachingCompanion, LachingTesting
         run: |
