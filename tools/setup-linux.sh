@@ -21,7 +21,7 @@ hand_on() {
   return 0
 }
 add_path() {
-  export PATH="$1:$PATH"
+  case ":$PATH:" in *":$1:"*) ;; *) export PATH="$1:$PATH" ;; esac
   [ -n "${CLAUDE_ENV_FILE:-}" ] && echo "export PATH=\"$1:\$PATH\"" >>"$CLAUDE_ENV_FILE"
   [ -n "${GITHUB_PATH:-}" ] && echo "$1" >>"$GITHUB_PATH"
   return 0
@@ -42,6 +42,8 @@ git config submodule.recurse true; git config push.recurseSubmodules on-demand
 
 # .NET 10 SDK, into ~/.dotnet.
 if [ -n "$WINDOWS_DIR" ]; then
+  # An earlier run's SDK, which a fresh shell doesn't have on PATH.
+  [ -x "$HOME/.dotnet/dotnet" ] && export PATH="$HOME/.dotnet:$PATH"
   if ! has dotnet || ! dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then
     echo "Installing the .NET 10 SDK into ~/.dotnet"
     curl -fsSL https://dot.net/v1/dotnet-install.sh -o "${TMPDIR:-/tmp}/dotnet-install.sh" &&
