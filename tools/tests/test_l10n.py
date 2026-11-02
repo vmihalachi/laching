@@ -5,12 +5,15 @@ language-scoped phrases and the phrase sync."""
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
+import subprocess
 import sys
 import unittest
 import xml.etree.ElementTree as ET
+from contextlib import redirect_stderr
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -19,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import companion  # noqa: E402
 import l10n  # noqa: E402
 import phrases  # noqa: E402
-from support import FixtureAppTestCase, git, quiet  # noqa: E402
+from support import TOOLS, FixtureAppTestCase, git, quiet  # noqa: E402
 
 APPLE_SPEC_RE = re.compile(r"%(?:\d+\$)?(?:ll|l|q|z)?[@diu]|%#@|%arg")
 NET_ARG_RE = re.compile(r"(?<!\{)\{(\d+)\}(?!\})")
@@ -486,6 +489,133 @@ class PhrasesTests(L10nTestCase):
         self.assertNotIn("phrase.long-joke.1", report["de"]["app"])
         self.assertIn("phrase.long-joke.1", report["it"]["app"])
         self.assertIn("phrase.joke.2", report["it"]["app"], "a rewritten part needs translating again")
+
+    def edit_catalog(self, change):
+        path = l10n.CATALOGS["app"]
+        data = l10n.load_catalog(path)
+        change(data["strings"])
+        l10n.dump_catalog(path, data)
+
+    def sync_comments(self):
+        """Brings the fixture's comments in step (they predate the template), so a later sync starts from zero."""
+        result, out = quiet(phrases.cmd_sync, self.config())
+        self.assertEqual(result, 0, out)
+        self.assertIn("comments refreshed 4", out)
+
+    def test_check_names_missing_stale_and_orphaned_keys(self):
+        def change(bank):
+            bank[:] = [p for p in bank if p["id"] != "hello"]
+            next(p for p in bank if p["id"] == "joke")["parts"][1] = "His feet were sore."
+            bank.append({"id": "bye", "kind": "line", "key": "phrase.bye", "english": "Bye.", "tags": ["general"],
+                         "weight": 3, "skins": [], "flavor": "a"})
+        self.rewrite_bank(change)
+        result, out = quiet(phrases.cmd_check, self.config())
+        self.assertEqual(result, 1)
+        self.assertEqual(out.splitlines(), [
+            "missing in the catalog: 'phrase.bye' (run phrases.py sync)",
+            "source text changed in the bank: 'phrase.joke.2' (run phrases.py sync, then re-export the translations)",
+            "in the catalog but not in the bank: 'phrase.hello' (retired? phrases.py sync removes it)",
+        ])
+
+    def test_a_missing_bank_asks_for_the_vectors(self):
+        (self.root / "conformance" / "phrases.json").unlink()
+        expected = (f"{Path('conformance/phrases.json')} is missing: "
+                    "regenerate the vectors first (laching/tools/conformance.sh)")
+        for command in (phrases.cmd_check, phrases.cmd_sync):
+            with self.subTest(command=command.__name__), self.assertRaises(SystemExit) as caught:
+                quiet(command, self.config())
+            self.assertEqual(caught.exception.code, expected)
+
+    def test_sync_in_step_adds_nothing_and_leaves_the_catalog_alone(self):
+        self.sync_comments()
+        before = l10n.CATALOGS["app"].read_bytes()
+        result, out = quiet(phrases.cmd_sync, self.config())
+        self.assertEqual(result, 0, out)
+        self.assertEqual(out.splitlines(), ["added 0", "updated 0, removed 0, comments refreshed 0"])
+        self.assertEqual(l10n.CATALOGS["app"].read_bytes(), before)
+
+    def test_the_comment_template_fills_every_field(self):
+        config = self.config()
+        config.data["l10n"]["phraseComment"] = "{character}|{tags}|{flavor}|{flavorNote}|{part}"
+        bank = phrases.load_bank(config)
+        self.assertEqual(phrases.comment_for(config, bank["phrase.hello"]), "Fixy|general|a|a: the first flavor|")
+        self.assertEqual(phrases.comment_for(config, bank["phrase.joke.2"]),
+                         "Fixy|buttonPress, general|b|b: the second flavor| Part 2 of 2 of a joke told in beats.")
+
+    def test_without_a_template_the_default_comment_is_used(self):
+        config = self.config()
+        del config.data["l10n"]["phraseComment"]
+        bank = phrases.load_bank(config)
+        self.assertEqual(phrases.comment_for(config, bank["phrase.hello"]),
+                         "Fixy says this aloud (general). Flavor a: the first flavor.")
+
+    def test_a_flavor_without_a_note_reads_as_its_name(self):
+        self.rewrite_bank(lambda bank: next(p for p in bank if p["id"] == "hello").update(flavor="c"))
+        config = self.config()
+        self.assertEqual(phrases.comment_for(config, phrases.load_bank(config)["phrase.hello"]),
+                         "Fixy says this aloud (general). Flavor c.")
+
+    def test_a_changed_template_refreshes_every_comment(self):
+        self.sync_comments()
+        path = self.root / "companion.json"
+        data = json.loads(path.read_text("utf8"))
+        data["l10n"]["phraseComment"] = "{character} says it.{part}"
+        path.write_text(json.dumps(data, ensure_ascii=False), "utf8")
+        result, out = quiet(phrases.cmd_sync, self.config())
+        self.assertEqual(result, 0, out)
+        self.assertIn("updated 0, removed 0, comments refreshed 4", out)
+        strings = l10n.load_catalog(l10n.CATALOGS["app"])["strings"]
+        self.assertEqual(strings["phrase.hello"]["comment"], "Fixy says it.")
+        self.assertEqual(strings["phrase.joke.1"]["comment"], "Fixy says it. Part 1 of 2 of a joke told in beats.")
+        self.assertEqual(
+            strings["phrase.ciao"]["comment"],
+            "Fixy says it. Exists only in it: don't translate it into other languages.",
+        )
+
+    def test_a_changed_line_is_stale_and_loses_its_translations(self):
+        self.rewrite_bank(lambda bank: next(p for p in bank if p["id"] == "hello").update(english="Hello, you."))
+        result, out = quiet(phrases.cmd_check, self.config())
+        self.assertEqual(result, 1)
+        self.assertIn("source text changed in the bank: 'phrase.hello'", out)
+        result, out = quiet(phrases.cmd_sync, self.config())
+        self.assertEqual(result, 0, out)
+        self.assertIn("  ~ 'phrase.hello': source text updated, translations dropped (re-export them)", out)
+        strings = l10n.load_catalog(l10n.CATALOGS["app"])["strings"]
+        self.assertEqual(strings["phrase.hello"]["localizations"],
+                         {"en": {"stringUnit": {"state": "translated", "value": "Hello, you."}}})
+        self.assertEqual(quiet(phrases.cmd_check, self.config())[0], 0)
+
+    def test_a_key_without_a_source_unit_reads_as_its_own_key(self):
+        self.edit_catalog(lambda strings: strings["phrase.hello"]["localizations"].pop("en"))
+        self.assertEqual(phrases.catalog_source(self.config())["phrase.hello"], "phrase.hello")
+        # So it differs from the bank's text: stale, and sync writes the source text back.
+        result, out = quiet(phrases.cmd_check, self.config())
+        self.assertEqual(result, 1)
+        self.assertIn("source text changed in the bank: 'phrase.hello'", out)
+        quiet(phrases.cmd_sync, self.config())
+        strings = l10n.load_catalog(l10n.CATALOGS["app"])["strings"]
+        self.assertEqual(strings["phrase.hello"]["localizations"]["en"]["stringUnit"]["value"], "Hello there.")
+
+    def test_the_command_line(self):
+        # Run from the fixture's root without $COMPANION_ROOT, so the tool finds companion.json from where it runs.
+        env = {key: value for key, value in os.environ.items() if key != "COMPANION_ROOT"}
+
+        def run():
+            return subprocess.run([sys.executable, str(TOOLS / "phrases.py"), "check"], cwd=self.root, env=env,
+                                  capture_output=True, encoding="utf8")
+        done = run()
+        self.assertEqual((done.returncode, done.stdout), (0, ""), done.stderr)
+        self.rewrite_bank(lambda bank: bank.remove(next(p for p in bank if p["id"] == "hello")))
+        done = run()
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("in the catalog but not in the bank: 'phrase.hello'", done.stdout)
+
+    def test_the_command_line_refuses_an_unknown_command(self):
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit) as caught:
+            phrases.main(["publish"])
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("invalid choice: 'publish'", err.getvalue())
 
 
 if __name__ == "__main__":
