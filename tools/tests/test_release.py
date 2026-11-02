@@ -311,7 +311,7 @@ class ReleaseTests(unittest.TestCase):
             self.assertIn("cancel-in-progress: ${{ !inputs.commit }}", called)
             # The checkout never takes the caller's input (CodeQL's cache poisoning rule): the branch's tip, then a check.
             self.assertIn("ref: ${{ inputs.commit && github.ref || '' }}", called)
-            self.assertIn('[ "$(git rev-parse HEAD)" = "$COMMIT" ]', called)
+            self.assertIn("if: inputs.commit && steps.checkout.outputs.commit != inputs.commit", called)
 
         origin = self.origin()
         self.change("dotnet/Laching.Core/Clock.cs", pr=110)

@@ -51,15 +51,16 @@ jobs:
     steps:
       # Called, the branch's tip as it is now (as release.yml's plan job checks it out), else the default.
       - uses: actions/checkout@v7
+        id: checkout
         with:
           ref: ${{ inputs.commit && github.ref || '' }}
 
+      # The checkout's own output, not git: in swift.yml's container git refuses the workspace (dubious ownership).
       - name: The branch's tip is the commit the caller planned
-        if: inputs.commit
-        env:
-          COMMIT: ${{ inputs.commit }}
+        if: inputs.commit && steps.checkout.outputs.commit != inputs.commit
         run: |
-          [ "$(git rev-parse HEAD)" = "$COMMIT" ] || { echo "$GITHUB_REF moved since the plan"; exit 1; }
+          echo "$GITHUB_REF moved since the plan"
+          exit 1
 
       - uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -125,15 +126,16 @@ jobs:
     container: swift:6.1
     steps:
       - uses: actions/checkout@v7
+        id: checkout
         with:
           ref: ${{ inputs.commit && github.ref || '' }}
 
+      # The checkout's own output, not git: in swift.yml's container git refuses the workspace (dubious ownership).
       - name: The branch's tip is the commit the caller planned
-        if: inputs.commit
-        env:
-          COMMIT: ${{ inputs.commit }}
+        if: inputs.commit && steps.checkout.outputs.commit != inputs.commit
         run: |
-          [ "$(git rev-parse HEAD)" = "$COMMIT" ] || { echo "$GITHUB_REF moved since the plan"; exit 1; }
+          echo "$GITHUB_REF moved since the plan"
+          exit 1
 
       - name: Build LachingCore, LachingCompanion, LachingTesting
         run: |
