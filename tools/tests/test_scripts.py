@@ -507,7 +507,8 @@ while not (state / "killed").exists():
         # $PATH without the folders that hold a real ktlint (Homebrew's, on the maintainer's Mac).
         without = [f for f in os.environ["PATH"].split(os.pathsep) if not (Path(f) / "ktlint").exists()]
         path = os.pathsep.join([str(self.bin), str(Path(sys.executable).parent), *without])
-        done = self.run_script("setup-linux.sh", env={"HOME": str(home), "PATH": path,
+        # A GitHub runner's own JDK 17 would answer instead of the fake java (test_setup_linux_hands_on_a_github_runners_jdk_17).
+        done = self.run_script("setup-linux.sh", env={"HOME": str(home), "PATH": path, "JAVA_HOME_17_X64": "",
                                                       **{name: str(file) for name, file in files.items()}})
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn("Installing", done.stdout)
