@@ -74,7 +74,11 @@ jobs:
       - name: The image's .NET SDK
         id: sdk
         if: inputs.hosted
-        run: pwsh "${{ inputs.laching-path }}/tools/windows/dotnet-sdk.ps1"
+        env:
+          LACHING_PATH: ${{ inputs.laching-path }}
+        run: |
+          $script = Join-Path $env:LACHING_PATH tools/windows/dotnet-sdk.ps1
+          if (Test-Path $script) { pwsh $script } else { "No $script in this Laching: setup-dotnet runs." }
 
       # The self-hosted runner keeps its own .NET 10 SDK and Python 3.
       - uses: actions/setup-dotnet@v6
