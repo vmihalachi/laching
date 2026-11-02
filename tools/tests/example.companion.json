@@ -1,5 +1,5 @@
 {
-  "$comment": "A draft of sunnysays' companion.json for its M9 (Laching 0.5), kept here so the schema is checked against both apps. Paths are relative to sunnysays' root.",
+  "$comment": "A full example that exercises the sections the fixture app lacks (characters, fonts.compose), first drafted from sunnysays' and keeping its names. Paths are relative to the app's root.",
   "name": "sunnysays",
   "displayName": "sunnysays",
   "character": "Sunny",

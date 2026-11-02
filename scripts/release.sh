@@ -8,8 +8,8 @@
 #                                   tag. auto: the next minor while 0.x (major from 1.0) when a pull request merged since
 #                                   the last tag is labelled `breaking`, else the next patch (the labels come from gh).
 #        scripts/release.sh nuget X.Y.Z    `ship (why)` or `skip (why)`: the NuGet packages ship in X.Y.Z when
-#                                   dotnet/Directory.Build.props or a packable project's folder changed since
-#                                   v<LachingVersion> (or LachingVersion is X.Y.Z already: after bump).
+#                                   dotnet/Directory.Build.{props,targets} or a packable project's folder changed
+#                                   since v<LachingVersion> (or LachingVersion is X.Y.Z already: after bump).
 #        scripts/release.sh projects       the NuGet packages: dotnet/'s packable projects, one per line.
 #        scripts/release.sh web X.Y.Z      `ship (why)` or `skip (why)`, the same for the web packages: web/src/ or
 #                                   web/'s Directory.* files changed since v<LachingWebVersion>.
@@ -94,8 +94,9 @@ nuget() {
   [ -n "$at" ] || die "dotnet/Directory.Build.props has no LachingVersion"
   [ "$at" != "$1" ] || { echo "ship (LachingVersion is $1 already)"; return; }
   tagged "$at" || die "LachingVersion is $at, which has no tag v$at here: fetch the tags"
-  # The packages' folders; their tests, Fixture.App and the README don't count.
-  if git diff --quiet "v$at" HEAD -- dotnet/Directory.Build.props $(projects | sed 's#^#dotnet/#; s#$#/#'); then
+  # The packages' folders and the build files they pack with; their tests, Fixture.App and the READMEs don't count.
+  if git diff --quiet "v$at" HEAD -- dotnet/Directory.Build.props dotnet/Directory.Build.targets \
+    $(projects | sed 's#^#dotnet/#; s#$#/#'); then
     echo "skip (the packages are unchanged since $at, their version on NuGet)"
   else
     echo "ship (the packages changed since $at, their version on NuGet)"

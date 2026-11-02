@@ -1,0 +1,61 @@
+name: Companion vectors regeneration (reusable)
+
+# Regenerates the app's conformance vectors from its Swift core (`conformance.sh`) in the official Swift image and
+# commits the result to the branch it runs on when it differs, for sessions that have no Swift toolchain at hand. The
+# core is platform-neutral, so Linux is enough; the app's Mac CI re-checks the committed files. The caller is dispatched
+# on a branch, grants `contents: write` and keeps one run at a time (concurrency). It pushes to that branch, so the
+# first step refuses the default branch: vectors reach it through a pull request, never from a dispatch. A push made
+# with the workflow token starts no other workflow: dispatch the checks afterwards.
+on:
+  workflow_call:
+    inputs:
+      laching-path:
+        description: "The Laching submodule, matching companion.json's laching.path"
+        type: string
+        default: laching
+
+permissions:
+  contents: write
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    container: swift:6.1
+    timeout-minutes: 30
+    env:
+      LACHING_PATH: ${{ inputs.laching-path }}
+    steps:
+      - name: Refuse the default branch
+        if: github.ref_name == github.event.repository.default_branch
+        env:
+          REF: ${{ github.ref_name }}
+        run: |
+          echo "::error::This workflow pushes to the branch it runs on. Dispatch it on a branch, not $REF; vectors reach it through a pull request."
+          exit 1
+
+      - uses: actions/checkout@v7
+
+      # The container's user doesn't own the checkout, so git needs it marked safe.
+      - name: Check out the pinned Laching tools
+        run: |
+          git config --global --add safe.directory '*'
+          git submodule update --init -- "$LACHING_PATH"
+
+      - name: Install Python when the image has none
+        run: command -v python3 >/dev/null || { apt-get update -qq && apt-get install -y -qq python3 >/dev/null; }
+
+      - name: Regenerate the vectors
+        run: sh "./$LACHING_PATH/tools/conformance.sh"
+
+      - name: Commit and push if anything changed
+        run: |
+          eval "$(python3 "./$LACHING_PATH/tools/companion.py" env)"
+          git add -A -- "$CONFORMANCE_DIR"
+          if git diff --cached --quiet; then
+            echo "$CONFORMANCE_DIR/ is already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Regenerate conformance vectors" -m "From the Swift core with $(swift --version 2>&1 | head -1)."
+          git push

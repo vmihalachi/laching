@@ -42,6 +42,7 @@ or `$COMPANION_ROOT`); the schema is [`companion.schema.json`](companion.schema.
 | [`skills/`](#skills) | The generic agent skills an app links next to its own. |
 | [`ci-macos.py`, `macos-app.yml`, `smoke-release.sh`](#mac-apps) | Reusable Mac CI, and the Release app's launch check. |
 | [`ci-windows-core.py`, `windows-core.yml`](#portable-windows-checks) | Portable Windows CI. |
+| [`core-linux.yml`, `vectors-linux.yml`](#linux-checks) | Reusable Linux CI: the Swift core's checks and its vectors. |
 | [`companion_ci.py`](#portable-windows-checks) | What both CI drivers share. |
 | [`windows/companion.targets`](#windows-apps) | What every companion's WinUI project imports, last. |
 | [`windows/screenshots.ps1`](#windowsscreenshotsps1) | The WinUI app's windows in light and dark. |
@@ -50,6 +51,7 @@ or `$COMPANION_ROOT`); the schema is [`companion.schema.json`](companion.schema.
 | [`windows/smoke-package.ps1`](#windowssmoke-packageps1) | Installs a built `.msix` the way a customer gets it and checks it opens. |
 | [`windows/check-winui.py`](#windowscheck-winuipy) | WinUI code that runs in Debug but breaks the Native AOT build or the XAML compiler. |
 | [`windows/assets.py`](#windowsassetspy) | The MSIX logos and `AppIcon.ico` from the app icon. |
+| [`windows/dotnet-sdk.ps1`](#windowsdotnet-sdkps1) | In CI, whether the runner image's .NET SDK will do, so a job skips `setup-dotnet`. |
 | [`windows/vm.sh`](#windowsvmsh) | On a Mac, the WinUI app built and checked in a Parallels Windows VM. |
 | [`windows-release.yml`, `windows-app.yml`](#windows-releaseyml-and-windows-appyml) | Reusable workflows: the Store release and the WinUI build check. |
 
@@ -154,12 +156,51 @@ fail when the app drifts from the tools (each rule: `conform.py`'s docstring):
   `setup-linux.sh`, ..., and `store-packages.ps1`, which `store-release.ps1` replaced) is a thin wrapper: at most 12 lines
   of code that name `laching/tools/`. One that is the app's own on purpose (a conformance script writing the app's own
   vectors) goes in `conform.allow`, with why.
+- **Wrappers of one form.** A wrapper calls the tool it's named after, sets `COMPANION_ROOT` to the app's root (the
+  tools find the app from it, not from the working directory, so a wrapper run from anywhere checks the right app),
+  forwards every argument and keeps the tool's exit status, so a failing check fails the caller. The templates, for a
+  wrapper in `scripts/` (one more `..` per folder deeper):
+
+  ```sh
+  #!/bin/sh
+  export COMPANION_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+  exec "$COMPANION_ROOT/laching/tools/verify.sh" "$@"
+  ```
+
+  ```python
+  import os, subprocess, sys
+  root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+  os.environ["COMPANION_ROOT"] = root
+  sys.exit(subprocess.call([sys.executable, os.path.join(root, "laching", "tools", "l10n.py"), *sys.argv[1:]]))
+  ```
+
+  ```powershell
+  $env:COMPANION_ROOT = (Resolve-Path "$PSScriptRoot/..").Path
+  try { & "$PSScriptRoot/../laching/tools/windows/screenshots.ps1" @args } finally { $env:COMPANION_ROOT = $null }
+  exit $LASTEXITCODE
+  ```
+
+  (`os.execv` and `runpy.run_path(..., run_name="__main__")` also pass for Python, but on Windows `os.execv` returns
+  before the tool ends and loses its status; the PowerShell `finally` keeps the variable out of the rest of an
+  interactive session.) `scripts/setup-linux.sh` runs first in a fresh clone, often one made without its submodules, so
+  it checks Laching out before calling it:
+
+  ```sh
+  #!/bin/sh
+  export COMPANION_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+  [ -f "$COMPANION_ROOT/laching/tools/setup-linux.sh" ] || git -C "$COMPANION_ROOT" submodule update --init laching
+  exec "$COMPANION_ROOT/laching/tools/setup-linux.sh" "$@"
+  ```
 - **The reusable workflows**, at the release the app pins: an app with `windows.app` calls both
   `windows-release.yml` and `windows-app.yml`, and no workflow of its own publishes, smoke-tests or bundles Store
-  packages; an app with `mac` calls `macos-app.yml`. Every call of a Laching reusable workflow must name the pinned
-  release.
+  packages, and an app with `mac` calls `macos-app.yml`. Every call of a Laching reusable workflow must name the pinned
+  release. An app's `core.yml` calls `core-linux.yml`, its `regenerate-vectors.yml` calls `vectors-linux.yml`, and its
+  `copilot-setup-steps.yml` runs `scripts/setup-linux.sh` ([Linux checks](#linux-checks)).
 - **Linked skills.** A skill in `.agents/skills` named like one of `tools/skills` is a link to
   `../../laching/tools/skills/<name>`; the app's own words for it go in `.agents/notes/<name>.md`.
+- **Skill links for every agent.** With an `.agents/skills` folder, `.claude/skills/<name>` is a link to
+  `../../.agents/skills/<name>` for each skill in it (Claude Code), and `.github/skills` (Copilot) and `.junie/skills`
+  (Junie) are links to `../.agents/skills`; a skill only in `.claude/skills` is Claude Code's alone and passes.
 - **`store.microsoft`** is the schema's shape: `shots` and `publisher`, and `storeId` for the submission API.
 
 `companion.py apps` (or `bump-apps.sh --report`), in the Laching checkout, lists the apps next to it:
@@ -331,7 +372,9 @@ that name (the same model, made on first use) that the Simulator panel and the s
 ## `setup-linux.sh`
 
 Prepares a Linux container (cloud agents): submodules, .NET, landing dependencies, and for an app with an `android`
-section a JDK 17 and ktlint.
+section a JDK 17 and ktlint. Claude Code's cloud sessions run it at session start, and the app's
+`copilot-setup-steps.yml` as a step ([Linux checks](#linux-checks)). It hands `PATH` and `DOTNET_ROOT` on to what runs
+next: the session through `CLAUDE_ENV_FILE`, the job's later steps through `GITHUB_PATH` and `GITHUB_ENV`.
 
 ## The store listing: `store/`
 
@@ -371,7 +414,9 @@ set up as `store/google-api-setup.md` says).
 ## `landing/`
 
 `@laching/landing`, an npm package (Node 24): a landing page's localized pages, legal pages, sitemap, `_headers` and
-social cards as Vite plugins. Published to npm by `release.yml`; the app's landing repository depends on it by version.
+social cards as Vite plugins, and `laching-landing check`, an offline check of the built site (links, hreflang, the
+legal pages; `checkLanding` as a function). Published to npm by `release.yml`; the app's landing repository depends on
+it by version.
 
 ## `hooks/hook.py`
 
@@ -395,12 +440,14 @@ commits (nothing when the tree is clean and the session has no log).
 ## `skills/`
 
 `localization`, `add-phrase`, `add-setting`, `conformance`, `voice`, `windows-port`, `release-mac`, `release-ios` (a
-universal app's iPhone and iPad version), `release-windows`, `review-invariants`.
+universal app's iPhone and iPad version), `release-windows`, `review-invariants`, `landing-copy` (what the landing page
+says when a platform, store or purchase changes, then `laching-landing check`).
 
 They read the app's prose from its `DESIGN.md` (the character's voice, the glossary, the palette) and from
 `.agents/notes/<skill>.md` when present (voices chosen, the team ID, who reviews which language);
-`review-invariants` adds the app's `.agents/review-appendix.md` to its checklist. Linking them into an app:
-[`docs/getting-started.md`](../docs/getting-started.md), step 5.
+`review-invariants` adds the app's `.agents/review-appendix.md` to its checklist. Linking them into an app, and the
+links Claude Code, Copilot and Junie find the skills through: [`docs/getting-started.md`](../docs/getting-started.md),
+step 5.
 
 ## Mac apps
 
@@ -430,7 +477,9 @@ uses `macos-26` and selects the latest stable Xcode. `laching-path` defaults to 
 plus the phrase bank when present. A stage the app has nothing for runs no commands: `core` without `mac.core`,
 `vectors` without a `conformance` section, `ios` without `mac.iosScheme`, `smoke` without `mac.app`.
 
-- `vectors` runs `conformance.sh` and fails when `conformance.dir` differs from the commit, new files included.
+- `vectors` runs `conformance.sh` and fails when `conformance.dir` differs from the commit, new files included. It
+  needs `conformance.writeFlag` and `corePackagePath` too. Run locally, it leaves new vector files added with
+  `--intent-to-add`.
 - `ios` runs the `mac.iosScheme` tests on the simulator `ios-destination.py` picks.
 - `release` builds what App Store review gets, which the tests never build: the Mac app in Release, signed ad hoc, and
   the iOS app in Release, unsigned, when there's an `iosScheme`. The workflow runs it only with `release: true` (off by
@@ -438,8 +487,9 @@ plus the phrase bank when present. A stage the app has nothing for runs no comma
 - `smoke` launches the Release Mac app with `smoke-release.sh` and fails when it quits or leaves a crash report within
   20 s (the executable and the report are named `mac.app`). The workflow runs it only with `release` and `hosted`, and
   the script refuses to run outside CI and on a self-hosted runner: a Release build has the App Store bundle ID, so on
-  the owner's Mac it would open the App Store copy's data. Mac CI requires `mac.format`: an explicit, nonempty array of every
-owned Swift source directory or `.swift` file, relative to `mac.dir`, including shared/platform sources and core
+  the owner's Mac it would open the App Store copy's data.
+
+Mac CI requires `mac.format`: an explicit, nonempty array of every owned Swift source directory or `.swift` file, relative to `mac.dir`, including shared/platform sources and core
 sources/tests. For example, `["Desktop", "Mobile", "Common", "Tests", "Core/Sources", "Core/Tests", "Core/Package.swift"]`.
 Missing roots fail the formatting stage; the helper makes no assumptions about folder names.
 Every command is an argument list, so app names and paths with spaces retain their meaning; the workflow accepts no
@@ -468,6 +518,79 @@ submodule is uninitialized. Logs go to `mac.dir/build/ci-windows-core-<stage>.lo
 Both CI drivers share command execution, release-pin commands and the pinned-tool-path guard in `companion_ci.py`.
 All subprocesses use argument lists; neither workflow accepts shell command inputs. `companion.py bump`, `pins` and
 `conform` cover both reusable workflow refs.
+
+## Linux checks
+
+The app's Swift core is platform-neutral, so two reusable workflows check it in the official Swift image (`swift:6.1`)
+without macOS minutes; `macos-app.yml` stays the reference.
+
+- `core-linux.yml`: `ci-macos.py content` (strings, the phrase bank, sounds, characters and voices, as `companion.json`
+  enables them) and `ci-macos.py core` (the core package's tests). `submodules` (default `"true"`, which also checks out
+  the recorded voices) and `laching-path` are its only inputs; the logs are uploaded on failure.
+- `vectors-linux.yml`: `conformance.sh`, then commits the vectors to the branch it runs on when they changed, for a
+  session with no Swift toolchain. It refuses the default branch (vectors reach it through a pull request), and its
+  push, made with the workflow token, starts no other workflow: dispatch the checks afterwards.
+
+The app's callers keep their dispatch, permissions and concurrency:
+
+```yaml
+# .github/workflows/core.yml
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: core-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    uses: vmihalachi/laching/.github/workflows/core-linux.yml@vX.Y.Z
+```
+
+```yaml
+# .github/workflows/regenerate-vectors.yml: dispatch it on a branch
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+jobs:
+  regenerate:
+    uses: vmihalachi/laching/.github/workflows/vectors-linux.yml@vX.Y.Z
+```
+
+Copilot's coding agent runs only a job named `copilot-setup-steps`, which can't call a reusable workflow, so the app's
+`copilot-setup-steps.yml` runs the setup Claude Code's cloud sessions run, `scripts/setup-linux.sh`:
+
+```yaml
+# .github/workflows/copilot-setup-steps.yml
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]  # path filters don't apply to tag pushes
+    paths: [.github/workflows/copilot-setup-steps.yml]
+  pull_request:
+    paths: [.github/workflows/copilot-setup-steps.yml]
+permissions:
+  contents: read
+jobs:
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - uses: actions/setup-node@v7  # with an app's landing, cache: npm and its package-lock.json
+        with:
+          node-version: 24
+      - run: scripts/setup-linux.sh
+```
+
+`companion.py bump` and `pins` move both workflow refs; `conform` reports a drifting ref, and a `core.yml`,
+`regenerate-vectors.yml` or `copilot-setup-steps.yml` of the app's own (unless `conform.allow` lists it, with why).
 
 ## Windows apps
 
@@ -507,7 +630,8 @@ app builds, packages and checks the same way. Its `.csproj` sets its own propert
   `windows/scripts/screenshots.ps1` and `smoke-package.ps1`, e.g.
 
   ```powershell
-  & "$PSScriptRoot/../../laching/tools/windows/screenshots.ps1" @args
+  $env:COMPANION_ROOT = (Resolve-Path "$PSScriptRoot/../..").Path
+  try { & "$PSScriptRoot/../../laching/tools/windows/screenshots.ps1" @args } finally { $env:COMPANION_ROOT = $null }
   exit $LASTEXITCODE
   ```
 
@@ -570,6 +694,14 @@ WinUI code that runs in Debug but breaks the Native AOT build or the XAML compil
 The MSIX logos and `AppIcon.ico` (and the Debug build's) from the app icon; `--check`. **The images** come from the
 Mac's app icon: `python3 laching/tools/windows/assets.py` after the icon changes (`windows.assets`), and `verify.sh`
 checks them.
+
+### `windows/dotnet-sdk.ps1`
+
+Whether a GitHub-hosted runner image's .NET SDK will do: it does when it is in the newest .NET 10 feature band and
+meets the current folder's `global.json`, if any, so the job skips `setup-dotnet`'s 300 MB download. It writes
+`use=true|false` to `$GITHUB_OUTPUT` and always exits 0. Laching's own workflows and the reusable `windows-app.yml` and
+`windows-release.yml` run it (from the app's submodule) before their `setup-dotnet`, which is gated on
+`steps.sdk.outputs.use != 'true'`.
 
 ### `windows/vm.sh`
 

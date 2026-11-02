@@ -13,7 +13,6 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
-    <None Include="../../README.md" Pack="true" PackagePath="/" />
     <ProjectReference Include="../Laching.Companion.Shell/Laching.Companion.Shell.csproj" />
     <ProjectReference Include="../Laching.Windows/Laching.Windows.csproj" />
     <InternalsVisibleTo Include="Laching.Windows.Companion.Tests" />

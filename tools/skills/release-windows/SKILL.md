@@ -35,8 +35,9 @@ scripts/verify.sh --all       # includes check-winui.py, the Windows tests, the 
 ```
 
 Every user-visible change is also on the Mac (or says why not), and the README, landing and store-listing claims match
-what ships. Purchases can only be tried for real with the Store's own build on a signed-in PC (there is no sandbox): an
-add-on the build sells must be submitted in Partner Center first.
+what ships (the `landing-copy` skill, when a platform, store or purchase changed). Purchases can only be tried for real
+with the Store's own build on a signed-in PC (there is no sandbox): an add-on the build sells must be submitted in
+Partner Center first.
 
 ## 3 to 5. Build, smoke-test, bundle: one command
 

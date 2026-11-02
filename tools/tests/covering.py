@@ -68,17 +68,22 @@ COVERS: dict[str, tuple[str, ...]] = {
     "tools/windows/*": ("test_windows",),
     # Read by no test but EVERY's.
     "tools/README.md": (),
-    "tools/setup-linux.sh": (),
+    "tools/setup-linux.sh": ("test_scripts",),
     "tools/skills/*": (),
     "tools/landing/*": (),  # verify.sh's @laching/landing check tests it
     # The repository's fixture skins, which test_character compiles.
     "Tests/Fixtures/*": ("test_character",),
-    # The repository's own scripts verify.sh sends here: test_release runs release.sh, verify.sh --version and
+    # The repository's own files verify.sh sends here: test_release runs release.sh, verify.sh --version and
     # release.yml's plan step, test_covering verify.sh --fast; fixture-art.sh compiles the fixture skins.
     "scripts/release.sh": ("test_release",),
     "scripts/verify.sh": ("test_covering", "test_release"),
     "scripts/fixture-art.sh": ("test_character",),
     ".github/workflows/release.yml": ("test_release",),
+    # The packages' READMEs and the build files that pack them: test_release checks that every link is absolute.
+    "dotnet/README.md": ("test_release.PackedReadmeTests",),
+    "web/README.md": ("test_release.PackedReadmeTests",),
+    "dotnet/Directory.Build.targets": ("test_release",),
+    "web/Directory.Build.targets": ("test_release",),
 }
 
 

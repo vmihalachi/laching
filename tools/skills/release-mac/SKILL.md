@@ -49,7 +49,8 @@ runners (`gh workflow run <workflow> -f hosted=true`; it bills macOS minutes, so
 commit first) and make sure it's green for the commit you archive.
 
 Also confirm: every user-visible Mac change is ported to Windows (or says why not), README, landing and store-listing
-claims match what ships, and purchase UI is only where the app's rules allow.
+claims match what ships (the `landing-copy` skill, when a platform, store or purchase changed), and purchase UI is only
+where the app's rules allow.
 
 ## 3. Bump, commit, archive, upload
 

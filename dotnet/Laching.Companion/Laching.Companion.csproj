@@ -10,7 +10,4 @@
   <ItemGroup>
     <ProjectReference Include="..\Laching.Core\Laching.Core.csproj" />
   </ItemGroup>
-  <ItemGroup>
-    <None Include="../../README.md" Pack="true" PackagePath="/" />
-  </ItemGroup>
 </Project>

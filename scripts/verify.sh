@@ -15,7 +15,9 @@
 #                                       openjdk@17, else the java on PATH)
 #   tools/**, Tests/Fixtures/**,        the tools' Python tests (with --fast, the ones that cover the changed paths:
 #   scripts/{release,verify,            tools/tests/covering.py), fixture art current
-#   fixture-art}.sh, release.yml
+#   fixture-art}.sh, release.yml,
+#   {dotnet,web}/README.md and
+#   Directory.Build.targets
 #   tools/landing/**                    @laching/landing: types, lint, format, tests (Node 24)
 #   web/**                              dotnet format (web's solution), its tests (the Jobs tests only with PostgreSQL:
 #                                       LACHING_WEB_TEST_POSTGRES, or localhost:5432), the Tailwind sample
@@ -31,7 +33,7 @@ while [ $# -gt 0 ]; do
     --all) all=1 ;;
     --staged) mode=staged ;;
     --version) [ $# -ge 2 ] || { echo "--version needs X.Y.Z (see --help)" >&2; exit 2; }; version="$2"; shift ;;
-    -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1 (see --help)" >&2; exit 2 ;;
   esac
   shift
@@ -44,8 +46,10 @@ darwin=0; [ "$(uname)" = Darwin ] && darwin=1
 swift='^Package\.swift$|^Sources/|^Tests/|^\.swift-format$'
 dotnet='^dotnet/|^conformance/|^Tests/LachingCompanionTests/Resources/|^Tests/LachingShellTests/Resources/'
 kotlin='^kotlin/'
-# release.sh, verify.sh and release.yml are what test_release runs; fixture-art.sh is what the fixture art check runs.
+# release.sh, verify.sh and release.yml are what test_release runs, and the packages' READMEs and the build files that
+# pack them what it reads; fixture-art.sh is what the fixture art check runs.
 tools='^tools/|^Tests/Fixtures/|^scripts/(release|verify|fixture-art)\.sh$|^\.github/workflows/release\.yml$'
+tools+='|^(dotnet|web)/(README\.md|Directory\.Build\.targets)$'
 web='^web/'
 tailwind='^web/(src/Laching\.Web\.Tailwind/|tests/Laching\.Web\.Tailwind\.Sample/|scripts/tailwind-sample\.sh$)'
 

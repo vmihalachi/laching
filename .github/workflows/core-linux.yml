@@ -1,0 +1,55 @@
+name: Companion Linux core checks (reusable)
+
+# The app's Swift core on Linux, in the official Swift image: the content checks (`ci-macos.py content`: strings, the
+# phrase bank, sounds, characters and voices, as companion.json enables them) and the core package's tests
+# (`ci-macos.py core`). The core is platform-neutral, so this checks it without macOS minutes; macos-app.yml stays the
+# reference. The caller keeps its dispatch and concurrency and calls this at the release it pins. No command inputs.
+on:
+  workflow_call:
+    inputs:
+      laching-path:
+        description: "The Laching submodule, matching companion.json's laching.path"
+        type: string
+        default: laching
+      submodules:
+        description: "actions/checkout's submodules; true also checks out the app's bundled voices"
+        type: string
+        default: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: swift:6.1
+    timeout-minutes: 30
+    env:
+      LACHING_PATH: ${{ inputs.laching-path }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: ${{ inputs.submodules }}
+
+      # The container's user doesn't own the checkout, so git needs it marked safe.
+      - name: Check out the pinned Laching tools
+        run: |
+          git config --global --add safe.directory '*'
+          git submodule update --init -- "$LACHING_PATH"
+
+      - name: Install Python when the image has none
+        run: command -v python3 >/dev/null || { apt-get update -qq && apt-get install -y -qq python3 >/dev/null; }
+
+      - name: Check strings and generated content
+        run: python3 "./$LACHING_PATH/tools/ci-macos.py" content
+
+      - name: Core package tests
+        run: python3 "./$LACHING_PATH/tools/ci-macos.py" core
+
+      - name: Upload the logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: core-linux-logs
+          path: "**/build/ci-*.log"
+          if-no-files-found: ignore
