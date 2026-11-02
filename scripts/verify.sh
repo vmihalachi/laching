@@ -33,7 +33,7 @@ while [ $# -gt 0 ]; do
     --all) all=1 ;;
     --staged) mode=staged ;;
     --version) [ $# -ge 2 ] || { echo "--version needs X.Y.Z (see --help)" >&2; exit 2; }; version="$2"; shift ;;
-    -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1 (see --help)" >&2; exit 2 ;;
   esac
   shift
