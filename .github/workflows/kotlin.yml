@@ -1,7 +1,8 @@
 name: Kotlin
 
 # The Kotlin side (kotlin/): ktlint over every source, then :core's and :testing's tests (every scheduler vector among
-# them) and the :android debug build, on a hosted Ubuntu runner, whose image carries the Android SDK.
+# them) and the :android debug build, on a hosted Ubuntu runner, whose image carries the Android SDK. release.yml calls
+# it (workflow_call) with the commit it plans to tag, and tags nothing unless it passes.
 on:
   push:
     branches:
@@ -16,13 +17,23 @@ on:
       - "conformance/**"
       - ".github/workflows/kotlin.yml"
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      commit:
+        description: "The commit the caller will tag: the run tests the branch's tip, which must be it"
+        type: string
+        required: true
 
 permissions:
   contents: read
 
+# Called, github.workflow and github.ref are the caller's ("Release", master): a call gets a group of its own, which
+# no push or other call cancels, and cancels nothing.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: >-
+    ${{ inputs.commit && format('kotlin-call-{0}', inputs.commit)
+    || format('{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: ${{ !inputs.commit }}
 
 env:
   # scripts/verify.sh reads KTLINT_VERSION too, and skips its ktlint check for any other version. A new version
@@ -38,7 +49,18 @@ jobs:
       run:
         working-directory: kotlin
     steps:
+      # Called, the branch's tip as it is now (as release.yml's plan job checks it out), else the default.
       - uses: actions/checkout@v7
+        id: checkout
+        with:
+          ref: ${{ inputs.commit && github.ref || '' }}
+
+      # The checkout's own output, not git: in swift.yml's container git refuses the workspace (dubious ownership).
+      - name: The branch's tip is the commit the caller planned
+        if: inputs.commit && steps.checkout.outputs.commit != inputs.commit
+        run: |
+          echo "$GITHUB_REF moved since the plan"
+          exit 1
 
       # Every gradle-wrapper.jar in the checkout is one Gradle published.
       - uses: gradle/actions/wrapper-validation@v6
