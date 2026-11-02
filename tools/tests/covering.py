@@ -67,7 +67,7 @@ COVERS: dict[str, tuple[str, ...]] = {
     "tools/windows/*": ("test_windows",),
     # Read by no test but EVERY's.
     "tools/README.md": (),
-    "tools/setup-linux.sh": (),
+    "tools/setup-linux.sh": ("test_scripts",),
     "tools/skills/*": (),
     "tools/landing/*": (),  # verify.sh's @laching/landing check tests it
     # The repository's fixture skins, which test_character compiles.

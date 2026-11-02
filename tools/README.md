@@ -42,6 +42,7 @@ or `$COMPANION_ROOT`); the schema is [`companion.schema.json`](companion.schema.
 | [`skills/`](#skills) | The generic agent skills an app links next to its own. |
 | [`ci-macos.py`, `macos-app.yml`](#mac-apps) | Reusable Mac CI. |
 | [`ci-windows-core.py`, `windows-core.yml`](#portable-windows-checks) | Portable Windows CI. |
+| [`core-linux.yml`, `vectors-linux.yml`](#linux-checks) | Reusable Linux CI: the Swift core's checks and its vectors. |
 | [`companion_ci.py`](#portable-windows-checks) | What both CI drivers share. |
 | [`windows/companion.targets`](#windows-apps) | What every companion's WinUI project imports, last. |
 | [`windows/screenshots.ps1`](#windowsscreenshotsps1) | The WinUI app's windows in light and dark. |
@@ -157,7 +158,9 @@ fail when the app drifts from the tools (each rule: `conform.py`'s docstring):
   vectors) goes in `conform.allow`, with why.
 - **The reusable workflows**, at the release the app pins: an app with `windows.app` calls both
   `windows-release.yml` and `windows-app.yml`, and no workflow of its own publishes, smoke-tests or bundles Store
-  packages. Every call of a Laching reusable workflow, including `macos-app.yml`, must name the pinned release.
+  packages. Every call of a Laching reusable workflow, including `macos-app.yml`, must name the pinned release. An
+  app's `core.yml` calls `core-linux.yml`, its `regenerate-vectors.yml` calls `vectors-linux.yml`, and its
+  `copilot-setup-steps.yml` runs `scripts/setup-linux.sh` ([Linux checks](#linux-checks)).
 - **Linked skills.** A skill in `.agents/skills` named like one of `tools/skills` is a link to
   `../../laching/tools/skills/<name>`; the app's own words for it go in `.agents/notes/<name>.md`.
 - **`store.microsoft`** is the schema's shape: `shots` and `publisher`, and `storeId` for the submission API.
@@ -331,7 +334,9 @@ that name (the same model, made on first use) that the Simulator panel and the s
 ## `setup-linux.sh`
 
 Prepares a Linux container (cloud agents): submodules, .NET, landing dependencies, and for an app with an `android`
-section a JDK 17 and ktlint.
+section a JDK 17 and ktlint. Claude Code's cloud sessions run it at session start, and the app's
+`copilot-setup-steps.yml` as a step ([Linux checks](#linux-checks)). It hands `PATH` and `DOTNET_ROOT` on to what runs
+next: the session through `CLAUDE_ENV_FILE`, the job's later steps through `GITHUB_PATH` and `GITHUB_ENV`.
 
 ## The store listing: `store/`
 
@@ -455,6 +460,79 @@ submodule is uninitialized. Logs go to `mac.dir/build/ci-windows-core-<stage>.lo
 Both CI drivers share command execution, release-pin commands and the pinned-tool-path guard in `companion_ci.py`.
 All subprocesses use argument lists; neither workflow accepts shell command inputs. `companion.py bump`, `pins` and
 `conform` cover both reusable workflow refs.
+
+## Linux checks
+
+The app's Swift core is platform-neutral, so two reusable workflows check it in the official Swift image (`swift:6.1`)
+without macOS minutes; `macos-app.yml` stays the reference.
+
+- `core-linux.yml`: `ci-macos.py content` (strings, the phrase bank, sounds, characters and voices, as `companion.json`
+  enables them) and `ci-macos.py core` (the core package's tests). `submodules` (default `"true"`, which also checks out
+  the recorded voices) and `laching-path` are its only inputs; the logs are uploaded on failure.
+- `vectors-linux.yml`: `conformance.sh`, then commits the vectors to the branch it runs on when they changed, for a
+  session with no Swift toolchain. It refuses the default branch (vectors reach it through a pull request), and its
+  push, made with the workflow token, starts no other workflow: dispatch the checks afterwards.
+
+The app's callers keep their dispatch, permissions and concurrency:
+
+```yaml
+# .github/workflows/core.yml
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: core-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    uses: vmihalachi/laching/.github/workflows/core-linux.yml@vX.Y.Z
+```
+
+```yaml
+# .github/workflows/regenerate-vectors.yml: dispatch it on a branch
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+jobs:
+  regenerate:
+    uses: vmihalachi/laching/.github/workflows/vectors-linux.yml@vX.Y.Z
+```
+
+Copilot's coding agent runs only a job named `copilot-setup-steps`, which can't call a reusable workflow, so the app's
+`copilot-setup-steps.yml` runs the setup Claude Code's cloud sessions run, `scripts/setup-linux.sh`:
+
+```yaml
+# .github/workflows/copilot-setup-steps.yml
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]  # path filters don't apply to tag pushes
+    paths: [.github/workflows/copilot-setup-steps.yml]
+  pull_request:
+    paths: [.github/workflows/copilot-setup-steps.yml]
+permissions:
+  contents: read
+jobs:
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - uses: actions/setup-node@v7  # with an app's landing, cache: npm and its package-lock.json
+        with:
+          node-version: 24
+      - run: scripts/setup-linux.sh
+```
+
+`companion.py bump` and `pins` move both workflow refs; `conform` reports a drifting ref, and a `core.yml`,
+`regenerate-vectors.yml` or `copilot-setup-steps.yml` of the app's own (unless `conform.allow` lists it, with why).
 
 ## Windows apps
 

@@ -147,5 +147,13 @@ What each tool does: [`tools/README.md`](../tools/README.md).
    runs `./gradlew :<android.core>:test` (JDK 17 and `ANDROID_HOME` inside the command, never in a shell profile), and
    `screens.py`, `check-layout-android.py` and `store-screenshots.py --canvas android-…` cover the screens.
 
+8. **CI.** The app's workflows are short callers of Laching's reusable ones, at the release it pins: `macos.yml` calls
+   `macos-app.yml`, `core.yml` and `regenerate-vectors.yml` call `core-linux.yml` and `vectors-linux.yml`, and the
+   Windows ones `windows-core.yml`, `windows-release.yml` and `windows-app.yml`; `copilot-setup-steps.yml` runs
+   `scripts/setup-linux.sh`, the setup Claude Code's cloud sessions run. The templates:
+   [*Mac apps*](../tools/README.md#mac-apps), [*Linux checks*](../tools/README.md#linux-checks),
+   [*Portable Windows checks*](../tools/README.md#portable-windows-checks) and
+   [*Windows apps*](../tools/README.md#windows-apps).
+
 Later, moving the app to a newer release, or building it against a Laching checkout first:
 [*Moving to a release, or trying one first*](../tools/README.md#moving-to-a-release-or-trying-one-first).
