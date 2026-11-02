@@ -152,9 +152,10 @@ What each tool does: [`tools/README.md`](../tools/README.md).
    in the modules that use them. `companion.json` gets an `android` section (`dir`, `core`, `app`, `applicationId`,
    `devApplicationId`, `strings`, the `.xml` folder `l10n.py export-android` writes); the hook then runs ktlint over the
    Kotlin files an agent edits (`brew install ktlint`, or `setup-linux.sh` on Linux, which also installs a JDK 17) and
-   reminds it about Android parity, `verify.sh` lints the changed Kotlin files and, when `:core` or the vectors change,
-   runs `./gradlew :<android.core>:test` (JDK 17 and `ANDROID_HOME` inside the command, never in a shell profile), and
-   `screens.py`, `check-layout-android.py` and `store-screenshots.py --canvas android-…` cover the screens.
+   reminds it about Android parity, `verify.sh` lints the changed Kotlin files and, when `:core`, the vectors or the
+   Laching pin change, runs `./gradlew :<android.core>:test` (JDK 17 and `ANDROID_HOME` inside the command, never in a
+   shell profile), and `screens.py`, `check-layout-android.py` and `store-screenshots.py --canvas android-…` cover the
+   screens.
 
 8. **CI.** The app's workflows are short callers of Laching's reusable ones, at the release it pins: `macos.yml` calls
    `macos-app.yml`, `core.yml` and `regenerate-vectors.yml` call `core-linux.yml` and `vectors-linux.yml`, and the

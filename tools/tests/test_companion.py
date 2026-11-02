@@ -133,11 +133,15 @@ class LookupTests(unittest.TestCase):
             self.assertNotRegex("macos/FixtureCore/Sources/A.swift", names["RE_SWIFT"])
             self.assertRegex("windows/Fixture.Core.Tests/A.cs", names["RE_WINDOWS_CORE"])
             self.assertNotRegex("windows/FixtureXCore/A.cs", names["RE_WINDOWS_CORE"], "the dot is literal")
+            for path in ("windows/Directory.Packages.props", "windows/global.json"):
+                self.assertRegex(path, names["RE_WINDOWS_CORE"], "a bump moves the Laching.* versions")
+            self.assertNotRegex("windows/Fixture.App/App.xaml.cs", names["RE_WINDOWS_CORE"])
             self.assertEqual(names["WINDOWS_APP_TESTS"], "Fixture.App.Tests")
             self.assertEqual(names["WINDOWS_ASSETS"], "windows/Fixture.App/Assets")
             for path in ("windows/Fixture.App/App/AppModel.cs", "windows/Fixture.App.Tests/AppModelTests.cs"):
                 self.assertRegex(path, names["RE_WINDOWS_APP_TESTS"])
             self.assertNotRegex("windows/Fixture.Core/A.cs", names["RE_WINDOWS_APP_TESTS"])
+            self.assertRegex("windows/Directory.Packages.props", names["RE_WINDOWS_APP_TESTS"], "a bump moves the versions")
             # The WinUI build: the app, the core it references, the shared build settings and the SDK pin.
             for path in ("windows/Fixture.App/App.xaml", "windows/Fixture.Core/A.cs", "windows/Directory.Build.props",
                          "windows/Directory.Packages.props", "windows/global.json"):
@@ -212,8 +216,8 @@ class LookupTests(unittest.TestCase):
             self.assertEqual(names["ANDROID_APP_ID"], "app.fixture", "bundleId by default")
             self.assertEqual(names["ANDROID_DEV_APP_ID"], "app.fixture.dev")
             self.assertEqual(names["ANDROID_STRINGS"], "android/app/src/main/res")
-            for file in ("android/core/src/main/kotlin/A.kt", "conformance/scheduler/a.json"):
-                self.assertRegex(file, names["RE_ANDROID_CORE"])
+            for file in ("android/core/src/main/kotlin/A.kt", "conformance/scheduler/a.json", "laching"):
+                self.assertRegex(file, names["RE_ANDROID_CORE"], "the core builds against the submodule's kotlin/")
             self.assertNotRegex("android/app/src/main/kotlin/A.kt", names["RE_ANDROID_CORE"])
             self.assertRegex("android/app/src/main/kotlin/A.kt", names["RE_ANDROID_APP"])
             for file in ("android/build.gradle.kts", "android/core/src/main/kotlin/A.kt"):

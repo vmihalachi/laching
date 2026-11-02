@@ -24,12 +24,16 @@
 #   voices, voice config, catalog, phrases.json     voice.py check, the voices pointer is pushed
 #   characters.design, its outputs         character.py --check (the art and character vectors match the drawings)
 #   sounds.recipes, sounds.out/*.wav       synth.py --check (the sounds match their recipes)
-#   windows/**/*.cs                        dotnet format whitespace, dotnet test (windows.coreTests)
+#   windows/**/*.cs                        dotnet format whitespace
+#   windows.core, windows.coreTests, conformance/, the shared settings (windows/Directory.{Build,Packages}.props,
+#   global.json: a bump moves the Laching.* versions there)    dotnet test (windows.coreTests)
 #   windows.app, windows.appTests          check-winui.py; dotnet test (windows.appTests, any OS); the app builds on
-#                                          Windows, or on a Mac in the Parallels VM (windows/vm.sh build)
+#                                          Windows, or on a Mac in the Parallels VM (windows/vm.sh build); the tests
+#                                          and the build also for the shared settings
 #   windows.assets (the icon, Assets/)     windows/assets.py --check (the MSIX images match the icon)
-#   android.dir/**/*.kt(s)                 ktlint; ./gradlew :<android.core>:test for android.core and conformance/
-#                                          (JDK 17: JAVA_HOME, on a Mac Homebrew's openjdk@17 unless set; ANDROID_HOME too)
+#   android.dir/**/*.kt(s)                 ktlint; ./gradlew :<android.core>:test for android.core, conformance/ and
+#                                          the pin (JDK 17: JAVA_HOME, on a Mac Homebrew's openjdk@17 unless set;
+#                                          ANDROID_HOME too)
 #   landing/, phrases/settings/catalog vectors   <landing.tool> check and build
 #   store.dir/*.md                         store/check.py (the listing's field limits)
 #   always                                 the Laching pins agree (submodule tag = laching.tag = SwiftPM = XcodeGen; NuGet = each package's version in it);
