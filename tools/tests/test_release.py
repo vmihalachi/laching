@@ -17,7 +17,7 @@ from support import NO_SHEBANG, REPO, WINDOWS
 
 WORKFLOW = REPO / ".github/workflows/release.yml"
 COPIED = ("scripts/release.sh", "scripts/verify.sh", "Sources/LachingCore/Laching.swift", "kotlin/gradle.properties",
-          "README.md", "site/index.html", "dotnet/Directory.Build.props", "web/Directory.Build.props",
+          "README.md", "site/index.html", "dotnet/Directory.Build.props", "dotnet/Directory.Build.targets", "web/Directory.Build.props",
           "web/Directory.Build.targets", "web/Directory.Packages.props", "tools/landing/package.json")
 # gh api repos/…/commits/<sha>/pulls --jq …: the lines the --jq makes, from $FAKE_PULLS/<sha> ("number<tab>labels");
 # "Bad credentials" without that folder, and GitHub's empty answer as many times as $FAKE_PULLS/<sha>.empty says.
@@ -162,12 +162,16 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn("Bad credentials", result.stderr)
         self.assertFalse(slept.exists(), "an HTTP 4xx is GitHub's answer: not asked again")
 
-    def test_nuget_ships_when_a_packages_folder_or_the_props_changed(self):
-        for path in ("README.md", "dotnet/Laching.Core.Tests/A.cs", "dotnet/Fixture.App/A.cs", "Sources/LachingCore/A.swift"):
+    def test_nuget_ships_when_a_packages_folder_or_the_build_files_changed(self):
+        for path in ("README.md", "dotnet/README.md", "dotnet/Laching.Core.Tests/A.cs", "dotnet/Fixture.App/A.cs",
+                     "Sources/LachingCore/A.swift"):
             self.change(path)
         self.assertEqual(self.out("nuget", "0.13.1"), "skip (the packages are unchanged since 0.13.0, their version on NuGet)")
-        self.change("dotnet/Laching.Windows/Tray.cs")
-        self.assertEqual(self.out("nuget", "0.13.1"), "ship (the packages changed since 0.13.0, their version on NuGet)")
+        for path in ("dotnet/Laching.Windows/Tray.cs", "dotnet/Directory.Build.targets"):
+            self.git("reset", "-q", "--hard", "v0.13.0")
+            self.change(path)
+            self.assertEqual(self.out("nuget", "0.13.1"), "ship (the packages changed since 0.13.0, their version on NuGet)",
+                             path)
 
     def test_the_web_packages_ship_when_their_sources_or_build_files_changed(self):
         self.assertEqual(self.out("web-projects").splitlines(), sorted(
@@ -358,6 +362,40 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("v0.13.1 already exists on origin", result.stdout)
         self.assertNotIn("release", outputs)
+
+
+class PackedReadmeTests(unittest.TestCase):
+    """nuget.org shows the README a package packs, and resolves no relative link in it: every one is absolute."""
+
+    # A link's target, inline (`](target)`) or as a reference (`[name]: target`); in-page anchors and URLs are fine.
+    LINK = re.compile(r"\]\(\s*<?([^)\s>]+)|^ {0,3}\[[^\]]+\]:\s*<?(\S+?)>?(?:\s|$)", re.MULTILINE)
+    ABSOLUTE = re.compile(r"https?://|mailto:|#")
+
+    def packed(self) -> list[Path]:
+        """The READMEs the .NET and web packages pack, from their build files: $(MSBuildThisFileDirectory) and the web
+        build's $(RepoRoot) are the build file's own folder."""
+        readmes: list[Path] = []
+        for build in [REPO / "dotnet/Directory.Build.targets", REPO / "web/Directory.Build.targets",
+                      *(REPO / "dotnet").glob("*/*.csproj"), *(REPO / "web/src").glob("*/*.csproj")]:
+            for include in re.findall(r'<None Include="([^"]*README[^"]*)"[^>]*Pack="true"', build.read_text("utf8")):
+                path = re.sub(r"\$\((?:MSBuildThisFileDirectory|RepoRoot)\)", "", include)
+                readmes.append((build.parent / path).resolve())
+        return readmes
+
+    def test_the_packages_pack_their_own_readmes(self):
+        self.assertEqual(sorted(path.relative_to(REPO).as_posix() for path in set(self.packed())),
+                         ["dotnet/README.md", "web/README.md"])
+
+    def test_every_link_in_a_packed_readme_is_absolute(self):
+        for readme in set(self.packed()):
+            targets = [inline or reference for inline, reference in self.LINK.findall(readme.read_text("utf8"))]
+            relative = [target for target in targets if not self.ABSOLUTE.match(target)]
+            self.assertEqual(relative, [], f"{readme.relative_to(REPO)}: nuget.org can't resolve these")
+
+    def test_a_relative_link_is_found(self):
+        text = "See [the tools](tools/README.md), [a site](https://example.com) and [here](#more).\n[ref]: LICENSE\n"
+        targets = [inline or reference for inline, reference in self.LINK.findall(text)]
+        self.assertEqual([t for t in targets if not self.ABSOLUTE.match(t)], ["tools/README.md", "LICENSE"])
 
 
 if __name__ == "__main__":
