@@ -480,7 +480,8 @@ plus the phrase bank when present. A stage the app has nothing for runs no comma
 - `vectors` runs `conformance.sh` and fails when `conformance.dir` differs from the commit, new files included. It
   needs `conformance.writeFlag` and `corePackagePath` too. Run locally, it leaves new vector files added with
   `--intent-to-add`.
-- `ios` runs the `mac.iosScheme` tests on the simulator `ios-destination.py` picks.
+- `ios` runs the `mac.iosScheme` tests on a simulator of its own, `<name> ci` (`ios-destination.py --own`, made on
+  first use).
 - `release` builds what App Store review gets, which the tests never build: the Mac app in Release, signed ad hoc, and
   the iOS app in Release, unsigned, when there's an `iosScheme`. The workflow runs it only with `release: true` (off by
   default: it adds a build or two).
