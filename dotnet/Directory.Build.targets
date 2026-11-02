@@ -1,0 +1,9 @@
+<Project>
+
+  <!-- After the project file, where IsPackable is set. README.md here is the packages' own, with absolute links:
+       nuget.org resolves no relative one. -->
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="/" Visible="false" />
+  </ItemGroup>
+
+</Project>

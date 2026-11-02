@@ -46,8 +46,10 @@ scripts/release.sh landing         # yes|no (why)
 ## When NuGet and npm ship
 
 - **NuGet**: the six packages share one version, `LachingVersion` in `dotnet/Directory.Build.props`: the release they
-  last shipped in. They ship, all six at X.Y.Z, when `dotnet/Directory.Build.props` or a packable project's folder
-  changed since `v<LachingVersion>`; the tests, `Fixture.App` and the README don't count. `bump` writes X.Y.Z into
+  last shipped in. They ship, all six at X.Y.Z, when `dotnet/Directory.Build.props`, `dotnet/Directory.Build.targets` or
+  a packable project's folder changed since `v<LachingVersion>`; the tests, `Fixture.App` and the READMEs (the root one
+  and `dotnet/README.md`, the one they pack) don't count, so an edit to `dotnet/README.md` alone reaches nuget.org with
+  the next release that ships NuGet for another reason. `bump` writes X.Y.Z into
   `LachingVersion` only then, in the tagged release commit, so the next diff from that tag starts clean.
 - **`Laching.Web.*`**: the same, on their own `LachingWebVersion` (`web/Directory.Build.props`): all six at X.Y.Z when
   `web/src`, `web/Directory.Build.props`, `web/Directory.Build.targets` or `web/Directory.Packages.props` changed since

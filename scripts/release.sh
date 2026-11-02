@@ -94,8 +94,9 @@ nuget() {
   [ -n "$at" ] || die "dotnet/Directory.Build.props has no LachingVersion"
   [ "$at" != "$1" ] || { echo "ship (LachingVersion is $1 already)"; return; }
   tagged "$at" || die "LachingVersion is $at, which has no tag v$at here: fetch the tags"
-  # The packages' folders; their tests, Fixture.App and the README don't count.
-  if git diff --quiet "v$at" HEAD -- dotnet/Directory.Build.props $(projects | sed 's#^#dotnet/#; s#$#/#'); then
+  # The packages' folders and the build files they pack with; their tests, Fixture.App and the READMEs don't count.
+  if git diff --quiet "v$at" HEAD -- dotnet/Directory.Build.props dotnet/Directory.Build.targets \
+    $(projects | sed 's#^#dotnet/#; s#$#/#'); then
     echo "skip (the packages are unchanged since $at, their version on NuGet)"
   else
     echo "ship (the packages changed since $at, their version on NuGet)"
