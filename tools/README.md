@@ -50,6 +50,7 @@ or `$COMPANION_ROOT`); the schema is [`companion.schema.json`](companion.schema.
 | [`windows/smoke-package.ps1`](#windowssmoke-packageps1) | Installs a built `.msix` the way a customer gets it and checks it opens. |
 | [`windows/check-winui.py`](#windowscheck-winuipy) | WinUI code that runs in Debug but breaks the Native AOT build or the XAML compiler. |
 | [`windows/assets.py`](#windowsassetspy) | The MSIX logos and `AppIcon.ico` from the app icon. |
+| [`windows/dotnet-sdk.ps1`](#windowsdotnet-sdkps1) | In CI, whether the runner image's .NET SDK will do, so a job skips `setup-dotnet`. |
 | [`windows/vm.sh`](#windowsvmsh) | On a Mac, the WinUI app built and checked in a Parallels Windows VM. |
 | [`windows-release.yml`, `windows-app.yml`](#windows-releaseyml-and-windows-appyml) | Reusable workflows: the Store release and the WinUI build check. |
 
@@ -555,6 +556,14 @@ WinUI code that runs in Debug but breaks the Native AOT build or the XAML compil
 The MSIX logos and `AppIcon.ico` (and the Debug build's) from the app icon; `--check`. **The images** come from the
 Mac's app icon: `python3 laching/tools/windows/assets.py` after the icon changes (`windows.assets`), and `verify.sh`
 checks them.
+
+### `windows/dotnet-sdk.ps1`
+
+Whether a GitHub-hosted runner image's .NET SDK will do: it does when it is in the newest .NET 10 feature band and
+meets the current folder's `global.json`, if any, so the job skips `setup-dotnet`'s 300 MB download. It writes
+`use=true|false` to `$GITHUB_OUTPUT` and always exits 0. Laching's own workflows and the reusable `windows-app.yml` and
+`windows-release.yml` run it (from the app's submodule) before their `setup-dotnet`, which is gated on
+`steps.sdk.outputs.use != 'true'`.
 
 ### `windows/vm.sh`
 

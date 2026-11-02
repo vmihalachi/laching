@@ -192,7 +192,14 @@ jobs:
           ref: ${{ needs.plan.outputs.base }}
           persist-credentials: false
 
+      # setup-dotnet downloads the newest .NET 10 SDK whenever the image is a patch behind; the image's own does when it
+      # is in the newest feature band (tools/windows/dotnet-sdk.ps1).
+      - name: The image's .NET SDK
+        id: sdk
+        run: pwsh tools/windows/dotnet-sdk.ps1
+
       - uses: actions/setup-dotnet@v6
+        if: steps.sdk.outputs.use != 'true'
         with:
           dotnet-version: "10.0.x"
 
