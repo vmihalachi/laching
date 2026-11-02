@@ -182,6 +182,14 @@ class ConformTests(FixtureAppTestCase):
                    "    uses: vmihalachi/laching/.github/workflows/macos-app.yml@v0.5.0\n")
         self.assertEqual(self.problems(), [])
 
+    def test_an_app_with_mac_calls_macos_app(self):
+        self.write(".github/workflows/macos.yml", "# Once called macos-app.yml; now runs its own steps\n"
+                   "jobs:\n  test:\n    steps:\n      - run: xcodebuild test\n")
+        self.assertEqual(self.problems(),
+                         [".github/workflows: no workflow calls Laching's macos-app.yml (the app has mac)"])
+        self.edit_config(lambda data: data.pop("mac"))
+        self.assertEqual(self.problems(), [], "only an app with mac")
+
     def test_windows_core_workflow_ref_is_checked_against_the_same_release(self):
         self.write(".github/workflows/windows-core.yml", "jobs:\n  test:\n"
                    "    uses: vmihalachi/laching/.github/workflows/windows-core.yml@v0.4.0\n")

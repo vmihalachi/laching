@@ -1,0 +1,23 @@
+name: macOS
+
+# The Mac app built and checked on demand: Laching's reusable workflow, at the release the app pins (laching.tag).
+on:
+  workflow_dispatch:
+    inputs:
+      hosted:
+        description: "Run on a GitHub-hosted runner (bills macOS minutes at 10x)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    uses: vmihalachi/laching/.github/workflows/macos-app.yml@v0.5.0
+    with:
+      hosted: ${{ inputs.hosted }}

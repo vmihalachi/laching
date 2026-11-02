@@ -44,14 +44,15 @@ COVERS: dict[str, tuple[str, ...]] = {
     "tools/fonts.py": ("test_scripts",),
     "tools/hooks/*": ("test_hook",),
     "tools/install-dev.sh": ("test_scripts",),
-    "tools/ios-destination.py": ("test_ios_destination",),
+    "tools/ios-destination.py": ("test_ci_macos", "test_ios_destination"),
     "tools/l10n.py": ("test_l10n",),
     "tools/layoutcheck.py": ("test_screens", "test_scripts"),  # check-layout-ios.py and -android.py
     "tools/phrases.py": ("test_l10n",),
     "tools/screens.py": ("test_screens", "test_scripts"),  # screenshots.sh, check-layout-android.py
     "tools/screenshots.sh": ("test_scripts",),
     "tools/setup-linux.sh": ("test_scripts", "test_setup_linux"),
-    "tools/sim.py": ("test_screens", "test_scripts"),  # check-layout-ios.py
+    "tools/sim.py": ("test_ci_macos", "test_screens", "test_scripts"),  # ios-destination.py, check-layout-ios.py
+    "tools/smoke-release.sh": ("test_ci_macos",),
     "tools/store-screenshots.py": ("test_scripts",),
     "tools/store/*": ("test_store", "test_push_microsoft", "test_push_google"),
     "tools/synth.py": ("test_synth", "test_scripts"),

@@ -11,6 +11,7 @@ conform fails, one line per problem, when the app:
   - builds or bundles its Store packages in a workflow of its own (GenerateAppxPackageOnBuild, makeappx, smoke-package)
     instead of calling Laching's reusable windows-release.yml and windows-app.yml, or calls any shared workflow at another release than
     the one it pins (`laching.tag`); with `windows.app`, it must call both;
+  - has `mac` but no workflow that calls Laching's macos-app.yml;
   - keeps a workflow Laching ships, by file name, instead of using Laching's: its .github/workflows/core.yml must call
     core-linux.yml, its regenerate-vectors.yml vectors-linux.yml, and its copilot-setup-steps.yml must run
     setup-linux.sh (which Claude Code's cloud sessions run too);
@@ -199,6 +200,8 @@ def workflow_problems(config: companion.Config, files: list[str]) -> list[str]:
         for workflow in ("windows-release", "windows-app"):
             if workflow not in called:
                 problems.append(f".github/workflows: no workflow calls Laching's {workflow}.yml (the app has windows.app)")
+    if config.get("mac") and "macos-app" not in called:
+        problems.append(".github/workflows: no workflow calls Laching's macos-app.yml (the app has mac)")
     return problems
 
 
