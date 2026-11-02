@@ -331,10 +331,24 @@ describe("laching-landing check", () => {
     expect(await main(["check", join(scratch, "none")], root, (line) => printed.push(line))).toBe(
       2,
     );
-    expect(printed).toEqual([
+    expect(await main(["check", "--bogus"], root, (line) => printed.push(line))).toBe(2);
+    expect(await main(["check", "--config", "nope.ts"], root, (line) => printed.push(line))).toBe(
+      2,
+    );
+    expect(printed.slice(0, 3)).toEqual([
       "Usage: laching-landing check [dist] [--config vite.config.ts]",
       `No built site at ${join(scratch, "none")}: build it first.`,
+      "Usage: laching-landing check [dist] [--config vite.config.ts]",
     ]);
+    expect(printed[3]).toMatch(/^Can't load nope\.ts: /);
+  });
+
+  it("leaves an out-of-range numeric entity as written", () => {
+    expect(
+      checkChanged((copy) =>
+        edit(copy, "index.html", "<footer>", "<footer><p>&#x110000; &#99999999;</p>"),
+      ),
+    ).toEqual([]);
   });
 
   it("fails on a dead link and a dead anchor", () => {

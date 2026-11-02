@@ -55,8 +55,13 @@ function decodeEntities(value: string) {
     /&(#x[0-9a-f]+|#\d+|amp|quot|apos|lt|gt|nbsp);/gi,
     (entity, code: string) => {
       const lower = code.toLowerCase();
-      if (lower.startsWith("#x")) return String.fromCodePoint(parseInt(lower.slice(2), 16));
-      if (lower.startsWith("#")) return String.fromCodePoint(parseInt(lower.slice(1), 10));
+      if (lower.startsWith("#")) {
+        // An out-of-range number (past U+10FFFF) is left as written rather than thrown on.
+        const point = lower.startsWith("#x")
+          ? parseInt(lower.slice(2), 16)
+          : parseInt(lower.slice(1), 10);
+        return point <= 0x10ffff ? String.fromCodePoint(point) : entity;
+      }
       return { amp: "&", quot: '"', apos: "'", lt: "<", gt: ">", nbsp: " " }[lower] ?? entity;
     },
   );

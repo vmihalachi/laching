@@ -39,20 +39,22 @@ The template's `{{key}}` placeholders are the app's own (`placeholders`, asked f
 `languageSwitcher` (`"menu"`, `"inline"` or a function), `hreflangLinks`, `ogLocale`, `ogLocaleAlternates`,
 `moreFrom`, then the locale's dotted keys. Locale files must share the default's keys. `moreFrom` lists the sibling
 apps for a footer: `{ apps: { name, url, tagline?: (locale, language) => string }[], label: (locale, language) =>
-string, builtOn?: { url, label } }`, rendered as a `.more-from` block (`.more-from-label`, `.more-from-apps`,
-`.more-from-tagline`, `.built-on`) with every value escaped and no styles; an app whose `url` is `siteUrl` is left
-out, so the landings can share one list, and without the option `{{moreFrom}}` renders nothing. `pages` adds
-hand-written pages beyond the legal ones (a comparison, a guide), each in the languages it lists, with canonical,
-hreflang and sitemap entries among those languages only. `csp.mediaSrc` allows recorded audio, `headers` adds
-`_headers` rules, `extraPlugins` runs the app's own plugins between the hosting and social-asset ones.
+string, builtOn?: { url, label: (locale, language) => string } }`, rendered as a `.more-from` block
+(`.more-from-label`, `.more-from-apps`, `.more-from-tagline`, `.built-on`) with every value escaped and no styles; an
+app whose `url` is `siteUrl` is left out, so the landings can share one list, and without the option `{{moreFrom}}`
+renders nothing. Like every placeholder it is filled only in the template's pages (the home pages and `404.html`):
+hand-written pages get their canonical and hreflang tags but no placeholders, so their footers write the list
+themselves. `pages` adds hand-written pages beyond the legal ones (a comparison, a guide), each in the languages it
+lists, with canonical, hreflang and sitemap entries among those languages only. `csp.mediaSrc` allows recorded audio,
+`headers` adds `_headers` rules, `extraPlugins` runs the app's own plugins between the hosting and social-asset ones.
 
 ## Checking the built site
 
-`laching-landing check [dist] [--config vite.config.ts]` reads the landing's Vite config (the one in the current
-folder unless `--config` names another) and checks the built site in `dist` (the config's `build.outDir` unless
-given), offline, after `vp build`. It prints one line per problem and exits 1 on any, 2 when there's no config, no
-`companionLanding` in it or no built site. `checkLanding(dist, options)` is the same check as a function, returning the
-problems. It finds:
+`laching-landing check [dist] [--config vite.config.ts]` reads the landing's Vite config (the one in the current folder
+unless `--config` names another) and checks the built site in `dist` (the config's `build.outDir` unless given),
+offline, after `vp build`. It prints one line per problem and exits 1 on any, 2 on an unknown argument, a config that is
+missing or doesn't load, no `companionLanding` in it or no built site. `checkLanding(dist, options)` is the same check
+as a function, returning the problems. It finds:
 
 - a dead link (`href`, `src`, `srcset`, resolved as Cloudflare Pages serves `dist`) or a dead `#anchor`;
 - hreflang that isn't reciprocal, a missing or extra `x-default`, a page missing from its own set, and a canonical that

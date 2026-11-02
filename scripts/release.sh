@@ -8,8 +8,8 @@
 #                                   tag. auto: the next minor while 0.x (major from 1.0) when a pull request merged since
 #                                   the last tag is labelled `breaking`, else the next patch (the labels come from gh).
 #        scripts/release.sh nuget X.Y.Z    `ship (why)` or `skip (why)`: the NuGet packages ship in X.Y.Z when
-#                                   dotnet/Directory.Build.props or a packable project's folder changed since
-#                                   v<LachingVersion> (or LachingVersion is X.Y.Z already: after bump).
+#                                   dotnet/Directory.Build.{props,targets} or a packable project's folder changed
+#                                   since v<LachingVersion> (or LachingVersion is X.Y.Z already: after bump).
 #        scripts/release.sh projects       the NuGet packages: dotnet/'s packable projects, one per line.
 #        scripts/release.sh web X.Y.Z      `ship (why)` or `skip (why)`, the same for the web packages: web/src/ or
 #                                   web/'s Directory.* files changed since v<LachingWebVersion>.
