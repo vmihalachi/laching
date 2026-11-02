@@ -117,8 +117,9 @@ class SetupLinuxTests(FixtureAppTestCase):
         path.write_text(json.dumps(config, indent=2) + "\n", "utf8")
 
     def run_setup(self, **env: str):
+        # JAVA_HOME too: a GitHub runner's JAVA_HOME_17_X64 would stand in for the fake JDK.
         keep = {key: value for key, value in os.environ.items()
-                if not key.startswith(("CLAUDE", "GITHUB", "DOTNET", "FAKE"))}
+                if not key.startswith(("CLAUDE", "GITHUB", "DOTNET", "FAKE", "JAVA_HOME"))}
         environment = {
             **keep, "PATH": str(self.bin), "HOME": str(self.home), "TMPDIR": str(self.root.parent / "tmp"),
             "LOG": str(self.log), "STATE": str(self.state), "INSTALLER": str(self.installer),
