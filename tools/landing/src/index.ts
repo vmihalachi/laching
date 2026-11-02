@@ -192,9 +192,9 @@ export function companionLanding<L extends Language>(
       case "moreFrom": {
         const moreFrom = options.moreFrom;
         if (!moreFrom) return "";
-        const self = siteUrl.replace(/\/+$/, "");
+        const self = withoutTrailingSlashes(siteUrl);
         const apps = moreFrom.apps
-          .filter(({ url }) => url.replace(/\/+$/, "") !== self)
+          .filter(({ url }) => withoutTrailingSlashes(url) !== self)
           .map(({ name, url, tagline }) => ({ name, url, tagline: tagline?.(locale, language) }));
         const builtOn = moreFrom.builtOn && {
           url: moreFrom.builtOn.url,
@@ -329,4 +329,11 @@ export function companionLanding<L extends Language>(
   };
 
   return { plugins, build: { rollupOptions: { input } } };
+}
+
+/** `url` without its trailing slashes (a loop: CodeQL flags `/\/+$/` on library input as polynomial). */
+function withoutTrailingSlashes(url: string) {
+  let end = url.length;
+  while (end > 0 && url[end - 1] === "/") end--;
+  return url.slice(0, end);
 }
