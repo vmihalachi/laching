@@ -2,8 +2,9 @@ name: Copilot setup steps
 
 # Prepares GitHub Copilot's cloud coding agent (Ubuntu): the .NET 10 SDK and the restored test projects, so
 # `dotnet test` works once the agent's firewall is up, and a JDK 17 with the Kotlin build's Gradle caches warm, so
-# `./gradlew :core:test` does too. Swift needs macOS; the agent verifies it through swift.yml (see AGENTS.md). Also
-# runs when edited, so a broken setup shows up in the PR.
+# `./gradlew :core:test` does too, and ktlint at the version kotlin.yml pins, so verify.sh lints Kotlin. Swift needs
+# macOS; the agent verifies it through swift.yml (see AGENTS.md). Also runs when edited, so a broken setup shows up in
+# the PR.
 on:
   workflow_dispatch:
   push:
@@ -45,3 +46,15 @@ jobs:
       - name: Warm the Kotlin build's caches
         working-directory: kotlin
         run: ./gradlew :core:testClasses :testing:testClasses --console=plain
+
+      # kotlin.yml holds the one pin, read the way verify.sh reads it. ~/.local/bin goes onto GITHUB_PATH for the agent.
+      - name: ktlint
+        run: |
+          version="$(sed -n 's/^ *KTLINT_VERSION: "\(.*\)"$/\1/p' .github/workflows/kotlin.yml)"
+          sha256="$(sed -n 's/^ *KTLINT_SHA256: "\(.*\)"$/\1/p' .github/workflows/kotlin.yml)"
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL "https://github.com/pinterest/ktlint/releases/download/$version/ktlint" -o "$HOME/.local/bin/ktlint"
+          echo "$sha256  $HOME/.local/bin/ktlint" | sha256sum -c -
+          chmod a+x "$HOME/.local/bin/ktlint"
+          echo "$HOME/.local/bin" >>"$GITHUB_PATH"
+          "$HOME/.local/bin/ktlint" --version

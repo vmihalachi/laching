@@ -19,6 +19,7 @@ from support import FIXTURE_APP, HERE, REPO, fixture_app  # noqa: E402
 
 PAGLIACCI = REPO.parent / "pagliacci" / "companion.json"
 MYBACKHURTS = REPO.parent / "mybackhurts" / "companion.json"
+SUNNYSAYS = REPO.parent / "sunnysays" / "companion.json"
 
 
 class SchemaTests(unittest.TestCase):
@@ -26,13 +27,17 @@ class SchemaTests(unittest.TestCase):
         data = json.loads(path.read_text("utf8"))
         return companion.validate(data) + companion.consistency(data)
 
-    def test_the_fixture_app_and_sunnysays_draft_validate(self):
+    def test_the_fixture_app_and_the_example_validate(self):
         self.assertEqual(self.check(FIXTURE_APP / "companion.json"), [])
         self.assertEqual(self.check(HERE / "example.companion.json"), [])
 
     @unittest.skipUnless(PAGLIACCI.exists(), "../pagliacci isn't checked out next to laching")
     def test_pagliacci_validates(self):
         self.assertEqual(self.check(PAGLIACCI), [])
+
+    @unittest.skipUnless(SUNNYSAYS.exists(), "../sunnysays isn't checked out next to laching")
+    def test_sunnysays_validates(self):
+        self.assertEqual(self.check(SUNNYSAYS), [])
 
     @unittest.skipUnless(MYBACKHURTS.exists(), "../mybackhurts isn't checked out next to laching")
     def test_mybackhurts_validates(self):
