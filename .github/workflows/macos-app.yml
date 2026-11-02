@@ -21,6 +21,10 @@ on:
         description: "actions/checkout's submodules; true also checks out the app's bundled voices"
         type: string
         default: "true"
+      release:
+        description: "Also build the Release apps (the Mac app signed ad hoc, the iOS app unsigned); with hosted, launch the Mac one"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -60,11 +64,27 @@ jobs:
       - name: Check strings and generated content
         run: python3 "./$LACHING_PATH/tools/ci-macos.py" content
 
+      - name: Check the conformance vectors are current
+        run: python3 "./$LACHING_PATH/tools/ci-macos.py" vectors
+
       - name: Core package tests
         run: python3 "./$LACHING_PATH/tools/ci-macos.py" core
 
       - name: App tests
         run: python3 "./$LACHING_PATH/tools/ci-macos.py" test
+
+      - name: iPhone and iPad app tests
+        run: python3 "./$LACHING_PATH/tools/ci-macos.py" ios
+
+      - name: Build the Release apps
+        if: inputs.release
+        run: python3 "./$LACHING_PATH/tools/ci-macos.py" release
+
+      # Only on GitHub's runner: a self-hosted one is the owner's Mac, where the Release app shares the App Store copy's
+      # data (smoke-release.sh refuses it too).
+      - name: Launch the Release app
+        if: inputs.release && inputs.hosted
+        run: python3 "./$LACHING_PATH/tools/ci-macos.py" smoke
 
       - name: Upload the test logs on failure
         if: failure()

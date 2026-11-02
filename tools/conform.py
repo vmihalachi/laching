@@ -9,6 +9,7 @@ conform fails, one line per problem, when the app:
   - builds or bundles its Store packages in a workflow of its own (GenerateAppxPackageOnBuild, makeappx, smoke-package)
     instead of calling Laching's reusable windows-release.yml and windows-app.yml, or calls any shared workflow at another release than
     the one it pins (`laching.tag`); with `windows.app`, it must call both;
+  - has `mac` but no workflow that calls Laching's macos-app.yml;
   - has a skill in .agents/skills named like one of tools/skills that isn't a link into `<laching.path>/tools/skills/`
     (the app's own words for a skill go in .agents/notes/<skill>.md);
   - has a `store.microsoft` the schema refuses.
@@ -141,6 +142,23 @@ def workflow_problems(config: companion.Config, files: list[str]) -> list[str]:
     return problems
 
 
+def mac_workflow_problems(config: companion.Config, files: list[str]) -> list[str]:
+    """An app with a Mac app runs its Mac CI through Laching's macos-app.yml, not steps of its own."""
+    if not config.get("mac"):
+        return []
+    for name in files:
+        if not re.match(r"\.github/workflows/[^/]+\.ya?ml$", name):
+            continue
+        try:
+            text = (config.root / name).read_text("utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+        if any(workflow == "macos-app" for workflow, _ in REUSABLE.findall(code)):
+            return []
+    return [".github/workflows: no workflow calls Laching's macos-app.yml (the app has mac)"]
+
+
 def link_target(root: Path, name: str) -> str | None:
     """Where the skill at `name` links: git's record of the link (mode 120000), else the file system's (a symlink, or
     the text file a checkout without symlinks leaves); None for a folder of its own."""
@@ -193,7 +211,8 @@ def problems(config: companion.Config) -> list[str]:
     """Every way the app forks or drifts from Laching's tools, one message each."""
     allowed = {entry["path"] for entry in config.get("conform.allow", [])}
     files = tracked(config.root)
-    return (wrapper_problems(config, files, allowed) + workflow_problems(config, files) + skill_problems(config)
+    return (wrapper_problems(config, files, allowed) + workflow_problems(config, files)
+            + mac_workflow_problems(config, files) + skill_problems(config)
             + store_problems(config))
 
 

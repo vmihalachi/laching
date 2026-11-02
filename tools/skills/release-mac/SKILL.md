@@ -43,7 +43,8 @@ python3 laching/tools/voice.py check   # when the app has a voice
 ```
 
 The tests run the Debug app (`mac.devAppName`); App Store review gets Release, which nothing local launches (it would
-share the App Store copy's data). When the app's notes name a hosted Release smoke workflow, start it on GitHub's
+share the App Store copy's data). When the app's notes name a hosted Release smoke workflow (a caller of
+`macos-app.yml` with `release: true`, which launches it with `laching/tools/smoke-release.sh`), start it on GitHub's
 runners (`gh workflow run <workflow> -f hosted=true`; it bills macOS minutes, so only for a release; push the release
 commit first) and make sure it's green for the commit you archive.
 

@@ -3,11 +3,15 @@
 
 Runs one named stage at a time. Every command is an argument list, never shell code interpolated from workflow
 inputs or app names. Output is streamed to the job and saved under mac.dir/build/ci-<stage>.log for failure artifacts.
+A stage the app has nothing for (no mac.iosScheme for `ios`, no conformance section for `vectors`) runs no commands.
+
+    python3 laching/tools/ci-macos.py <stage>   # project, format, pins, content, vectors, core, test, ios, release, smoke
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -15,7 +19,26 @@ import companion
 import companion_ci
 
 TOOLS = Path(__file__).resolve().parent
-STAGES = ("project", "format", "pins", "content", "core", "test")
+STAGES = ("project", "format", "pins", "content", "vectors", "core", "test", "ios", "release", "smoke")
+
+
+def ios_destination() -> str:
+    """The simulator ios-destination.py picks (it needs Xcode, so it's asked only when the app has an iOS scheme)."""
+    spec = importlib.util.spec_from_file_location("ios_destination", TOOLS / "ios-destination.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.destination(None)
+
+
+def derived(config: companion.Config, suffix: str) -> Path:
+    """A derived-data folder beside mac.derivedData, as verify.sh names the iOS one (dd.noindex → dd-ios.noindex)."""
+    base = config.derived_data
+    return base.with_name(f"{base.name.removesuffix('.noindex')}-{suffix}.noindex")
+
+
+def release_app(config: companion.Config) -> Path:
+    """The Release Mac app the `release` stage builds and `smoke` launches: mac.app's bundle."""
+    return derived(config, "release") / "Build" / "Products" / "Release" / f"{config.require('mac.app')}.app"
 
 
 def commands(config: companion.Config, stage: str) -> list[tuple[Path, list[str]]]:
@@ -48,12 +71,40 @@ def commands(config: companion.Config, stage: str) -> list[tuple[Path, list[str]
             if config.get(section):
                 result.append(tool(name, "check" if section == "voice" else "--check"))
         return result
+    if stage == "vectors":
+        vectors = config.path("conformance.dir")
+        if vectors is None:
+            return []
+        return [(root, [str(TOOLS / "conformance.sh")]),
+                (root, ["git", "add", "--intent-to-add", "--", str(vectors)]),
+                (root, ["git", "diff", "--exit-code", "--stat", "--", str(vectors)])]
     if stage == "core":
         core = config.path("mac.core", "mac.dir")
         return [(root, ["swift", "test", "--package-path", str(core)])] if core else []
     if stage == "test":
         return [(mac, ["xcodebuild", "-project", config.require("mac.project"), "-scheme", config.require("mac.scheme"),
                        "-destination", "platform=macOS", "-derivedDataPath", str(config.derived_data), "-quiet", *companion.xcode_cache_settings(), "test"])]
+    if stage == "ios":
+        scheme = config.get("mac.iosScheme")
+        if not scheme:
+            return []
+        return [(mac, ["xcodebuild", "-project", config.require("mac.project"), "-scheme", scheme, "-destination", ios_destination(),
+                       "-derivedDataPath", str(derived(config, "ios")), "-quiet", *companion.xcode_cache_settings(), "test"])]
+    if stage == "release":
+        # What App Store review and customers get (hardened runtime, the Store bundle ID, Release-only strings), which
+        # the tests never build: the Mac app signed ad hoc, the iOS app unsigned.
+        project = config.require("mac.project")
+        result = [(mac, ["xcodebuild", "-project", project, "-scheme", config.require("mac.scheme"), "-configuration", "Release",
+                         "-destination", "platform=macOS", "-derivedDataPath", str(derived(config, "release")), "-quiet",
+                         *companion.xcode_cache_settings(), "CODE_SIGN_STYLE=Manual", "CODE_SIGN_IDENTITY=-",
+                         "DEVELOPMENT_TEAM=", "build"])]
+        if scheme := config.get("mac.iosScheme"):
+            result.append((mac, ["xcodebuild", "-project", project, "-scheme", scheme, "-configuration", "Release",
+                                 "-destination", "generic/platform=iOS", "-derivedDataPath", str(derived(config, "release-ios")),
+                                 "-quiet", *companion.xcode_cache_settings(), "CODE_SIGNING_ALLOWED=NO", "build"]))
+        return result
+    if stage == "smoke":
+        return [(root, [str(TOOLS / "smoke-release.sh"), str(release_app(config))])] if config.get("mac.app") else []
     raise ValueError(f"unknown stage: {stage}")
 
 

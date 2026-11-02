@@ -40,7 +40,7 @@ or `$COMPANION_ROOT`); the schema is [`companion.schema.json`](companion.schema.
 | [`landing/`](#landing) | `@laching/landing`, a landing page's plumbing as Vite plugins, on npm. |
 | [`hooks/hook.py`](#hookshookpy) | Agent guardrails. |
 | [`skills/`](#skills) | The generic agent skills an app links next to its own. |
-| [`ci-macos.py`, `macos-app.yml`](#mac-apps) | Reusable Mac CI. |
+| [`ci-macos.py`, `macos-app.yml`, `smoke-release.sh`](#mac-apps) | Reusable Mac CI, and the Release app's launch check. |
 | [`ci-windows-core.py`, `windows-core.yml`](#portable-windows-checks) | Portable Windows CI. |
 | [`companion_ci.py`](#portable-windows-checks) | What both CI drivers share. |
 | [`windows/companion.targets`](#windows-apps) | What every companion's WinUI project imports, last. |
@@ -156,7 +156,8 @@ fail when the app drifts from the tools (each rule: `conform.py`'s docstring):
   vectors) goes in `conform.allow`, with why.
 - **The reusable workflows**, at the release the app pins: an app with `windows.app` calls both
   `windows-release.yml` and `windows-app.yml`, and no workflow of its own publishes, smoke-tests or bundles Store
-  packages. Every call of a Laching reusable workflow, including `macos-app.yml`, must name the pinned release.
+  packages; an app with `mac` calls `macos-app.yml`. Every call of a Laching reusable workflow must name the pinned
+  release.
 - **Linked skills.** A skill in `.agents/skills` named like one of `tools/skills` is a link to
   `../../laching/tools/skills/<name>`; the app's own words for it go in `.agents/notes/<name>.md`.
 - **`store.microsoft`** is the schema's shape: `shots` and `publisher`, and `storeId` for the submission API.
@@ -404,7 +405,8 @@ They read the app's prose from its `DESIGN.md` (the character's voice, the gloss
 ## Mac apps
 
 Reusable Mac CI (`ci-macos.py`, `../.github/workflows/macos-app.yml`): project generation, formatting, release pins,
-enabled content checks, core tests and app tests from `companion.json`.
+enabled content checks, the conformance vectors, core tests, the Mac and iOS app tests and, when asked, the Release
+builds and a launch of the Release Mac app, from `companion.json`.
 
 An app can keep its `workflow_dispatch`, permissions and concurrency policy in a short workflow and call the shared
 Mac checks at the release it pins:
@@ -416,21 +418,34 @@ jobs:
     with:
       hosted: ${{ inputs.hosted }}
       submodules: "true"  # also checks out bundled recorded voices
+      release: true       # optional: the Release builds, and with hosted the launch
 ```
 
 The self-hosted runner defaults to `["self-hosted","macOS"]`; `runner` accepts another JSON label list. `hosted: true`
 uses `macos-26` and selects the latest stable Xcode. `laching-path` defaults to `laching` and must match the profile's
 `laching.path`. Both `companion.py bump` and `pins` include this workflow reference; `conform` reports a drifting ref.
 
-`ci-macos.py` runs named stages (`project`, `format`, `pins`, `content`, `core`, `test`). Paths and the test scheme come
-from `mac`; content checks follow the configured sounds, characters and voice, plus the phrase bank when present.
-An app without a core package skips that stage. Mac CI requires `mac.format`: an explicit, nonempty array of every
+`ci-macos.py` runs named stages (`project`, `format`, `pins`, `content`, `vectors`, `core`, `test`, `ios`, `release`,
+`smoke`). Paths and the test scheme come from `mac`; content checks follow the configured sounds, characters and voice,
+plus the phrase bank when present. A stage the app has nothing for runs no commands: `core` without `mac.core`,
+`vectors` without a `conformance` section, `ios` without `mac.iosScheme`, `smoke` without `mac.app`.
+
+- `vectors` runs `conformance.sh` and fails when `conformance.dir` differs from the commit, new files included.
+- `ios` runs the `mac.iosScheme` tests on the simulator `ios-destination.py` picks.
+- `release` builds what App Store review gets, which the tests never build: the Mac app in Release, signed ad hoc, and
+  the iOS app in Release, unsigned, when there's an `iosScheme`. The workflow runs it only with `release: true` (off by
+  default: it adds a build or two).
+- `smoke` launches the Release Mac app with `smoke-release.sh` and fails when it quits or leaves a crash report within
+  20 s (the executable and the report are named `mac.app`). The workflow runs it only with `release` and `hosted`, and
+  the script refuses to run outside CI and on a self-hosted runner: a Release build has the App Store bundle ID, so on
+  the owner's Mac it would open the App Store copy's data. Mac CI requires `mac.format`: an explicit, nonempty array of every
 owned Swift source directory or `.swift` file, relative to `mac.dir`, including shared/platform sources and core
 sources/tests. For example, `["Desktop", "Mobile", "Common", "Tests", "Core/Sources", "Core/Tests", "Core/Package.swift"]`.
 Missing roots fail the formatting stage; the helper makes no assumptions about folder names.
 Every command is an argument list, so app names and paths with spaces retain their meaning; the workflow accepts no
 shell command input. Output streams to the job and `mac.dir/build/ci-<stage>.log`; failure uploads these logs. Apps with
-other platform checks keep those in their own workflows.
+other platform checks keep those in their own workflows. `companion.py conform` fails when an app with `mac` has no
+workflow that calls `macos-app.yml`.
 
 ## Portable Windows checks
 
