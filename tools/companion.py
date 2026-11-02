@@ -320,8 +320,11 @@ def derived(config: Config) -> dict[str, str]:
         f"^{ere(landing_i18n)}/" if landing_i18n else "", "^companion\\.json$", *pin,
     ] if part)
     values["RE_CSHARP"] = f"^{ere(windows)}/.*\\.cs$" if windows else never
+    # The core and its tests, the vectors they replay, and the shared build settings and SDK pin: Laching.* versions
+    # live in Directory.Packages.props, so a bump runs the tests too.
     values["RE_WINDOWS_CORE"] = (
-        f"^{ere(windows)}/{ere(win_core)}(\\.Tests)?/|^{ere(conformance)}/" if windows and win_core else never
+        f"^{ere(windows)}/{ere(win_core)}(\\.Tests)?/|^{ere(windows)}/(Directory\\.(Build|Packages)\\.props|global\\.json)$"
+        f"|^{ere(conformance)}/" if windows and win_core else never
     )
     values["RE_WINDOWS_APP"] = f"^{ere(windows)}/{ere(values['WINDOWS_APP'])}/" if windows and values["WINDOWS_APP"] else never
     # The WinUI build: the app, the core it references and the shared build settings and SDK pin.
@@ -340,7 +343,10 @@ def derived(config: Config) -> dict[str, str]:
         if values["WINDOWS_ASSETS"] else never
     )
     values["RE_KOTLIN"] = f"^{ere(android)}/.*\\.kts?$" if android else never
-    values["RE_ANDROID_CORE"] = f"^{ere(android)}/{ere(android_core)}/|^{ere(conformance)}/" if android else never
+    # The Kotlin core builds against the submodule's kotlin/ (includeBuild), so a pin bump runs its tests too.
+    values["RE_ANDROID_CORE"] = (
+        "|".join([f"^{ere(android)}/{ere(android_core)}/", f"^{ere(conformance)}/", *pin]) if android else never
+    )
     values["RE_ANDROID_APP"] = f"^{ere(android)}/{ere(android_app)}/" if android else never
     values["RE_LANDING"] = (
         f"^{ere(landing)}/|^{ere(conformance)}/(phrases|settings|catalog)\\.json$|Localizable\\.xcstrings$" if landing else never
