@@ -394,7 +394,8 @@ commits (nothing when the tree is clean and the session has no log).
 ## `skills/`
 
 `localization`, `add-phrase`, `add-setting`, `conformance`, `voice`, `windows-port`, `release-mac`, `release-ios` (a
-universal app's iPhone and iPad version), `release-windows`, `review-invariants`.
+universal app's iPhone and iPad version), `release-windows`, `review-invariants`, `landing-copy` (what the landing page
+says when a platform, store or purchase changes, then `laching-landing check`).
 
 They read the app's prose from its `DESIGN.md` (the character's voice, the glossary, the palette) and from
 `.agents/notes/<skill>.md` when present (voices chosen, the team ID, who reviews which language);

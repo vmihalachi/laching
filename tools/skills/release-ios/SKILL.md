@@ -46,7 +46,8 @@ The Mac's tests and the conformance vectors too when the code is shared (the app
 Release app once on a simulator or a device the way review will: it launches, onboarding opens on a fresh install, the
 main screens open, anything that needs a permission asks only when the feature is chosen, purchases show their prices.
 Check the iPad too (both orientations, Split View). Confirm README, landing and store-listing claims about iPhone and
-iPad match what ships, and that purchase UI is only where the app's rules allow.
+iPad match what ships (the `landing-copy` skill, when a platform, store or purchase changed), and that purchase UI is
+only where the app's rules allow.
 
 ## 3. Bump, commit, archive, upload
 

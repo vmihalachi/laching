@@ -41,10 +41,31 @@ The template's `{{key}}` placeholders are the app's own (`placeholders`, asked f
 apps for a footer: `{ apps: { name, url, tagline?: (locale, language) => string }[], label: (locale, language) =>
 string, builtOn?: { url, label } }`, rendered as a `.more-from` block (`.more-from-label`, `.more-from-apps`,
 `.more-from-tagline`, `.built-on`) with every value escaped and no styles; an app whose `url` is `siteUrl` is left
-out, so the landings can share one list, and without the option `{{moreFrom}}` renders nothing. `pages` adds hand-written pages beyond the legal ones
-(a comparison, a guide), each in the languages it lists, with canonical, hreflang and sitemap entries among those
-languages only. `csp.mediaSrc` allows recorded audio, `headers` adds `_headers` rules, `extraPlugins` runs the app's
-own plugins between the hosting and social-asset ones.
+out, so the landings can share one list, and without the option `{{moreFrom}}` renders nothing. `pages` adds
+hand-written pages beyond the legal ones (a comparison, a guide), each in the languages it lists, with canonical,
+hreflang and sitemap entries among those languages only. `csp.mediaSrc` allows recorded audio, `headers` adds
+`_headers` rules, `extraPlugins` runs the app's own plugins between the hosting and social-asset ones.
+
+## Checking the built site
+
+`laching-landing check [dist] [--config vite.config.ts]` reads the landing's Vite config (the one in the current
+folder unless `--config` names another) and checks the built site in `dist` (the config's `build.outDir` unless
+given), offline, after `vp build`. It prints one line per problem and exits 1 on any, 2 when there's no config, no
+`companionLanding` in it or no built site. `checkLanding(dist, options)` is the same check as a function, returning the
+problems. It finds:
+
+- a dead link (`href`, `src`, `srcset`, resolved as Cloudflare Pages serves `dist`) or a dead `#anchor`;
+- hreflang that isn't reciprocal, a missing or extra `x-default`, a page missing from its own set, and a canonical that
+  isn't the page itself;
+- a language without its home page, a legal page or one of `pages`, and, without a `support` legal page, a home page
+  with no `mailto:` link to `contactEmail` (the home page is then the support URL);
+- a legal page, in any language, that never names one of `stores` (`{ apple?, microsoft?, google? }`, each the
+  listing's URL or `null` before it's live; named App Store, Microsoft Store and Google Play) or `platforms` (the app's
+  own words, such as `["Mac", "Windows"]`). `nameAliases` accepts other words per language and name, such as
+  `{ it: { Mac: ["macOS"] } }`.
+
+`stores`, `platforms` and `nameAliases` change no page: they're what the check holds the legal pages to. The check is
+a separate step, not part of the build, so a landing adopts it in its deploy when its pages pass.
 
 Released from Laching's `release.yml` on each `vX.Y.Z` tag that changes `tools/landing` since the version on npm, at
 the tag's version (the `version` here is a placeholder), so its versions skip the Laching releases that leave it alone:
