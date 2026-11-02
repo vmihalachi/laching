@@ -130,6 +130,10 @@ class SetupLinuxTests(FixtureAppTestCase):
         return subprocess.run([str(TOOLS / "setup-linux.sh")], cwd=self.root, env=environment,
                               capture_output=True, encoding="utf8")
 
+    def exports(self) -> str:
+        """What the run handed the rest of the session in CLAUDE_ENV_FILE, "" when it wrote nothing there."""
+        return self.env_file.read_text("utf8") if self.env_file.exists() else ""
+
     def calls(self) -> list[str]:
         return self.log.read_text("utf8").splitlines()
 
@@ -160,7 +164,7 @@ class SetupLinuxTests(FixtureAppTestCase):
         self.assertLess(calls.index("sudo -n apt-get update -qq"), installs[1], calls)
         self.assertTrue(os.access(self.home / ".local/bin/ktlint", os.X_OK))
         self.assertTrue((self.root / "landing/node_modules").is_dir())
-        exports = self.env_file.read_text("utf8")
+        exports = self.exports()
         self.assertIn(f'export DOTNET_ROOT="{home}/.dotnet" PATH="{home}/.dotnet:$PATH" DOTNET_CLI_TELEMETRY_OPTOUT=1',
                       exports)
         self.assertIn(f'export PATH="{home}/.local/bin:$PATH"', exports)
@@ -193,7 +197,7 @@ class SetupLinuxTests(FixtureAppTestCase):
         self.config(lambda config: config.pop("windows"))
         result = self.run_setup()
         self.assertFalse([call for call in self.calls() if "dotnet" in call], self.calls())
-        self.assertNotIn("DOTNET_ROOT", self.env_file.read_text("utf8"))
+        self.assertNotIn("DOTNET_ROOT", self.exports())
         self.assertTrue(result.stdout.endswith("Linux setup done: no dotnet, node v24.11.0, java 17.0.12\n"),
                         result.stdout)
 
@@ -203,10 +207,12 @@ class SetupLinuxTests(FixtureAppTestCase):
         self.assertNotIn("Installing the .NET 10 SDK", result.stdout)
         self.assertFalse([call for call in self.calls() if "dotnet-install" in call])
         self.assertIn("dotnet restore windows/Fixture.Core.Tests/Fixture.Core.Tests.csproj -v q --nologo", self.calls())
-        self.assertNotIn("DOTNET_ROOT", self.env_file.read_text("utf8"))
+        self.assertNotIn("DOTNET_ROOT", self.exports())
 
     def test_an_older_dotnet_sdk_gets_10(self):
+        self.fake("dotnet", FAKES["dotnet"])
         result = self.run_setup(FAKE_SDK="8.0.400")
+        self.assertIn("dotnet --list-sdks", self.calls())
         self.assertIn("Installing the .NET 10 SDK into ~/.dotnet", result.stdout)
 
     def test_without_an_android_section_no_jdk_or_ktlint(self):
