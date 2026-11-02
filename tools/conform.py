@@ -52,9 +52,11 @@ SETUP_LINUX = re.compile(r"setup-linux\.sh\b")
 WRAPPER_FORM = {
     ".sh": (("set COMPANION_ROOT", r"COMPANION_ROOT="), ('forward its arguments ("$@")', r'"\$@"'),
             ("keep the exit status (exec)", r"(^|[\s;&|])exec\s")),
-    ".py": (("set COMPANION_ROOT", r"COMPANION_ROOT"), ("forward its arguments (sys.argv[1:])", r"sys\.argv\[1:\]"),
-            ("keep the exit status (os.execv, or sys.exit(subprocess.call(...)))",
-             r"os\.exec\w*\(|(sys\.exit|SystemExit)\((subprocess\.call\(|.*\.returncode)")),
+    # runpy.run_path(..., run_name="__main__") runs the tool in this process: sys.argv[1:] and its SystemExit carry over.
+    ".py": (("set COMPANION_ROOT", r"COMPANION_ROOT"),
+            ("forward its arguments (sys.argv[1:])", r"sys\.argv\[1:\]|runpy\.run_path\("),
+            ("keep the exit status (os.execv, sys.exit(subprocess.call(...)) or runpy.run_path)",
+             r"os\.exec\w*\(|(sys\.exit|SystemExit)\((subprocess\.call\(|.*\.returncode)|runpy\.run_path\(")),
     ".ps1": (("set $env:COMPANION_ROOT", r"\$env:COMPANION_ROOT\s*="), ("forward its arguments (@args)", r"@args\b"),
              ("keep the exit status (exit $LASTEXITCODE)", r"exit\s+\$LASTEXITCODE")),
 }

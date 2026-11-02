@@ -179,9 +179,10 @@ fail when the app drifts from the tools (each rule: `conform.py`'s docstring):
   exit $LASTEXITCODE
   ```
 
-  (`os.execv` also passes for Python, but on Windows it returns before the tool ends and loses its status; the
-  PowerShell `finally` keeps the variable out of the rest of an interactive session.) `scripts/setup-linux.sh` runs
-  first in a fresh clone, often one made without its submodules, so it checks Laching out before calling it:
+  (`os.execv` and `runpy.run_path(..., run_name="__main__")` also pass for Python, but on Windows `os.execv` returns
+  before the tool ends and loses its status; the PowerShell `finally` keeps the variable out of the rest of an
+  interactive session.) `scripts/setup-linux.sh` runs first in a fresh clone, often one made without its submodules, so
+  it checks Laching out before calling it:
 
   ```sh
   #!/bin/sh

@@ -92,8 +92,17 @@ class ConformTests(FixtureAppTestCase):
         self.write("macos/scripts/voice.py", "import os, sys; root = os.path.abspath(os.path.join(os.path.dirname(__file__), "
                    "'..', '..')); os.environ['COMPANION_ROOT'] = root\nos.execv(sys.executable, [sys.executable, "
                    "os.path.join(root, 'laching', 'tools', 'voice.py'), *sys.argv[1:]])\n")
+        self.write("macos/scripts/character.py", "import os, pathlib, runpy\nroot = pathlib.Path(__file__).resolve()"
+                   ".parents[2]\nos.environ['COMPANION_ROOT'] = str(root)\nrunpy.run_path(str(root / "
+                   "'laching/tools/character.py'), run_name='__main__')\n")
+        self.write("macos/scripts/conformance.py", "import os, subprocess, sys\nos.environ['COMPANION_ROOT'] = "
+                   "'..'\nsubprocess.call([sys.executable, '../laching/tools/conformance.sh'])\n")
         self.write("windows/scripts/smoke-package.ps1", WRAPPER)
-        self.assertEqual(self.problems(), [])
+        self.assertEqual(self.problems(), [
+            "macos/scripts/conformance.py: a wrapper of laching/tools/conformance.sh that doesn't forward its arguments "
+            "(sys.argv[1:]) or keep the exit status (os.execv, sys.exit(subprocess.call(...)) or runpy.run_path): see "
+            "the templates in laching/tools/README.md, *Staying on Laching's tools*"])
+        (self.root / "macos/scripts/conformance.py").unlink()
 
         self.write("macos/scripts/install-dev.sh", "#!/bin/sh\nexec \"$(dirname \"$0\")/../../laching/tools/install-dev.sh\" \"$@\"\n")
         self.write("macos/scripts/l10n.py", "import pathlib, runpy; runpy.run_path(str(pathlib.Path(__file__).resolve()"
@@ -110,8 +119,7 @@ class ConformTests(FixtureAppTestCase):
         self.assertEqual(found, [
             "macos/scripts/install-dev.sh: a wrapper of laching/tools/install-dev.sh that doesn't set COMPANION_ROOT: see "
             "the templates in laching/tools/README.md, *Staying on Laching's tools*",
-            "macos/scripts/l10n.py: a wrapper of laching/tools/l10n.py that doesn't set COMPANION_ROOT, forward its "
-            "arguments (sys.argv[1:]) or keep the exit status (os.execv, or sys.exit(subprocess.call(...))): see the "
+            "macos/scripts/l10n.py: a wrapper of laching/tools/l10n.py that doesn't set COMPANION_ROOT: see the "
             "templates in laching/tools/README.md, *Staying on Laching's tools*",
             "macos/scripts/phrases.py: a wrapper of laching/tools/phrases.py that doesn't call laching/tools/phrases.py: "
             "see the templates in laching/tools/README.md, *Staying on Laching's tools*",
