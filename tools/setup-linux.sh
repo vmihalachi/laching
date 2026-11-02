@@ -27,6 +27,8 @@ git config submodule.recurse true; git config push.recurseSubmodules on-demand
 
 # .NET 10 SDK, into ~/.dotnet.
 if [ -n "$WINDOWS_DIR" ]; then
+  # An earlier run's SDK, which a fresh shell doesn't have on PATH.
+  [ -x "$HOME/.dotnet/dotnet" ] && export PATH="$HOME/.dotnet:$PATH"
   if ! has dotnet || ! dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then
     echo "Installing the .NET 10 SDK into ~/.dotnet"
     curl -fsSL https://dot.net/v1/dotnet-install.sh -o "${TMPDIR:-/tmp}/dotnet-install.sh" &&

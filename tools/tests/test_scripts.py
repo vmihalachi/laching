@@ -1253,6 +1253,202 @@ class IosStoreScreenshotTests(FixtureAppTestCase):
         self.assertEqual(self.Image.open(self.root / "elsewhere" / "en" / "1-today-light.png").size, (2007, 2853))
 
 
+class MacAndroidStoreScreenshotTests(FixtureAppTestCase):
+    """--canvas mac and the Android canvases past StoreScreenshotTests: Google Play's limits, the Mac capture for
+    another language, --only, and what the canvases share (the fonts, the portrait screens' line, the names)."""
+
+    # The captures' one color, which no palette color or blend of one makes.
+    SCREEN = (13, 151, 77)
+
+    def setUp(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("needs Pillow (pip3 install pillow)")
+        if not FONT:
+            self.skipTest("needs Arial or DejaVu Sans")
+        super().setUp()
+        self.Image = Image
+        self.data = json.loads((self.root / "companion.json").read_text("utf8"))
+        self.data["screenshots"]["store"] = {"captions": "captions.json", "out": "store", "size": [1440, 900],
+                                             "font": str(FONT)}
+        self.write_config()
+        tall = {"shot": "panel", "headline": ["A HEADLINE", "OVER", "THREE LINES"],
+                "note": "A note long enough to wrap over more than one line, then over a few more words."}
+        short = {"shot": "home", "appearance": "dark", "headline": ["HOME"], "note": "Short."}
+        self.captions = {"en": [tall, short], "it": [tall, short], "de": [short]}
+        (self.root / "captions.json").write_text(json.dumps(self.captions), "utf8")
+        self.captures = self.root / "screenshots" / "macos"
+        for shot in ("panel-light", "home-dark"):
+            self.screen(self.captures / f"{shot}.png", (1080, 1920))
+
+    def write_config(self):
+        (self.root / "companion.json").write_text(json.dumps(self.data), "utf8")
+
+    def screen(self, path: Path, size, color=SCREEN):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.Image.new("RGB", size, color).save(path)
+
+    def screen_top(self, path: Path) -> int:
+        """The first row of the screen in an image's middle column."""
+        image = self.Image.open(path).convert("RGB")
+        return next(y for y in range(image.height) if image.getpixel((image.width // 2, y)) == self.SCREEN)
+
+    def run_tool(self, *args: str):
+        return subprocess.run([sys.executable, str(TOOLS / "store-screenshots.py"), *args], cwd=self.root,
+                              capture_output=True, encoding="utf8")
+
+    def load_tool(self):
+        spec = importlib.util.spec_from_file_location("store_screenshots", TOOLS / "store-screenshots.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_google_play_limits_each_side(self):
+        tool = self.load_tool()
+        sides = "Google Play takes each side between 320 and 3840 px"
+        ratio = "Google Play takes no side more than 2× the other"
+        for size, problem in (((2000, 4000), sides), ((4000, 2000), sides), ((300, 500), sides), ((1080, 2400), ratio),
+                              ((320, 640), None), ((1920, 3840), None), ((1080, 1920), None)):
+            with self.subTest(size=size):
+                found = tool.play_problem(self.Image.new("RGB", size))
+                if problem:
+                    self.assertEqual(found, f"{size[0]}×{size[1]}: {problem}")
+                else:
+                    self.assertIsNone(found)
+        # A store.canvases side over the limit stops the run before the image is written.
+        self.data["screenshots"]["store"]["canvases"] = {"android-tablet": [4000, 2000]}
+        self.write_config()
+        result = self.run_tool("--canvas", "android-tablet")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(f"1-panel-light.png 4000×2000: {sides} (store.canvases)", result.stderr)
+        self.assertEqual(list((self.root / "store" / "android-tablet" / "en").iterdir()), [])
+
+    @unittest.skipIf(BASH is None, NO_SHELL)
+    def test_mac_captures_another_language_first(self):
+        tool = self.load_tool()
+        folder = self.root / "build" / "store-captures" / "apple" / "it"
+        script = companion.shell_command(TOOLS / "screenshots.sh")
+        calls = []
+
+        def capture(command):
+            calls.append(command)
+            for shot in ("panel-light", "home-dark"):
+                self.screen(folder / f"{shot}.png", (800, 600))
+            return subprocess.CompletedProcess(command, 0)
+
+        def run(*args, runs=capture):
+            with mock.patch.object(tool.subprocess, "run", runs), contextlib.redirect_stdout(io.StringIO()) as printed:
+                return tool.main(["--lang", "it", *args]), printed.getvalue().split()
+
+        self.assertEqual(run(), (0, ["store/it/1-panel-light.png", "store/it/2-home-dark.png"]))
+        self.assertEqual(calls, [[*script, "--only", "panel,home", "--front", str(folder), "it"]])
+        # --only captures its windows alone.
+        self.assertEqual(run("--only", "home"), (0, ["store/it/2-home-dark.png"]))
+        self.assertEqual(calls[-1], [*script, "--only", "home", "--front", str(folder), "it"])
+        # A failed capture stops the run, as does no bash to run it (a Windows without Git for Windows).
+        with self.assertRaises(SystemExit) as stop:
+            run(runs=lambda command: subprocess.CompletedProcess(command, 1))
+        self.assertEqual(str(stop.exception), "store-screenshots: capturing the it windows failed")
+        no_bash = mock.patch.object(tool.companion, "shell_command", return_value=None)
+        with no_bash, self.assertRaises(SystemExit) as stop:
+            run()
+        self.assertEqual(str(stop.exception),
+                         "store-screenshots: capturing needs bash (Git for Windows); pass a captures folder")
+        self.assertEqual(len(calls), 2)
+
+    def test_only_keeps_a_mac_or_android_folders_others(self):
+        for canvas, folder in (("mac", "store/en"), ("android-phone", "store/android-phone/en"),
+                               ("android-tablet", "store/android-tablet/en")):
+            with self.subTest(canvas=canvas):
+                out = self.root / folder
+                self.screen(self.captures / "home-dark.png", (1080, 1920))
+                self.assertEqual(self.run_tool("--canvas", canvas).returncode, 0)
+                whole = {path.name: path.read_bytes() for path in out.iterdir()}
+                # These folders aren't emptied by a whole render, so a PNG the set doesn't have is no reason to stop.
+                (out / "9-old-light.png").write_bytes(b"old")
+                self.screen(self.captures / "home-dark.png", (1080, 1920), (200, 60, 30))
+                result = self.run_tool("--canvas", canvas, "--only", "home")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.split(), [f"{folder}/2-home-dark.png"])
+                self.assertEqual((out / "1-panel-light.png").read_bytes(), whole["1-panel-light.png"], "kept as it was")
+                self.assertNotEqual((out / "2-home-dark.png").read_bytes(), whole["2-home-dark.png"])
+                self.assertEqual((out / "9-old-light.png").read_bytes(), b"old")
+                # A kept image that's missing stops the run before anything is written.
+                (out / "1-panel-light.png").unlink()
+                written = (out / "2-home-dark.png").read_bytes()
+                missing = self.run_tool("--canvas", canvas, "--only", "home")
+                self.assertEqual(missing.returncode, 1)
+                self.assertIn(f"{folder} lacks 1-panel-light.png: render en whole first", missing.stderr)
+                self.assertEqual((out / "2-home-dark.png").read_bytes(), written)
+
+    def test_cjk_fonts_replace_both_faces_and_note_font_sets_the_note(self):
+        tool = self.load_tool()
+        note, cjk = self.root / "fonts" / "Note.ttf", self.root / "fonts" / "CJK.ttf"
+        note.parent.mkdir()
+        for copy in (note, cjk):
+            shutil.copyfile(FONT, copy)
+        self.data["screenshots"]["store"].update({"style": "zine", "noteFont": "fonts/Note.ttf",
+                                                  "cjkFonts": {"ja": "fonts/CJK.ttf"}})
+        self.write_config()
+        config = companion.load(self.root)
+        headline, note, cjk = FONT.resolve(), note.resolve(), cjk.resolve()
+        real = tool.ImageFont.truetype
+        # The zine note is 120 on the 2880-wide canvas, 0.7 of that in a CJK face; this canvas is 1440 wide.
+        for language, faces, note_size in (("en", (headline, note), 60), ("ja", (cjk, cjk), 42)):
+            with self.subTest(language=language):
+                calls = []
+
+                def truetype(font, size):
+                    calls.append((Path(font), size))
+                    return real(font, size)
+
+                settings = tool.Settings(config, "mac", self.captures, self.root / "out", language)
+                with mock.patch.object(tool.ImageFont, "truetype", truetype):
+                    settings.compose(self.captions["en"][0])
+                # The headline's face first (shrunk to fit), then the note's.
+                self.assertEqual({font for font, _ in calls[:-1]}, {faces[0]})
+                self.assertEqual(calls[-1], (faces[1], note_size))
+        # Without noteFont the note takes the headline's face.
+        del self.data["screenshots"]["store"]["noteFont"]
+        self.write_config()
+        settings = tool.Settings(companion.load(self.root), "mac", self.captures, self.root / "out", "en")
+        self.assertEqual((settings.headline_font, settings.note_font, settings.note_size), (headline, headline, 120))
+
+    def test_portrait_screens_line_up_whatever_the_caption(self):
+        for language in ("en", "de"):
+            for shot in ("panel-light", "home-dark"):
+                self.screen(self.root / "build" / "store-captures" / "ios" / "iphone" / language / f"{shot}.png",
+                            (1320, 2868))
+        for canvas, folder in (("android-phone", "store/android-phone"), ("iphone", "store-listing/apple/iphone")):
+            with self.subTest(canvas=canvas):
+                out = self.root / folder
+                whole = self.run_tool("--canvas", canvas, "--lang", "en", "--lang", "de")
+                self.assertEqual(whole.returncode, 0, whole.stderr)
+                top = self.screen_top(out / "en" / "1-panel-light.png")
+                self.assertEqual(self.screen_top(out / "en" / "2-home-dark.png"), top, "under the short caption too")
+                # Alone, the short caption leaves its screen higher: the line is the language's tallest caption's.
+                self.assertLess(self.screen_top(out / "de" / "1-home-dark.png"), top)
+                # --only renders the short one alone, on the same line.
+                (out / "en" / "2-home-dark.png").unlink()
+                only = self.run_tool("--canvas", canvas, "--only", "home")
+                self.assertEqual(only.returncode, 0, only.stderr)
+                self.assertEqual(only.stdout.split(), [f"{folder}/en/2-home-dark.png"])
+                self.assertEqual(self.screen_top(out / "en" / "2-home-dark.png"), top)
+
+    def test_ios_names_past_nine_take_two_digits(self):
+        tool = self.load_tool()
+        config = companion.load(self.root)
+        ten = [{"shot": f"s{i}", "headline": ["H"], "note": "N."} for i in range(1, 11)]
+        for canvas in ("iphone", "ipad", "duo"):
+            names = tool.Settings(config, canvas, Path(), Path(), "en").names(ten)
+            self.assertEqual((names[0], names[8], names[9]), ("01-s1-light.png", "09-s9-light.png", "10-s10-light.png"))
+            self.assertEqual(tool.Settings(config, canvas, Path(), Path(), "en").names(ten[:9])[0], "1-s1-light.png")
+        # The Mac's and Android's keep one.
+        for canvas in ("mac", "android-phone"):
+            self.assertEqual(tool.Settings(config, canvas, Path(), Path(), "en").names(ten)[0], "1-s1-light.png")
+
+
 class CaptionWrapTests(unittest.TestCase):
     """store-screenshots.py's line breaking, measured by a fake draw: every character 10 px wide."""
 

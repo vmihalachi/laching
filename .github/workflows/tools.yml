@@ -1,7 +1,7 @@
 name: Tools
 
-# Tests the Python tools in tools/ (standard library only, so no setup beyond the runner's python3), scripts/release.sh
-# with release.yml's plan step, and the @laching/landing package (tools/landing, Node 24).
+# Tests the Python tools in tools/ (standard library only; the image tests also need Pillow, which they skip without),
+# scripts/release.sh with release.yml's plan step, and the @laching/landing package (tools/landing, Node 24).
 on:
   push:
     branches:
@@ -38,6 +38,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+
+      # For store-screenshots.py's tests and the other image ones, which would skip. The runner's python3 is the
+      # system's (PEP 668), so into the user's site-packages.
+      - name: Pillow
+        run: python3 -m pip install --user --break-system-packages Pillow==11.3.0
 
       - name: Test the tools (tools/tests/run.py)
         run: python3 tools/tests/run.py
