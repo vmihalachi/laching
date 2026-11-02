@@ -1,7 +1,8 @@
 name: Tools
 
 # Tests the Python tools in tools/ (standard library only; the image tests also need Pillow, which they skip without),
-# scripts/release.sh with release.yml's plan step, and the @laching/landing package (tools/landing, Node 24).
+# scripts/release.sh with release.yml's plan step, that the NuGet packages' READMEs link only absolutely, and the
+# @laching/landing package (tools/landing, Node 24).
 on:
   push:
     branches:
@@ -14,6 +15,10 @@ on:
       - "scripts/verify.sh"
       - ".github/workflows/release.yml"
       - ".github/workflows/tools.yml"
+      - "dotnet/README.md"
+      - "dotnet/Directory.Build.targets"
+      - "web/README.md"
+      - "web/Directory.Build.targets"
   pull_request:
     paths:
       - "tools/**"
@@ -23,6 +28,10 @@ on:
       - "scripts/verify.sh"
       - ".github/workflows/release.yml"
       - ".github/workflows/tools.yml"
+      - "dotnet/README.md"
+      - "dotnet/Directory.Build.targets"
+      - "web/README.md"
+      - "web/Directory.Build.targets"
   workflow_dispatch:
 
 permissions:

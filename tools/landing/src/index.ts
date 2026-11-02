@@ -1,12 +1,14 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Plugin } from "vite-plus";
+import type { LandingCheckOptions, LandingStores } from "./check.js";
 import { hostingConfigPlugin } from "./hosting.js";
 import {
   inlineLanguageSwitcher,
   langRedirectScript,
   macStoreButton,
   menuLanguageSwitcher,
+  moreFromList,
   renderTemplate,
   scriptJson,
 } from "./html.js";
@@ -32,8 +34,10 @@ export {
   langRedirectScript,
   macStoreButton,
   menuLanguageSwitcher,
+  moreFromList,
   renderTemplate,
   scriptJson,
+  type MoreFromApp,
 } from "./html.js";
 export {
   alternates,
@@ -44,6 +48,7 @@ export {
   type PageLanguages,
 } from "./legal.js";
 export { renderSitemap } from "./sitemap.js";
+export { checkLanding, type LandingCheckOptions, type LandingStores } from "./check.js";
 export { headersFile, hostingConfigPlugin, inlineScriptHashes } from "./hosting.js";
 export {
   createRenderer,
@@ -86,6 +91,28 @@ export interface CompanionLandingOptions<L extends Language = Language> {
   languageSwitcherLabel?: (locale: Locale) => string;
   /** `{{storeButton}}` and `{{storeButtonBig}}`; `macStoreButton` by default. */
   storeButton?: (locale: Locale, big: boolean) => string;
+  /**
+   * `{{moreFrom}}`: the sibling apps, each linked by name with an optional tagline, under `label`, then an optional
+   * "Built on" link. Every name, tagline and label is the app's; an app whose `url` is `siteUrl` is left out, so the
+   * landings can share one list. Without it, `{{moreFrom}}` renders nothing.
+   */
+  moreFrom?: {
+    apps: readonly {
+      name: string;
+      url: string;
+      tagline?: (locale: Locale, language: L) => string;
+    }[];
+    label: (locale: Locale, language: L) => string;
+    builtOn?: { url: string; label: (locale: Locale, language: L) => string };
+  };
+  /**
+   * The stores the app ships in (a listing's URL, or null while there's none) and the platforms' names as the legal
+   * pages write them ("Mac", "Windows"). `laching-landing check` fails when a legal page leaves one out;
+   * `nameAliases` gives a language's other spelling of a name. They change no page.
+   */
+  stores?: LandingStores;
+  platforms?: readonly string[];
+  nameAliases?: Record<string, Record<string, readonly string[]>>;
   /** More problems with a language's files, checked with the locale keys (a missing data file, say). */
   localeProblems?: (language: L) => string | undefined;
   /**
@@ -172,6 +199,19 @@ export function companionLanding<L extends Language>(
         return storeButton(locale, true);
       case "contactEmail":
         return options.contactEmail;
+      case "moreFrom": {
+        const moreFrom = options.moreFrom;
+        if (!moreFrom) return "";
+        const self = withoutTrailingSlashes(siteUrl);
+        const apps = moreFrom.apps
+          .filter(({ url }) => withoutTrailingSlashes(url) !== self)
+          .map(({ name, url, tagline }) => ({ name, url, tagline: tagline?.(locale, language) }));
+        const builtOn = moreFrom.builtOn && {
+          url: moreFrom.builtOn.url,
+          label: moreFrom.builtOn.label(locale, language),
+        };
+        return moreFromList(moreFrom.label(locale, language), apps, builtOn);
+      }
       case "jsonLd":
         return options.jsonLd
           ? `<script type="application/ld+json">${scriptJson(options.jsonLd(language, locale))}</script>`
@@ -206,8 +246,22 @@ export function companionLanding<L extends Language>(
     );
     const templatePath = options.templatePath ?? resolve(root, "index.html");
 
+    const check: LandingCheckOptions = {
+      siteUrl,
+      languages,
+      defaultLanguageCode: options.defaultLanguageCode,
+      legalPages,
+      pages: options.pages,
+      contactEmail: options.contactEmail,
+      stores: options.stores,
+      platforms: options.platforms,
+      nameAliases: options.nameAliases,
+    };
+
     return {
       name: "laching-landing-html",
+      // What `laching-landing check` reads from the landing's Vite config.
+      api: { check },
       transformIndexHtml: {
         order: "pre",
         handler(html, ctx) {
@@ -299,4 +353,11 @@ export function companionLanding<L extends Language>(
   };
 
   return { plugins, build: { rollupOptions: { input } } };
+}
+
+/** `url` without its trailing slashes (a loop: CodeQL flags `/\/+$/` on library input as polynomial). */
+function withoutTrailingSlashes(url: string) {
+  let end = url.length;
+  while (end > 0 && url[end - 1] === "/") end--;
+  return url.slice(0, end);
 }

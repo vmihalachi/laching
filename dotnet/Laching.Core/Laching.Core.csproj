@@ -7,9 +7,6 @@
     <PackageId>Laching.Core</PackageId>
     <Description>Pure building blocks for little desktop apps: an interval scheduler with active hours, quiet hours, idle reset and busy hold; clock, idle and busy provider interfaces; a seeded random source; a purchase store for unlockables and tips over a store backend interface. No OS or UI dependencies.</Description>
   </PropertyGroup>
-  <ItemGroup>
-    <None Include="../../README.md" Pack="true" PackagePath="/" />
-  </ItemGroup>
   <!-- LachingInfo.Version: the packages' $(Version) (LachingVersion), written before each compile so it stays a
        const string (what Native AOT and the apps want) and no release has to edit it. %20 keeps an indent, %3B is ;. -->
   <Target Name="LachingInfo" BeforeTargets="CoreCompile" DependsOnTargets="PrepareForBuild">

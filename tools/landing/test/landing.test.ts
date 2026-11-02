@@ -1,13 +1,17 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vite-plus/test";
+import { build } from "vite-plus";
+import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
+import { landingCheckOptions, main } from "../src/cli.js";
 import {
+  checkLanding,
   companionLanding,
   createRenderer,
   headersFile,
   socialAssets,
   type Language,
+  type LandingCheckOptions,
 } from "../src/index.js";
 
 const root = resolve(import.meta.dirname, "fixture-site");
@@ -72,7 +76,7 @@ describe("companionLanding", () => {
     expect(en).toContain(
       '<link rel="alternate" hreflang="x-default" href="https://fixture.example/" />',
     );
-    expect(it_).toContain('href="/it/privacy/"');
+    expect(it_).toContain('href="/it/privacy/#data"');
     expect(en).toContain('<script type="application/ld+json">{"name":"Fixture","inLanguage":"en"');
     expect(en).toContain("Coming soon");
     expect(en).toContain('aria-current="page"><span>English</span>');
@@ -137,6 +141,38 @@ describe("companionLanding", () => {
   it("switches languages in a row when asked", () => {
     expect(render("/it/", { languageSwitcher: "inline" })).toContain(
       '<nav class="languages" aria-label="Lingua"><a href="/" lang="en" hreflang="en" data-lang="en" title="English">EN</a>',
+    );
+  });
+
+  const moreFrom = {
+    apps: [
+      { name: "Fixture", url: "https://fixture.example/" },
+      {
+        name: "Other <app>",
+        url: 'https://other.example/?a=1&b="2"',
+        tagline: (locale: any) => locale.footer.otherTagline,
+      },
+      { name: "Third", url: "https://third.example" },
+    ],
+    label: (locale: any) => locale.footer.moreFrom,
+    builtOn: { url: "https://kit.example/", label: (locale: any) => locale.footer.builtOn },
+  };
+
+  it("lists the other apps and the kit under More from, in the page's language", () => {
+    expect(render("/it/", { moreFrom })).toContain(
+      '<footer><div class="more-from"><p class="more-from-label">Altro dall\'autore</p><ul class="more-from-apps">' +
+        '<li><a href="https://other.example/?a=1&amp;b=&quot;2&quot;">Other &lt;app&gt;</a> <span class="more-from-tagline">Un\'altra prova</span></li>' +
+        '<li><a href="https://third.example">Third</a></li></ul>' +
+        '<p class="built-on"><a href="https://kit.example/">Fatto con un kit</a></p></div></footer>',
+    );
+  });
+
+  it("renders More from as nothing without the option, or with nothing to list", () => {
+    expect(render("/")).toContain("<footer></footer>");
+    const self = { apps: [moreFrom.apps[0]!], label: moreFrom.label };
+    expect(render("/", { moreFrom: self })).toContain("<footer></footer>");
+    expect(render("/", { moreFrom: { ...self, builtOn: moreFrom.builtOn } })).toContain(
+      '<footer><div class="more-from"><p class="built-on"><a href="https://kit.example/">Built on a kit</a></p></div></footer>',
     );
   });
 
@@ -224,5 +260,147 @@ describe("companionLanding", () => {
     expect(() => renderIcon("<svg".repeat(100_000), 64, { padded: true })).toThrow("no <svg> tag");
     expect(() => renderIcon("<?xml".repeat(100_000), 64, { padded: true })).toThrow("no <svg> tag");
     expect(performance.now() - start).toBeLessThan(1000);
+  });
+});
+
+describe("laching-landing check", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "landing-check-"));
+  const dist = join(scratch, "dist");
+  const options: LandingCheckOptions = {
+    siteUrl: "https://fixture.example",
+    languages,
+    defaultLanguageCode: "en",
+    legalPages: ["privacy"],
+    contactEmail: "hello@fixture.example",
+    stores: { apple: null },
+    platforms: ["Mac"],
+  };
+
+  // The fixture built through its own vite.config.ts, the way a landing builds before the check.
+  beforeAll(async () => {
+    await build({ root, logLevel: "silent", build: { outDir: dist, emptyOutDir: true } });
+  });
+  afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+
+  /** A copy of the built fixture with `change` applied to it, checked. */
+  function checkChanged(
+    change: (copy: string) => void,
+    overrides: Partial<LandingCheckOptions> = {},
+  ) {
+    const copy = mkdtempSync(join(scratch, "copy-"));
+    cpSync(dist, copy, { recursive: true });
+    change(copy);
+    return checkLanding(copy, { ...options, ...overrides });
+  }
+
+  function edit(copy: string, file: string, from: string | RegExp, to: string) {
+    const path = join(copy, file);
+    const html = readFileSync(path, "utf8");
+    const changed = html.replace(from, to);
+    expect(changed).not.toBe(html);
+    writeFileSync(path, changed);
+  }
+
+  it("passes the built fixture, from its Vite config", async () => {
+    const printed: string[] = [];
+    expect(await main(["check", dist], root, (line) => printed.push(line))).toBe(0);
+    expect(printed).toEqual([`${dist} passes`]);
+    expect(checkLanding(dist, options)).toEqual([]);
+  });
+
+  it("carries companionLanding's options for the check", async () => {
+    const plugins = landing({ stores: { apple: null }, platforms: ["Mac"] }).plugins;
+    expect(await landingCheckOptions([[], plugins])).toMatchObject({
+      siteUrl: "https://fixture.example",
+      legalPages: ["privacy"],
+      contactEmail: "hello@fixture.example",
+      stores: { apple: null },
+      platforms: ["Mac"],
+    });
+  });
+
+  it("changes no page with the check's options", () => {
+    const checked = { stores: { apple: null, google: null }, platforms: ["Mac"] };
+    for (const path of ["/", "/it/", "/it/privacy/"])
+      expect(render(path, checked)).toEqual(render(path));
+  });
+
+  it("refuses anything but check, and a missing build", async () => {
+    const printed: string[] = [];
+    expect(await main(["build"], root, (line) => printed.push(line))).toBe(2);
+    expect(await main(["check", join(scratch, "none")], root, (line) => printed.push(line))).toBe(
+      2,
+    );
+    expect(printed).toEqual([
+      "Usage: laching-landing check [dist] [--config vite.config.ts]",
+      `No built site at ${join(scratch, "none")}: build it first.`,
+    ]);
+  });
+
+  it("fails on a dead link and a dead anchor", () => {
+    expect(
+      checkChanged((copy) => {
+        edit(copy, "it/index.html", "<footer>", '<footer><a href="/it/terms/">Termini</a>');
+        edit(copy, "index.html", 'href="/privacy/#data"', 'href="/privacy/#nowhere"');
+        edit(copy, "privacy/index.html", "<body>", '<body><img src="../missing.png" />');
+      }),
+    ).toEqual([
+      '/: dead anchor /privacy/#nowhere (no id "nowhere" on /privacy/)',
+      "/it/: dead link /it/terms/",
+      "/privacy/: dead link ../missing.png",
+    ]);
+  });
+
+  it("fails on a one-way hreflang and a canonical that isn't the page", () => {
+    expect(
+      checkChanged((copy) => {
+        edit(copy, "privacy/index.html", /<link rel="alternate" hreflang="it"[^>]*>/, "");
+        edit(
+          copy,
+          "it/index.html",
+          'rel="canonical" href="https://fixture.example/it/"',
+          'rel="canonical" href="https://fixture.example/"',
+        );
+      }),
+    ).toEqual([
+      "/it/: canonical https://fixture.example/ isn't the page itself",
+      "/it/privacy/: one-way hreflang en (/privacy/ doesn't link back)",
+    ]);
+  });
+
+  it("fails on a legal page missing in one language", () => {
+    const problems = checkChanged((copy) => rmSync(join(copy, "it/privacy"), { recursive: true }));
+    expect(problems).toContain("it: no privacy page at /it/privacy/");
+    expect(problems).toContain("/it/: dead link /it/privacy/#data");
+  });
+
+  it("fails on a home page with no way to reach support", () => {
+    expect(
+      checkChanged((copy) =>
+        edit(copy, "it/index.html", "mailto:hello@fixture.example", "mailto:other@fixture.example"),
+      ),
+    ).toEqual(["/it/: no contact link to hello@fixture.example and no support page"]);
+    expect(checkChanged(() => {}, { legalPages: ["privacy", "support"] })).toEqual([
+      "en: no support page at /support/",
+      "it: no support page at /it/support/",
+    ]);
+  });
+
+  it("fails on a legal page that doesn't name a configured store or platform, unless an alias does", () => {
+    expect(
+      checkChanged(() => {}, {
+        stores: { apple: null, microsoft: null },
+        platforms: ["Mac", "Windows"],
+      }),
+    ).toEqual([
+      "/privacy/: never names Microsoft Store, Windows",
+      "/it/privacy/: never names Microsoft Store, Windows",
+    ]);
+    expect(
+      checkChanged(() => {}, {
+        platforms: ["macOS"],
+        nameAliases: { en: { macOS: ["Mac"] }, it: { macOS: ["Mac"] } },
+      }),
+    ).toEqual([]);
   });
 });

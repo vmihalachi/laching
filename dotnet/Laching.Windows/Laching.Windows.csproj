@@ -13,7 +13,6 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
-    <None Include="../../README.md" Pack="true" PackagePath="/" />
     <ProjectReference Include="../Laching.Core/Laching.Core.csproj" />
     <InternalsVisibleTo Include="Laching.Windows.Tests" />
     <!-- The Win32 declarations both packages need (NativeMethods' POINT, RECT, cursor and foreground window), declared once. -->

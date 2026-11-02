@@ -12,7 +12,4 @@
     <ProjectReference Include="..\Laching.Companion\Laching.Companion.csproj" />
     <InternalsVisibleTo Include="Laching.Companion.Shell.Tests" />
   </ItemGroup>
-  <ItemGroup>
-    <None Include="../../README.md" Pack="true" PackagePath="/" />
-  </ItemGroup>
 </Project>

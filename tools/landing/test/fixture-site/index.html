@@ -2,12 +2,15 @@
 <html lang="en">
   <head>
     <title>{{meta.title}}</title>
+    <link rel="canonical" href="{{meta.url}}" />
     <meta property="og:locale" content="{{ogLocale}}" />
     {{ogLocaleAlternates}} {{hreflangLinks}} {{langRedirectScript}} {{jsonLd}}
   </head>
   <body>
     {{languageSwitcher}}
     <p>{{hero.title}} {{own}}</p>
-    {{storeButton}} <a href="{{legalPrivacyUrl}}">{{nav.privacy}}</a> {{contactEmail}}
+    {{storeButton}} <a href="{{legalPrivacyUrl}}#data">{{nav.privacy}}</a>
+    <a href="mailto:{{contactEmail}}">{{contactEmail}}</a>
+    <footer>{{moreFrom}}</footer>
   </body>
 </html>

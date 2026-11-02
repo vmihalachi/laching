@@ -1,8 +1,17 @@
 {
-  "meta": { "title": "Prova", "description": "Una pagina di prova" },
+  "meta": {
+    "title": "Prova",
+    "url": "https://fixture.example/it/",
+    "description": "Una pagina di prova"
+  },
   "hero": { "title": "Ciao" },
   "nav": { "privacy": "Privacy", "languageLabel": "Lingua" },
   "store": { "soon": "In arrivo", "mac": "Scaricalo" },
   "notFound": { "title": "Non trovato" },
+  "footer": {
+    "moreFrom": "Altro dall'autore",
+    "otherTagline": "Un'altra prova",
+    "builtOn": "Fatto con un kit"
+  },
   "og": { "title": "Scheda di prova" }
 }

@@ -106,7 +106,7 @@ What each tool does: [`tools/README.md`](../tools/README.md).
 5. **Skills.** Symlink the generic ones next to the app's own:
 
    ```sh
-   for s in localization add-phrase add-setting conformance voice windows-port release-mac release-ios release-windows review-invariants; do
+   for s in localization add-phrase add-setting conformance voice windows-port release-mac release-ios release-windows review-invariants landing-copy; do
      ln -s "../../laching/tools/skills/$s" ".agents/skills/$s"
    done
    ```

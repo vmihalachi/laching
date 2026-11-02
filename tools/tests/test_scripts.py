@@ -1528,8 +1528,9 @@ class SharedFilesTests(unittest.TestCase):
 
     def test_every_skill_has_frontmatter(self):
         skills = sorted(p.parent.name for p in (TOOLS / "skills").glob("*/SKILL.md"))
-        self.assertEqual(skills, ["add-phrase", "add-setting", "conformance", "localization", "release-ios",
-                                  "release-mac", "release-windows", "review-invariants", "voice", "windows-port"])
+        self.assertEqual(skills, ["add-phrase", "add-setting", "conformance", "landing-copy", "localization",
+                                  "release-ios", "release-mac", "release-windows", "review-invariants", "voice",
+                                  "windows-port"])
         for name in skills:
             text = (TOOLS / "skills" / name / "SKILL.md").read_text("utf8")
             header = text.split("---", 2)[1]
