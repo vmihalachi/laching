@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Plugin } from "vite-plus";
+import type { LandingCheckOptions, LandingStores } from "./check.js";
 import { hostingConfigPlugin } from "./hosting.js";
 import {
   inlineLanguageSwitcher,
@@ -47,6 +48,7 @@ export {
   type PageLanguages,
 } from "./legal.js";
 export { renderSitemap } from "./sitemap.js";
+export { checkLanding, type LandingCheckOptions, type LandingStores } from "./check.js";
 export { headersFile, hostingConfigPlugin, inlineScriptHashes } from "./hosting.js";
 export {
   createRenderer,
@@ -103,6 +105,14 @@ export interface CompanionLandingOptions<L extends Language = Language> {
     label: (locale: Locale, language: L) => string;
     builtOn?: { url: string; label: (locale: Locale, language: L) => string };
   };
+  /**
+   * The stores the app ships in (a listing's URL, or null while there's none) and the platforms' names as the legal
+   * pages write them ("Mac", "Windows"). `laching-landing check` fails when a legal page leaves one out;
+   * `nameAliases` gives a language's other spelling of a name. They change no page.
+   */
+  stores?: LandingStores;
+  platforms?: readonly string[];
+  nameAliases?: Record<string, Record<string, readonly string[]>>;
   /** More problems with a language's files, checked with the locale keys (a missing data file, say). */
   localeProblems?: (language: L) => string | undefined;
   /**
@@ -236,8 +246,22 @@ export function companionLanding<L extends Language>(
     );
     const templatePath = options.templatePath ?? resolve(root, "index.html");
 
+    const check: LandingCheckOptions = {
+      siteUrl,
+      languages,
+      defaultLanguageCode: options.defaultLanguageCode,
+      legalPages,
+      pages: options.pages,
+      contactEmail: options.contactEmail,
+      stores: options.stores,
+      platforms: options.platforms,
+      nameAliases: options.nameAliases,
+    };
+
     return {
       name: "laching-landing-html",
+      // What `laching-landing check` reads from the landing's Vite config.
+      api: { check },
       transformIndexHtml: {
         order: "pre",
         handler(html, ctx) {

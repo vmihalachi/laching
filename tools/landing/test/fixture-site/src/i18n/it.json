@@ -1,5 +1,9 @@
 {
-  "meta": { "title": "Prova", "description": "Una pagina di prova" },
+  "meta": {
+    "title": "Prova",
+    "url": "https://fixture.example/it/",
+    "description": "Una pagina di prova"
+  },
   "hero": { "title": "Ciao" },
   "nav": { "privacy": "Privacy", "languageLabel": "Lingua" },
   "store": { "soon": "In arrivo", "mac": "Scaricalo" },
