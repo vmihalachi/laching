@@ -509,7 +509,8 @@ while not (state / "killed").exists():
         # $PATH without the folders that hold a real ktlint (Homebrew's, on the maintainer's Mac).
         without = [f for f in os.environ["PATH"].split(os.pathsep) if not (Path(f) / "ktlint").exists()]
         path = os.pathsep.join([str(self.bin), str(Path(sys.executable).parent), *without])
-        done = self.run_script("setup-linux.sh", env={"HOME": str(home), "PATH": path,
+        # A GitHub runner's own JDK 17 would answer instead of the fake java (test_setup_linux_hands_on_a_github_runners_jdk_17).
+        done = self.run_script("setup-linux.sh", env={"HOME": str(home), "PATH": path, "JAVA_HOME_17_X64": "",
                                                       **{name: str(file) for name, file in files.items()}})
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn("Installing", done.stdout)
@@ -521,6 +522,30 @@ while not (state / "killed").exists():
         self.assertEqual(files["GITHUB_ENV"].read_text("utf8"),
                          f"DOTNET_ROOT={home}/.dotnet\nDOTNET_CLI_TELEMETRY_OPTOUT=1\n")
         self.assertEqual(files["GITHUB_PATH"].read_text("utf8"), f"{home}/.dotnet\n{home}/.local/bin\n")
+
+    @unittest.skipIf(WINDOWS, "the fakes are sh scripts")
+    def test_setup_linux_hands_on_a_github_runners_jdk_17(self):
+        self.android_config(extra_shot=False)
+        git(self.root, "init", "-q")
+        # The runner's default java is newer; its JDK 17 sits at $JAVA_HOME_17_X64.
+        self.fake("java", 'echo \'openjdk version "25.0.1"\' >&2\n')
+        self.fake("apt-get", f'echo "apt-get $*" >> "{self.log}"\n')
+        self.fake("ktlint", "exit 0\n")
+        jdk = self.root / "jdk17"
+        (jdk / "bin").mkdir(parents=True)
+        (jdk / "bin" / "java").write_text("#!/bin/sh\necho 'openjdk version \"17.0.9\"' >&2\n", "utf8")
+        (jdk / "bin" / "java").chmod(0o755)
+        files = {name: self.root / name.lower() for name in ("GITHUB_ENV", "GITHUB_PATH")}
+        path = os.pathsep.join([str(self.bin), str(Path(sys.executable).parent), *os.environ["PATH"].split(os.pathsep)])
+        done = self.run_script("setup-linux.sh", env={"HOME": str(self.root / "home"), "PATH": path,
+                                                      "JAVA_HOME_17_X64": str(jdk),
+                                                      **{name: str(file) for name, file in files.items()}})
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("Installing OpenJDK", done.stdout)
+        self.assertFalse(self.log.exists() and "apt-get" in self.log.read_text(), "no apt-get")
+        self.assertIn(f"JAVA_HOME={jdk}\n", files["GITHUB_ENV"].read_text("utf8"))
+        self.assertIn(f"{jdk}/bin\n", files["GITHUB_PATH"].read_text("utf8"))
+        self.assertIn("java 17.0.9", done.stdout)
 
     def test_verify_runs_what_the_paths_need(self):
         result = self.run_script("verify.sh", "--fast", "--", "conformance/phrases.json")

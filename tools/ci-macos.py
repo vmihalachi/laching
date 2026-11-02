@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The reusable macos-app.yml's checks (and core-linux.yml's `content` and `core`), using the checked-out app's pinned tools and companion.json.
+"""The reusable macos-app.yml's checks (and core-linux.yml's `content` and `core`), using the checked-out app's pinned
+tools and companion.json.
 
 Runs one named stage at a time. Every command is an argument list, never shell code interpolated from workflow
 inputs or app names. Output is streamed to the job and saved under mac.dir/build/ci-<stage>.log for failure artifacts.

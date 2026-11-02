@@ -115,9 +115,9 @@ What each tool does: [`tools/README.md`](../tools/README.md).
      ln -s "../../laching/tools/skills/$s" ".agents/skills/$s"
    done
    mkdir -p .claude/skills .github .junie
-   for s in .agents/skills/*; do ln -s "../../$s" ".claude/skills/${s##*/}"; done   # again for each new skill
-   ln -s ../.agents/skills .github/skills
-   ln -s ../.agents/skills .junie/skills
+   for s in .agents/skills/*; do ln -sfn "../../$s" ".claude/skills/${s##*/}"; done   # again for each new skill
+   ln -sfn ../.agents/skills .github/skills
+   ln -sfn ../.agents/skills .junie/skills
    ```
 
    What they read from the app: [`tools/README.md`, *`skills/`*](../tools/README.md#skills). A skill of Laching's is

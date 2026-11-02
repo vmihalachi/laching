@@ -44,8 +44,12 @@ jobs:
       - name: Install Python when the image has none
         run: command -v python3 >/dev/null || { apt-get update -qq && apt-get install -y -qq python3 >/dev/null; }
 
+      # bash runs with pipefail, so tee keeps the script's status; the log is uploaded on failure.
       - name: Regenerate the vectors
-        run: sh "./$LACHING_PATH/tools/conformance.sh"
+        shell: bash
+        run: |
+          mkdir -p build
+          sh "./$LACHING_PATH/tools/conformance.sh" 2>&1 | tee build/ci-vectors.log
 
       - name: Commit and push if anything changed
         run: |
@@ -59,3 +63,11 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "Regenerate conformance vectors" -m "From the Swift core with $(swift --version 2>&1 | head -1)."
           git push
+
+      - name: Upload the log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: vectors-linux-logs
+          path: build/ci-vectors.log
+          if-no-files-found: ignore
