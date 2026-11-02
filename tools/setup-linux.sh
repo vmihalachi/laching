@@ -21,7 +21,7 @@ hand_on() {
   return 0
 }
 add_path() {
-  export PATH="$1:$PATH"
+  case ":$PATH:" in *":$1:"*) ;; *) export PATH="$1:$PATH" ;; esac
   [ -n "${CLAUDE_ENV_FILE:-}" ] && echo "export PATH=\"$1:\$PATH\"" >>"$CLAUDE_ENV_FILE"
   [ -n "${GITHUB_PATH:-}" ] && echo "$1" >>"$GITHUB_PATH"
   return 0
