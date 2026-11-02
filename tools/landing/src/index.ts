@@ -7,6 +7,7 @@ import {
   langRedirectScript,
   macStoreButton,
   menuLanguageSwitcher,
+  moreFromList,
   renderTemplate,
   scriptJson,
 } from "./html.js";
@@ -32,8 +33,10 @@ export {
   langRedirectScript,
   macStoreButton,
   menuLanguageSwitcher,
+  moreFromList,
   renderTemplate,
   scriptJson,
+  type MoreFromApp,
 } from "./html.js";
 export {
   alternates,
@@ -86,6 +89,20 @@ export interface CompanionLandingOptions<L extends Language = Language> {
   languageSwitcherLabel?: (locale: Locale) => string;
   /** `{{storeButton}}` and `{{storeButtonBig}}`; `macStoreButton` by default. */
   storeButton?: (locale: Locale, big: boolean) => string;
+  /**
+   * `{{moreFrom}}`: the sibling apps, each linked by name with an optional tagline, under `label`, then an optional
+   * "Built on" link. Every name, tagline and label is the app's; an app whose `url` is `siteUrl` is left out, so the
+   * landings can share one list. Without it, `{{moreFrom}}` renders nothing.
+   */
+  moreFrom?: {
+    apps: readonly {
+      name: string;
+      url: string;
+      tagline?: (locale: Locale, language: L) => string;
+    }[];
+    label: (locale: Locale, language: L) => string;
+    builtOn?: { url: string; label: (locale: Locale, language: L) => string };
+  };
   /** More problems with a language's files, checked with the locale keys (a missing data file, say). */
   localeProblems?: (language: L) => string | undefined;
   /**
@@ -172,6 +189,19 @@ export function companionLanding<L extends Language>(
         return storeButton(locale, true);
       case "contactEmail":
         return options.contactEmail;
+      case "moreFrom": {
+        const moreFrom = options.moreFrom;
+        if (!moreFrom) return "";
+        const self = siteUrl.replace(/\/+$/, "");
+        const apps = moreFrom.apps
+          .filter(({ url }) => url.replace(/\/+$/, "") !== self)
+          .map(({ name, url, tagline }) => ({ name, url, tagline: tagline?.(locale, language) }));
+        const builtOn = moreFrom.builtOn && {
+          url: moreFrom.builtOn.url,
+          label: moreFrom.builtOn.label(locale, language),
+        };
+        return moreFromList(moreFrom.label(locale, language), apps, builtOn);
+      }
       case "jsonLd":
         return options.jsonLd
           ? `<script type="application/ld+json">${scriptJson(options.jsonLd(language, locale))}</script>`
