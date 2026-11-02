@@ -700,9 +700,10 @@ checks them.
 
 Whether a GitHub-hosted runner image's .NET SDK will do: it does when it is in the newest .NET 10 feature band and
 meets the current folder's `global.json`, if any, so the job skips `setup-dotnet`'s 300 MB download. It writes
-`use=true|false` to `$GITHUB_OUTPUT` and always exits 0. Laching's own workflows and the reusable `windows-app.yml` and
-`windows-release.yml` run it (from the app's submodule) before their `setup-dotnet`, which is gated on
-`steps.sdk.outputs.use != 'true'`.
+`use=true|false` to `$GITHUB_OUTPUT` and always exits 0. Laching's own workflows and the reusable `windows-app.yml`
+(from the app's submodule, when it has the script) run it before their `setup-dotnet`, which is gated on
+`steps.sdk.outputs.use != 'true'`. `windows-release.yml` never does: the app publishes Native AOT, so the runtime it
+ships is the SDK's, and an image a patch behind would ship last month's.
 
 ### `windows/vm.sh`
 

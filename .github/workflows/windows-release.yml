@@ -102,16 +102,11 @@ jobs:
       - name: Check out ${{ inputs.laching-path }}/
         run: git submodule update --init "${{ inputs.laching-path }}"
 
-      # setup-dotnet downloads the newest .NET 10 SDK whenever the image is a patch behind; the image's own does when it
-      # is in the newest feature band and meets the app's global.json, if any (tools/windows/dotnet-sdk.ps1).
-      - name: The image's .NET SDK
-        id: sdk
-        if: inputs.hosted
-        run: pwsh "${{ inputs.laching-path }}/tools/windows/dotnet-sdk.ps1"
-
-      # The self-hosted runner keeps its own .NET 10 SDK.
+      # Always the newest .NET 10 SDK, never the image's a patch behind (tools/windows/dotnet-sdk.ps1's latitude): the
+      # app publishes Native AOT, so the runtime it ships is the SDK's. When the image's is the newest, nothing
+      # downloads. The self-hosted runner keeps its own .NET 10 SDK.
       - uses: actions/setup-dotnet@v6
-        if: inputs.hosted && steps.sdk.outputs.use != 'true'
+        if: inputs.hosted
         with:
           dotnet-version: "10.0.x"
 

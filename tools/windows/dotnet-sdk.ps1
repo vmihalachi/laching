@@ -6,9 +6,9 @@ current folder, so a global.json there must accept the image's SDK too. Writes u
 and always exits 0: with no dotnet, or no answer from builds.dotnet.microsoft.com, it says false and setup-dotnet runs.
 
 Usage: a step with id sdk, then setup-dotnet with if: steps.sdk.outputs.use != 'true'
-  pwsh tools/windows/dotnet-sdk.ps1                                (Laching's own workflows)
-  pwsh "${{ inputs.laching-path }}/tools/windows/dotnet-sdk.ps1"   (the reusable ones, from the app's submodule)
+  pwsh tools/windows/dotnet-sdk.ps1      (Laching's own workflows; windows-app.yml, from the app's submodule if it has it)
   -Newest 10.0.1xx stands in for the download (the tests).
+Never for a build that ships: a Native AOT app ships the SDK's runtime, so windows-release.yml always runs setup-dotnet.
 #>
 param([string] $Newest = "")
 $band = { param($v) if ($v -match '^10\.0\.(\d)\d\d$') { $Matches[1] } }

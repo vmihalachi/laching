@@ -603,7 +603,7 @@ def rounded(image, radius):
 def play_problem(image):
     """What Google Play would refuse about an image's size, or None."""
     short, long = sorted(image.size)
-    if not PLAY_SIDE[0] <= short and long <= PLAY_SIDE[1]:
+    if not (PLAY_SIDE[0] <= short and long <= PLAY_SIDE[1]):
         return f"{image.width}×{image.height}: Google Play takes each side between {PLAY_SIDE[0]} and {PLAY_SIDE[1]} px"
     if long > short * PLAY_RATIO:
         return f"{image.width}×{image.height}: Google Play takes no side more than {PLAY_RATIO}× the other"
