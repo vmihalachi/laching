@@ -453,7 +453,7 @@ _PACKAGE_EXACT = r'exact:\s*"([^"]+)"'
 _SPEC_EXACT = r"(?:exactVersion|exact):\s*\"?([0-9][^\s\"]*)"
 _NUGET = re.compile(r'Include="(Laching\.[A-Za-z.]+)"\s+Version="([^"]+)"')
 _COMPANION_TAG = re.compile(r'"laching"\s*:\s*\{[^{}]*?"tag"\s*:\s*"([^"]*)"')
-_WORKFLOW_REF = re.compile(r"[\w.-]+/laching/\.github/workflows/([\w.-]+\.ya?ml)@([\w.-]+)")
+_WORKFLOW_REF = re.compile(r"[\w.-]+/laching/\.github/workflows/([\w.-]+\.ya?ml)@([\w./-]+)")
 _LANDING_PACKAGE = "@laching/landing"
 _LANDING_DEPENDENCY = re.compile(r'"@laching/landing"\s*:\s*"[~^]?(\d+\.\d+\.\d+)"')
 _LOCKFILES = ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock")
@@ -804,7 +804,8 @@ def _bump_pins(config: Config, version: str) -> list[Path]:
             continue
         if pin.span is None:
             raise PinError(f"{pin.label} names no version to move ({pin.version or 'empty'})")
-        new = ("v" if pin.version.startswith("v") else "") + version
+        # A workflow ref names the release's tag, whatever it named before (a branch until the release, say).
+        new = ("v" if pin.version.startswith("v") or pin.label.endswith("@") else "") + version
         new = _released_package_version(config, pin, version) or new
         if pin.version != new:
             edits.setdefault(pin.file, []).append((pin.span, new))

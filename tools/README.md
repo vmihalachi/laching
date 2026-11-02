@@ -175,14 +175,16 @@ fail when the app drifts from the tools (each rule: `conform.py`'s docstring):
   ```
 
   ```powershell
+  $previous = $env:COMPANION_ROOT
   $env:COMPANION_ROOT = (Resolve-Path "$PSScriptRoot/..").Path
-  try { & "$PSScriptRoot/../laching/tools/windows/screenshots.ps1" @args } finally { $env:COMPANION_ROOT = $null }
+  try { & "$PSScriptRoot/../laching/tools/windows/screenshots.ps1" @args } finally { $env:COMPANION_ROOT = $previous }
   exit $LASTEXITCODE
   ```
 
   (`os.execv` and `runpy.run_path(..., run_name="__main__")` also pass for Python, but on Windows `os.execv` returns
-  before the tool ends and loses its status; the PowerShell `finally` keeps the variable out of the rest of an
-  interactive session.) `scripts/setup-linux.sh` runs first in a fresh clone, often one made without its submodules, so
+  before the tool ends and loses its status; the PowerShell `finally` puts back what the session had before,
+  so the variable doesn't outlive the call and a value the caller set (`vm.py` runs the wrapper in its own session)
+  survives it.) `scripts/setup-linux.sh` runs first in a fresh clone, often one made without its submodules, so
   it checks Laching out before calling it:
 
   ```sh
@@ -509,10 +511,12 @@ without macOS minutes; `macos-app.yml` stays the reference.
 
 - `core-linux.yml`: `ci-macos.py content` (strings, the phrase bank, sounds, characters and voices, as `companion.json`
   enables them) and `ci-macos.py core` (the core package's tests). `submodules` (default `"true"`, which also checks out
-  the recorded voices) and `laching-path` are its only inputs; the logs are uploaded on failure.
+  the recorded voices) and `laching-path` are its only inputs; the logs are uploaded on failure. `submodules` is a
+  string input, so a caller quotes it: `submodules: "false"`, not `false`.
 - `vectors-linux.yml`: `conformance.sh`, then commits the vectors to the branch it runs on when they changed, for a
   session with no Swift toolchain. It refuses the default branch (vectors reach it through a pull request), and its
-  push, made with the workflow token, starts no other workflow: dispatch the checks afterwards.
+  push, made with the workflow token, starts no other workflow: dispatch the checks afterwards. Its log is uploaded on
+  failure too.
 
 The app's callers keep their dispatch, permissions and concurrency:
 
@@ -613,8 +617,9 @@ app builds, packages and checks the same way. Its `.csproj` sets its own propert
   `windows/scripts/screenshots.ps1` and `smoke-package.ps1`, e.g.
 
   ```powershell
+  $previous = $env:COMPANION_ROOT
   $env:COMPANION_ROOT = (Resolve-Path "$PSScriptRoot/../..").Path
-  try { & "$PSScriptRoot/../../laching/tools/windows/screenshots.ps1" @args } finally { $env:COMPANION_ROOT = $null }
+  try { & "$PSScriptRoot/../../laching/tools/windows/screenshots.ps1" @args } finally { $env:COMPANION_ROOT = $previous }
   exit $LASTEXITCODE
   ```
 

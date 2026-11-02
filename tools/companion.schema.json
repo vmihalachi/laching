@@ -468,7 +468,7 @@
       "properties": {
         "allow": {
           "type": "array",
-          "description": "Files named like a Laching tool that are the app's own, not a copy of the tool (its own conformance.sh, say).",
+          "description": "What conform leaves alone because it is the app's own on purpose: a file named like a Laching tool that isn't a copy of it (its own conformance.sh, say), a skill-link path (.claude/skills/<name>, .github/skills, .junie/skills) or a workflow.",
           "items": {
             "type": "object",
             "required": ["path", "why"],

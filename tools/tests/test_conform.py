@@ -18,10 +18,12 @@ import companion  # noqa: E402
 import conform  # noqa: E402
 
 WRAPPER = """# The app's smoke-package.ps1: Laching's, which says how.
+$previous = $env:COMPANION_ROOT
 $env:COMPANION_ROOT = (Resolve-Path "$PSScriptRoot/../..").Path
-try { & "$PSScriptRoot/../../laching/tools/windows/smoke-package.ps1" @args } finally { $env:COMPANION_ROOT = $null }
+try { & "$PSScriptRoot/../../laching/tools/windows/smoke-package.ps1" @args } finally { $env:COMPANION_ROOT = $previous }
 exit $LASTEXITCODE
 """
+TEMPLATES = "see the templates in laching/tools/README.md, *Staying on Laching's tools*"
 
 
 class ConformTests(FixtureAppTestCase):
@@ -100,8 +102,8 @@ class ConformTests(FixtureAppTestCase):
         self.write("windows/scripts/smoke-package.ps1", WRAPPER)
         self.assertEqual(self.problems(), [
             "macos/scripts/conformance.py: a wrapper of laching/tools/conformance.sh that doesn't forward its arguments "
-            "(sys.argv[1:]) or keep the exit status (os.execv, sys.exit(subprocess.call(...)) or runpy.run_path): see "
-            "the templates in laching/tools/README.md, *Staying on Laching's tools*"])
+            "(sys.argv[1:], or runpy.run_path(..., run_name=\"__main__\")) or keep the exit status (os.execv, "
+            "sys.exit(subprocess.call(...)) or runpy.run_path(..., run_name=\"__main__\")): " + TEMPLATES])
         (self.root / "macos/scripts/conformance.py").unlink()
 
         self.write("macos/scripts/install-dev.sh", "#!/bin/sh\nexec \"$(dirname \"$0\")/../../laching/tools/install-dev.sh\" \"$@\"\n")
@@ -117,10 +119,10 @@ class ConformTests(FixtureAppTestCase):
                    "os.path.join(root, 'laching', 'tools', 'l10n.py'), *sys.argv[1:]])\n")
         found = self.problems()
         self.assertEqual(found, [
-            "macos/scripts/install-dev.sh: a wrapper of laching/tools/install-dev.sh that doesn't set COMPANION_ROOT: see "
-            "the templates in laching/tools/README.md, *Staying on Laching's tools*",
-            "macos/scripts/l10n.py: a wrapper of laching/tools/l10n.py that doesn't set COMPANION_ROOT: see the "
-            "templates in laching/tools/README.md, *Staying on Laching's tools*",
+            "macos/scripts/install-dev.sh: a wrapper of laching/tools/install-dev.sh that doesn't export COMPANION_ROOT: "
+            + TEMPLATES,
+            "macos/scripts/l10n.py: a wrapper of laching/tools/l10n.py that doesn't set os.environ[\"COMPANION_ROOT\"]: "
+            + TEMPLATES,
             "macos/scripts/phrases.py: a wrapper of laching/tools/phrases.py that doesn't call laching/tools/phrases.py: "
             "see the templates in laching/tools/README.md, *Staying on Laching's tools*",
             "scripts/verify.sh: a wrapper of laching/tools/verify.sh that doesn't keep the exit status (exec): see the "
@@ -131,6 +133,37 @@ class ConformTests(FixtureAppTestCase):
 
         self.edit_config(lambda data: data.update(conform={"allow": [{"path": "scripts/verify.sh", "why": "ours"}]}))
         self.assertEqual(len(self.problems()), 4)
+
+    def test_a_wrapper_hands_the_root_to_the_tool_and_runs_it(self):
+        # An unexported variable, or one set before a separate exec, never reaches the tool.
+        self.write("macos/scripts/install-dev.sh", "#!/bin/sh\nCOMPANION_ROOT=\"$(cd \"$(dirname \"$0\")/../..\" && pwd)\"\n"
+                   "exec \"$COMPANION_ROOT/laching/tools/install-dev.sh\" \"$@\"\n")
+        self.write("macos/scripts/check-layout.sh", "#!/bin/sh\nCOMPANION_ROOT=.. ; exec \"$(dirname \"$0\")/../../laching/"
+                   "tools/check-layout.sh\" \"$@\"\n")
+        # Reading the variable isn't setting it; without run_name the tool's __main__ block never runs.
+        self.write("macos/scripts/l10n.py", "import os, pathlib, runpy\nprint(os.environ.get('COMPANION_ROOT'))\n"
+                   "runpy.run_path(str(pathlib.Path(__file__).resolve().parents[2] / 'laching/tools/l10n.py'), "
+                   "run_name='__main__')\n")
+        self.write("macos/scripts/voice.py", "import os, pathlib, runpy\nroot = pathlib.Path(__file__).resolve().parents[2]\n"
+                   "os.environ['COMPANION_ROOT'] = str(root)\nrunpy.run_path(str(root / 'laching/tools/voice.py'))\n")
+        # PowerShell's names in any case.
+        self.write("windows/scripts/smoke-package.ps1", "$Env:Companion_Root = (Resolve-Path \"$PSScriptRoot/../..\").Path\n"
+                   "& \"$PSScriptRoot/../../laching/tools/windows/smoke-package.ps1\" @Args\nEXIT $LastExitCode\n")
+        # The same stem, the wrong tool: screenshots.ps1 wraps windows/screenshots.ps1, not screenshots.sh.
+        self.write("windows/scripts/screenshots.ps1", "$env:COMPANION_ROOT = (Resolve-Path \"$PSScriptRoot/../..\").Path\n"
+                   "& \"$PSScriptRoot/../../laching/tools/screenshots.sh\" @args\nexit $LASTEXITCODE\n")
+        self.assertEqual(self.problems(), [
+            "macos/scripts/check-layout.sh: a wrapper of laching/tools/check-layout.sh that doesn't export COMPANION_ROOT: "
+            + TEMPLATES,
+            "macos/scripts/install-dev.sh: a wrapper of laching/tools/install-dev.sh that doesn't export COMPANION_ROOT: "
+            + TEMPLATES,
+            "macos/scripts/l10n.py: a wrapper of laching/tools/l10n.py that doesn't set os.environ[\"COMPANION_ROOT\"]: "
+            + TEMPLATES,
+            "macos/scripts/voice.py: a wrapper of laching/tools/voice.py that doesn't forward its arguments (sys.argv[1:], "
+            "or runpy.run_path(..., run_name=\"__main__\")) or keep the exit status (os.execv, sys.exit(subprocess.call("
+            "...)) or runpy.run_path(..., run_name=\"__main__\")): " + TEMPLATES,
+            "windows/scripts/screenshots.ps1: a wrapper of laching/tools/windows/screenshots.ps1 that doesn't call "
+            "laching/tools/windows/screenshots.ps1: " + TEMPLATES])
 
     def test_setup_linux_checks_out_the_submodule_before_running_lachings(self):
         head = "#!/bin/sh\nexport COMPANION_ROOT=\"$(cd \"$(dirname \"$0\")/..\" && pwd)\"\n"
@@ -178,6 +211,11 @@ class ConformTests(FixtureAppTestCase):
                    "    uses: vmihalachi/laching/.github/workflows/macos-app.yml@v0.4.0\n")
         self.assertIn(".github/workflows/macos.yml: calls macos-app.yml@v0.4.0, but the app pins Laching v0.5.0: "
                       "call it @v0.5.0", self.problems())
+        # A branch ref, read whole.
+        self.write(".github/workflows/macos.yml", "jobs:\n  test:\n"
+                   "    uses: vmihalachi/laching/.github/workflows/macos-app.yml@users/vlad/macos-ci\n")
+        self.assertIn(".github/workflows/macos.yml: calls macos-app.yml@users/vlad/macos-ci, but the app pins Laching "
+                      "v0.5.0: call it @v0.5.0", self.problems())
         self.write(".github/workflows/macos.yml", "jobs:\n  test:\n"
                    "    uses: vmihalachi/laching/.github/workflows/macos-app.yml@v0.5.0\n")
         self.assertEqual(self.problems(), [])
@@ -214,6 +252,16 @@ class ConformTests(FixtureAppTestCase):
         self.write(".github/workflows/copilot-setup-steps.yml", "jobs:\n  copilot-setup-steps:\n    steps:\n"
                    "      - uses: actions/checkout@v7\n      - run: scripts/setup-linux.sh\n")
         self.assertEqual(self.problems(), [])
+        self.write(".github/workflows/copilot-setup-steps.yml", "jobs:\n  copilot-setup-steps:\n    steps:\n"
+                   "      - name: Set up\n        run: |\n          git submodule update --init laching\n"
+                   "          bash scripts/setup-linux.sh\n")
+        self.assertEqual(self.problems(), [])
+        # Named after it, or in a comment, isn't running it.
+        self.write(".github/workflows/copilot-setup-steps.yml", "jobs:\n  copilot-setup-steps:\n    steps:\n"
+                   "      - name: Run scripts/setup-linux.sh\n        run: ./install.sh  # not scripts/setup-linux.sh\n")
+        self.assertEqual(len(self.problems()), 1)
+        self.write(".github/workflows/copilot-setup-steps.yml", "jobs:\n  copilot-setup-steps:\n    steps:\n"
+                   "      - uses: actions/checkout@v7\n      - run: scripts/setup-linux.sh\n")
 
         # Kept on purpose, with why; and other names are the app's own.
         self.write(".github/workflows/core.yml", "jobs: {}\n")
@@ -255,6 +303,8 @@ class ConformTests(FixtureAppTestCase):
         self.link(".claude/skills/add-exercise", "../../.agents/skills/add-exercise")
         self.link(".claude/skills/localization", "../../.agents/skills/localization")
         self.write(".claude/skills/claude-only/SKILL.md", "# Claude Code's alone\n")
+        # In a checkout git records every link, so an untracked small file is a file, not a link to want.
+        self.write(".agents/skills/README.md", "The app's skills.\n")
         self.assertEqual(self.problems(), [])
 
         self.link(".github/skills", "../skills")

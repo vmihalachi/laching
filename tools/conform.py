@@ -40,25 +40,33 @@ SCRIPT_SUFFIXES = {".py", ".sh", ".ps1"}
 RETIRED = {"store-packages": "windows/store-release.ps1"}
 # Where an app's workflow builds its own Store packages.
 FORKED_BUILD = re.compile(r"GenerateAppxPackageOnBuild|makeappx|smoke-package")
-REUSABLE = re.compile(r"uses:\s*['\"]?[\w.-]+/laching/\.github/workflows/([\w.-]+)\.ya?ml@([\w.-]+)")
+REUSABLE = re.compile(r"uses:\s*['\"]?[\w.-]+/laching/\.github/workflows/([\w.-]+)\.ya?ml@([\w./-]+)")
 SKIPPED_DIRS = {"node_modules", "build", ".git"}
 # An app's workflows named like the ones Laching ships (by name without the extension) → the reusable workflow it calls.
 CALLERS = {"core": "core-linux", "regenerate-vectors": "vectors-linux"}
 # Copilot's setup job can't call a reusable workflow, so it runs the setup Claude Code's cloud sessions run.
 COPILOT_SETUP = "copilot-setup-steps"
 SETUP_LINUX = re.compile(r"setup-linux\.sh\b")
-# What a wrapper does besides calling its tool, by kind: (what's missing, the code that does it). It sets the app's root,
-# so the tool works from any folder, forwards every argument and keeps the exit status.
+# What a wrapper does besides calling its tool, by kind: (what's missing, the code that does it). It hands the tool the
+# app's root, so the tool works from any folder, forwards every argument and keeps the exit status. A shell variable
+# reaches the tool only exported, or as an assignment in front of the exec itself (not one ended by ;, && or ||).
+RUNPY = r"""runpy\.run_path\((.|\n)*?run_name\s*=\s*["']__main__["']"""
 WRAPPER_FORM = {
-    ".sh": (("set COMPANION_ROOT", r"COMPANION_ROOT="), ('forward its arguments ("$@")', r'"\$@"'),
+    ".sh": (("export COMPANION_ROOT", r"^\s*export\s+([^#\n]*\s)?COMPANION_ROOT\b"
+             r"|^[ \t]*COMPANION_ROOT=(?!.*(;|&&|\|\|)[ \t]*exec\b).*[ \t]exec[ \t]"),
+            ('forward its arguments ("$@")', r'"\$@"'),
             ("keep the exit status (exec)", r"(^|[\s;&|])exec\s")),
     # runpy.run_path(..., run_name="__main__") runs the tool in this process: sys.argv[1:] and its SystemExit carry over.
-    ".py": (("set COMPANION_ROOT", r"COMPANION_ROOT"),
-            ("forward its arguments (sys.argv[1:])", r"sys\.argv\[1:\]|runpy\.run_path\("),
-            ("keep the exit status (os.execv, sys.exit(subprocess.call(...)) or runpy.run_path)",
-             r"os\.exec\w*\(|(sys\.exit|SystemExit)\((subprocess\.call\(|.*\.returncode)|runpy\.run_path\(")),
-    ".ps1": (("set $env:COMPANION_ROOT", r"\$env:COMPANION_ROOT\s*="), ("forward its arguments (@args)", r"@args\b"),
-             ("keep the exit status (exit $LASTEXITCODE)", r"exit\s+\$LASTEXITCODE")),
+    # Without run_name the tool's main block never runs, and the wrapper quietly does nothing.
+    ".py": (("set os.environ[\"COMPANION_ROOT\"]", r"""os\.environ\[\s*["']COMPANION_ROOT["']\s*\]\s*=(?!=)"""
+             r"""|os\.environ\.(setdefault|update)\(.*COMPANION_ROOT|["']COMPANION_ROOT["']\s*:"""),
+            ('forward its arguments (sys.argv[1:], or runpy.run_path(..., run_name="__main__"))',
+             rf"sys\.argv\[1:\]|{RUNPY}"),
+            ('keep the exit status (os.execv, sys.exit(subprocess.call(...)) or runpy.run_path(..., run_name="__main__"))',
+             rf"os\.exec\w*\(|(sys\.exit|SystemExit)\((subprocess\.call\(|.*\.returncode)|{RUNPY}")),
+    # PowerShell's names ignore case.
+    ".ps1": (("set $env:COMPANION_ROOT", r"(?i)\$env:COMPANION_ROOT\s*="), ("forward its arguments (@args)", r"(?i)@args\b"),
+             ("keep the exit status (exit $LASTEXITCODE)", r"(?i)exit\s+\$LASTEXITCODE")),
 }
 # setup-linux.sh's first step in a clone made without its submodules.
 BOOTSTRAP = re.compile(r"\bgit\b.*\bsubmodule\s+update\b.*--init")
@@ -122,12 +130,12 @@ def delegates(text: str, laching: str) -> bool:
     return f"{laching.strip('/')}/tools/" in flat(text)
 
 
-def form_problems(code: list[str], suffix: str, tool: str, laching: str) -> list[str]:
-    """What a wrapper's code (code_lines) leaves out of WRAPPER_FORM, its own tool's name first."""
+def form_problems(code: list[str], suffix: str, own: str, laching: str) -> list[str]:
+    """What a wrapper's code (code_lines) leaves out of WRAPPER_FORM, the call of its own tool (`own`, its path under
+    tools/: windows/screenshots.ps1, not screenshots.sh) first."""
     text = "\n".join(code)
-    stem = re.escape(Path(tool).stem)
-    missing = [] if re.search(rf"{re.escape(laching.strip('/'))}/tools/([\w.-]+/)*{stem}\.(py|sh|ps1)\b", flat(text)) \
-        else [f"call {tool}"]
+    tool = f"{laching.strip('/')}/tools/{own}"
+    missing = [] if re.search(rf"{re.escape(tool)}(?![\w.-])", flat(text)) else [f"call {laching}/tools/{own}"]
     return missing + [what for what, pattern in WRAPPER_FORM[suffix] if not re.search(pattern, text, re.MULTILINE)]
 
 
@@ -166,7 +174,7 @@ def wrapper_problems(config: companion.Config, files: list[str], allowed: set[st
             problems.append(f"{name}: {len(code)} lines of code around {tool}: a wrapper only "
                             f"calls the tool (at most {WRAPPER_LINES}); move the rest into the tool, or into "
                             "conform.allow with why")
-        elif path.suffix in WRAPPER_FORM and (missing := form_problems(code, path.suffix, tool, laching)):
+        elif path.suffix in WRAPPER_FORM and (missing := form_problems(code, path.suffix, own, laching)):
             said = missing[0] if len(missing) == 1 else f"{', '.join(missing[:-1])} or {missing[-1]}"
             problems.append(f"{name}: a wrapper of {tool} that doesn't {said}: see the templates in "
                             f"{laching}/tools/README.md, *Staying on Laching's tools*")
@@ -202,6 +210,22 @@ def workflow_problems(config: companion.Config, files: list[str]) -> list[str]:
     return problems
 
 
+def run_lines(code: str) -> list[str]:
+    """The shell of a workflow's `run:` steps, line by line (a block's too), without comments: not a step's name."""
+    lines, indent = [], None
+    for line in code.splitlines():
+        if indent is not None and (not line.strip() or len(line) - len(line.lstrip()) > indent):
+            lines.append(line.strip())
+            continue
+        indent = None
+        if match := re.match(r"(\s*)(-\s+)?run:\s*(.*)", line):
+            if re.fullmatch(r"[|>][-+]?\s*(#.*)?", match.group(3)):
+                indent = len(match.group(1)) + len(match.group(2) or "")
+            else:
+                lines.append(match.group(3))
+    return [re.sub(r"(^|\s)#.*", "", line) for line in lines]
+
+
 def shared_workflow_problems(config: companion.Config, files: list[str], allowed: set[str]) -> list[str]:
     """The app's core.yml, regenerate-vectors.yml and copilot-setup-steps.yml, by file name, each a copy unless it uses
     Laching's (a renamed copy passes)."""
@@ -217,7 +241,7 @@ def shared_workflow_problems(config: companion.Config, files: list[str], allowed
             continue
         code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
         if match.group(1) == COPILOT_SETUP:
-            if not SETUP_LINUX.search(code):
+            if not any(SETUP_LINUX.search(line) for line in run_lines(code)):
                 problems.append(f"{name}: sets up its own tools: its steps are actions/checkout with submodules, "
                                 "actions/setup-node for Node 24 and `run: scripts/setup-linux.sh`, which installs what "
                                 "Claude Code's cloud sessions get")
@@ -228,8 +252,9 @@ def shared_workflow_problems(config: companion.Config, files: list[str], allowed
 
 
 def link_target(root: Path, name: str) -> str | None:
-    """Where the skill at `name` links: git's record of the link (mode 120000), else the file system's (a symlink, or
-    the text file a checkout without symlinks leaves); None for a folder of its own."""
+    """Where the skill at `name` links: git's record of the link (mode 120000), else the file system's (a symlink, or,
+    outside a git checkout, the one-line text file a copy without symlinks leaves); None for a folder or a file of its
+    own. In a checkout git records every link, so an untracked file (a README) is never one."""
     done = companion.git(root, "ls-files", "-s", "--", name)
     entries = [line.split() for line in done.stdout.splitlines()] if done.returncode == 0 else []
     if entries:
@@ -240,8 +265,9 @@ def link_target(root: Path, name: str) -> str | None:
     path = root / name
     if path.is_symlink():
         return Path(path.readlink()).as_posix()
-    if path.is_file() and path.stat().st_size < 256:
-        return path.read_text("utf-8").strip()
+    if done.returncode != 0 and path.is_file() and path.stat().st_size < 256:
+        text = path.read_text("utf-8", errors="replace").strip()
+        return text if re.fullmatch(r"[\w./-]+", text) else None
     return None
 
 

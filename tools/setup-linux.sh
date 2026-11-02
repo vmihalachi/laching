@@ -61,7 +61,11 @@ fi
 # Android SDK: it builds on a Mac or in CI (kotlin.yml), not here.
 if [ -n "$ANDROID_DIR" ]; then
   as_root() { if [ "$(id -u)" = 0 ]; then "$@"; else sudo -n "$@"; fi; }
-  if ! has java || ! java -version 2>&1 | grep -q 'version "17'; then
+  # A GitHub runner has a JDK 17 beside its default (newer) one: hand that on rather than install another.
+  if [ -n "${JAVA_HOME_17_X64:-}" ] && [ -x "$JAVA_HOME_17_X64/bin/java" ]; then
+    hand_on JAVA_HOME "$JAVA_HOME_17_X64"
+    add_path "$JAVA_HOME_17_X64/bin"
+  elif ! has java || ! java -version 2>&1 | grep -q 'version "17'; then
     if has apt-get; then
       echo "Installing OpenJDK 17"
       { as_root apt-get install -y -qq openjdk-17-jdk-headless ||

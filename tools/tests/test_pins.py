@@ -147,6 +147,16 @@ class BumpTests(PinsTestCase):
         self.assertIn("vectors-linux.yml@v0.6.0", vectors.read_text("utf8"))
         self.assertTrue(companion.pins_agree(companion.pins(companion.load())))
 
+    def test_bump_moves_a_branch_ref_with_slashes_whole(self):
+        workflow = self.root / ".github/workflows/core.yml"
+        workflow.write_text("jobs:\n  test:\n    uses: vmihalachi/laching/.github/workflows/core-linux.yml"
+                            "@users/vlad/linux-ci  # until the release\n", "utf8")
+        self.assertIn((".github/workflows/core.yml core-linux.yml@", "users/vlad/linux-ci"), companion.pins(companion.load()))
+        code, out = self.cli("bump", "0.6.0")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(workflow.read_text("utf8"), "jobs:\n  test:\n    uses: vmihalachi/laching/.github/workflows/"
+                         "core-linux.yml@v0.6.0  # until the release\n")
+
     def test_an_android_app_pins_the_submodules_kotlin_build(self):
         manifest = self.root / "companion.json"
         data = json.loads(manifest.read_text("utf8"))
