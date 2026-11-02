@@ -1,7 +1,8 @@
 name: Kotlin
 
 # The Kotlin side (kotlin/): ktlint over every source, then :core's and :testing's tests (every scheduler vector among
-# them) and the :android debug build, on a hosted Ubuntu runner, whose image carries the Android SDK.
+# them) and the :android debug build, on a hosted Ubuntu runner, whose image carries the Android SDK. release.yml calls it
+# (workflow_call) with the commit it plans to tag, and tags nothing unless it passes.
 on:
   push:
     branches:
@@ -16,13 +17,21 @@ on:
       - "conformance/**"
       - ".github/workflows/kotlin.yml"
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: "The commit to build and test (release.yml's planned base)"
+        type: string
+        required: true
 
 permissions:
   contents: read
 
+# Called, github.workflow and github.ref are the caller's ("Release", master): a call gets a group of its own, which
+# no push or other call cancels, and cancels nothing.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ inputs.ref && format('kotlin-call-{0}', inputs.ref) || format('{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: ${{ !inputs.ref }}
 
 env:
   # scripts/verify.sh reads KTLINT_VERSION too, and skips its ktlint check for any other version. A new version
@@ -39,6 +48,8 @@ jobs:
         working-directory: kotlin
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}  # empty, the default, but when called
 
       # Every gradle-wrapper.jar in the checkout is one Gradle published.
       - uses: gradle/actions/wrapper-validation@v6
