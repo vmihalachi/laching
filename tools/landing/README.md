@@ -36,8 +36,12 @@ export default defineConfig({ ...landing, fmt: {}, lint: {} });
 
 The template's `{{key}}` placeholders are the app's own (`placeholders`, asked first), then the generated ones:
 `langRedirectScript`, `storeButton`, `storeButtonBig`, `contactEmail`, `legal<Page>Url`, `jsonLd`,
-`languageSwitcher` (`"menu"`, `"inline"` or a function), `hreflangLinks`, `ogLocale`, `ogLocaleAlternates`, then the
-locale's dotted keys. Locale files must share the default's keys. `pages` adds hand-written pages beyond the legal ones
+`languageSwitcher` (`"menu"`, `"inline"` or a function), `hreflangLinks`, `ogLocale`, `ogLocaleAlternates`,
+`moreFrom`, then the locale's dotted keys. Locale files must share the default's keys. `moreFrom` lists the sibling
+apps for a footer: `{ apps: { name, url, tagline?: (locale, language) => string }[], label: (locale, language) =>
+string, builtOn?: { url, label } }`, rendered as a `.more-from` block (`.more-from-label`, `.more-from-apps`,
+`.more-from-tagline`, `.built-on`) with every value escaped and no styles; an app whose `url` is `siteUrl` is left
+out, so the landings can share one list, and without the option `{{moreFrom}}` renders nothing. `pages` adds hand-written pages beyond the legal ones
 (a comparison, a guide), each in the languages it lists, with canonical, hreflang and sitemap entries among those
 languages only. `csp.mediaSrc` allows recorded audio, `headers` adds `_headers` rules, `extraPlugins` runs the app's
 own plugins between the hosting and social-asset ones.

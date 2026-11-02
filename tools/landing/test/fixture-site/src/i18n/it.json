@@ -4,5 +4,10 @@
   "nav": { "privacy": "Privacy", "languageLabel": "Lingua" },
   "store": { "soon": "In arrivo", "mac": "Scaricalo" },
   "notFound": { "title": "Non trovato" },
+  "footer": {
+    "moreFrom": "Altro dall'autore",
+    "otherTagline": "Un'altra prova",
+    "builtOn": "Fatto con un kit"
+  },
   "og": { "title": "Scheda di prova" }
 }

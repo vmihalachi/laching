@@ -102,6 +102,41 @@ export function macStoreButton(appStoreUrl: string | null, locale: Locale, big: 
   )}</span></a>`;
 }
 
+/** One sibling app in a "More from" list, its labels already in the page's language. */
+export interface MoreFromApp {
+  name: string;
+  url: string;
+  tagline?: string;
+}
+
+/**
+ * A "More from" list (`.more-from`): `label`, then each app linked by name (`.more-from-apps`, an optional
+ * `.more-from-tagline` after it), then an optional "Built on" link (`.built-on`). Everything escaped, no styles;
+ * nothing when there's neither an app nor a "Built on" link.
+ */
+export function moreFromList(
+  label: string,
+  apps: readonly MoreFromApp[],
+  builtOn?: { url: string; label: string },
+) {
+  if (!apps.length && !builtOn) return "";
+  const items = apps
+    .map(
+      ({ name, url, tagline }) =>
+        `<li><a href="${escapeAttr(url)}">${escapeHtml(name)}</a>${
+          tagline ? ` <span class="more-from-tagline">${escapeHtml(tagline)}</span>` : ""
+        }</li>`,
+    )
+    .join("");
+  const list = apps.length
+    ? `<p class="more-from-label">${escapeHtml(label)}</p><ul class="more-from-apps">${items}</ul>`
+    : "";
+  const built = builtOn
+    ? `<p class="built-on"><a href="${escapeAttr(builtOn.url)}">${escapeHtml(builtOn.label)}</a></p>`
+    : "";
+  return `<div class="more-from">${list}${built}</div>`;
+}
+
 /**
  * Fills `{{ key }}` from `generated` (its own keys) or the locale (dotted keys); throws on a missing key, a key that
  * isn't a scalar, or anything left unresolved.

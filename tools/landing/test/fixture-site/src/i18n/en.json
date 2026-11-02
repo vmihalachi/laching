@@ -4,5 +4,10 @@
   "nav": { "privacy": "Privacy", "languageLabel": "Language" },
   "store": { "soon": "Coming soon", "mac": "Get it" },
   "notFound": { "title": "Not found" },
+  "footer": {
+    "moreFrom": "More from the maker",
+    "otherTagline": "Another fixture",
+    "builtOn": "Built on a kit"
+  },
   "og": { "title": "Fixture card" }
 }

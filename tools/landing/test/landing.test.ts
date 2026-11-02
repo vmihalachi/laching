@@ -140,6 +140,38 @@ describe("companionLanding", () => {
     );
   });
 
+  const moreFrom = {
+    apps: [
+      { name: "Fixture", url: "https://fixture.example/" },
+      {
+        name: "Other <app>",
+        url: 'https://other.example/?a=1&b="2"',
+        tagline: (locale: any) => locale.footer.otherTagline,
+      },
+      { name: "Third", url: "https://third.example" },
+    ],
+    label: (locale: any) => locale.footer.moreFrom,
+    builtOn: { url: "https://kit.example/", label: (locale: any) => locale.footer.builtOn },
+  };
+
+  it("lists the other apps and the kit under More from, in the page's language", () => {
+    expect(render("/it/", { moreFrom })).toContain(
+      '<footer><div class="more-from"><p class="more-from-label">Altro dall\'autore</p><ul class="more-from-apps">' +
+        '<li><a href="https://other.example/?a=1&amp;b=&quot;2&quot;">Other &lt;app&gt;</a> <span class="more-from-tagline">Un\'altra prova</span></li>' +
+        '<li><a href="https://third.example">Third</a></li></ul>' +
+        '<p class="built-on"><a href="https://kit.example/">Fatto con un kit</a></p></div></footer>',
+    );
+  });
+
+  it("renders More from as nothing without the option, or with nothing to list", () => {
+    expect(render("/")).toContain("<footer></footer>");
+    const self = { apps: [moreFrom.apps[0]!], label: moreFrom.label };
+    expect(render("/", { moreFrom: self })).toContain("<footer></footer>");
+    expect(render("/", { moreFrom: { ...self, builtOn: moreFrom.builtOn } })).toContain(
+      '<footer><div class="more-from"><p class="built-on"><a href="https://kit.example/">Built on a kit</a></p></div></footer>',
+    );
+  });
+
   it("lists every page in the sitemap", () => {
     const plugin = landing().plugins[0] as any;
     const emitted: { fileName: string; source: string }[] = [];
