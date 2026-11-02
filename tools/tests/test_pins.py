@@ -132,6 +132,21 @@ class BumpTests(PinsTestCase):
         self.assertIn("windows-core.yml@v0.6.0", workflow.read_text("utf8"))
         self.assertTrue(companion.pins_agree(companion.pins(companion.load())))
 
+    def test_bump_moves_the_reusable_linux_workflow_pins(self):
+        workflows = self.root / ".github/workflows"
+        core, vectors = workflows / "core.yml", workflows / "regenerate-vectors.yml"
+        core.write_text("jobs:\n  test:\n    uses: vmihalachi/laching/.github/workflows/core-linux.yml@v0.5.0\n", "utf8")
+        vectors.write_text("jobs:\n  regenerate:\n"
+                           "    uses: vmihalachi/laching/.github/workflows/vectors-linux.yml@v0.5.0\n", "utf8")
+        found = companion.pins(companion.load())
+        self.assertIn((".github/workflows/core.yml core-linux.yml@", "v0.5.0"), found)
+        self.assertIn((".github/workflows/regenerate-vectors.yml vectors-linux.yml@", "v0.5.0"), found)
+        code, out = self.cli("bump", "0.6.0")
+        self.assertEqual(code, 0, out)
+        self.assertIn("core-linux.yml@v0.6.0", core.read_text("utf8"))
+        self.assertIn("vectors-linux.yml@v0.6.0", vectors.read_text("utf8"))
+        self.assertTrue(companion.pins_agree(companion.pins(companion.load())))
+
     def test_an_android_app_pins_the_submodules_kotlin_build(self):
         manifest = self.root / "companion.json"
         data = json.loads(manifest.read_text("utf8"))

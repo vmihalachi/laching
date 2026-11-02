@@ -113,6 +113,38 @@ class ConformTests(FixtureAppTestCase):
                    "    uses: vmihalachi/laching/.github/workflows/windows-core.yml@v0.5.0\n")
         self.assertEqual(self.problems(), [])
 
+    def test_shared_linux_workflows_are_called_not_copied(self):
+        self.write(".github/workflows/core.yml", "jobs:\n  test:\n    container: swift:6.1\n    steps:\n"
+                   "      - run: swift test --package-path macos/FixtureCore\n")
+        self.write(".github/workflows/regenerate-vectors.yml", "# uses: vmihalachi/laching/.github/workflows/"
+                   "vectors-linux.yml@v0.5.0\njobs:\n  a:\n    steps:\n      - run: sh macos/scripts/conformance.sh\n")
+        self.write(".github/workflows/copilot-setup-steps.yml", "# scripts/setup-linux.sh does it in the cloud\n"
+                   "jobs:\n  copilot-setup-steps:\n    steps:\n      - uses: actions/setup-dotnet@v5\n")
+        found = self.problems()
+        self.assertEqual(len(found), 3, found)
+        self.assertIn(".github/workflows/core.yml: a copy of Laching's core-linux.yml: call it instead "
+                      "(uses: vmihalachi/laching/.github/workflows/core-linux.yml@v0.5.0)", found)
+        self.assertTrue(any(p.startswith(".github/workflows/regenerate-vectors.yml: a copy of Laching's vectors-linux.yml")
+                            for p in found), "a comment isn't a call")
+        self.assertTrue(any(p.startswith(".github/workflows/copilot-setup-steps.yml: sets up its own tools") for p in found))
+
+        self.write(".github/workflows/core.yml", "jobs:\n  test:\n"
+                   "    uses: vmihalachi/laching/.github/workflows/core-linux.yml@v0.5.0\n")
+        (self.root / ".github/workflows/regenerate-vectors.yml").unlink()
+        self.write(".github/workflows/regenerate-vectors.yaml", "jobs:\n  regenerate:\n"
+                   "    uses: vmihalachi/laching/.github/workflows/vectors-linux.yml@v0.5.0\n")
+        self.write(".github/workflows/copilot-setup-steps.yml", "jobs:\n  copilot-setup-steps:\n    steps:\n"
+                   "      - uses: actions/checkout@v7\n      - run: scripts/setup-linux.sh\n")
+        self.assertEqual(self.problems(), [])
+
+        # Kept on purpose, with why; and other names are the app's own.
+        self.write(".github/workflows/core.yml", "jobs: {}\n")
+        self.write(".github/workflows/core-extra.yml", "jobs: {}\n")
+        self.assertEqual(len(self.problems()), 1)
+        self.edit_config(lambda data: data.update(conform={"allow": [{"path": ".github/workflows/core.yml",
+                                                                      "why": "a core of the app's own"}]}))
+        self.assertEqual(self.problems(), [])
+
     def test_skills_link_into_laching(self):
         git(self.root, "init", "-q")
         skills = self.root / ".agents" / "skills"

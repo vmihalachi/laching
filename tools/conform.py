@@ -9,6 +9,9 @@ conform fails, one line per problem, when the app:
   - builds or bundles its Store packages in a workflow of its own (GenerateAppxPackageOnBuild, makeappx, smoke-package)
     instead of calling Laching's reusable windows-release.yml and windows-app.yml, or calls any shared workflow at another release than
     the one it pins (`laching.tag`); with `windows.app`, it must call both;
+  - keeps a workflow Laching ships, by file name, instead of using Laching's: its .github/workflows/core.yml must call
+    core-linux.yml, its regenerate-vectors.yml vectors-linux.yml, and its copilot-setup-steps.yml must run
+    setup-linux.sh (which Claude Code's cloud sessions run too);
   - has a skill in .agents/skills named like one of tools/skills that isn't a link into `<laching.path>/tools/skills/`
     (the app's own words for a skill go in .agents/notes/<skill>.md);
   - has a `store.microsoft` the schema refuses.
@@ -35,6 +38,11 @@ RETIRED = {"store-packages": "windows/store-release.ps1"}
 FORKED_BUILD = re.compile(r"GenerateAppxPackageOnBuild|makeappx|smoke-package")
 REUSABLE = re.compile(r"uses:\s*['\"]?[\w.-]+/laching/\.github/workflows/([\w.-]+)\.ya?ml@([\w.-]+)")
 SKIPPED_DIRS = {"node_modules", "build", ".git"}
+# An app's workflows named like the ones Laching ships (by name without the extension) → the reusable workflow it calls.
+CALLERS = {"core": "core-linux", "regenerate-vectors": "vectors-linux"}
+# Copilot's setup job can't call a reusable workflow, so it runs the setup Claude Code's cloud sessions run.
+COPILOT_SETUP = "copilot-setup-steps"
+SETUP_LINUX = re.compile(r"setup-linux\.sh\b")
 
 
 def tool_names(tools: Path = TOOLS) -> dict[str, str]:
@@ -141,6 +149,31 @@ def workflow_problems(config: companion.Config, files: list[str]) -> list[str]:
     return problems
 
 
+def shared_workflow_problems(config: companion.Config, files: list[str], allowed: set[str]) -> list[str]:
+    """The app's core.yml, regenerate-vectors.yml and copilot-setup-steps.yml, by file name, each a copy unless it uses
+    Laching's (a renamed copy passes)."""
+    tag = config.get("laching.tag") or "vX.Y.Z"
+    problems = []
+    for name in files:
+        match = re.fullmatch(r"\.github/workflows/([^/]+)\.ya?ml", name)
+        if not match or name in allowed or match.group(1) not in (*CALLERS, COPILOT_SETUP):
+            continue
+        try:
+            text = (config.root / name).read_text("utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+        if match.group(1) == COPILOT_SETUP:
+            if not SETUP_LINUX.search(code):
+                problems.append(f"{name}: sets up its own tools: its steps are actions/checkout with submodules, "
+                                "actions/setup-node for Node 24 and `run: scripts/setup-linux.sh`, which installs what "
+                                "Claude Code's cloud sessions get")
+        elif (reusable := CALLERS[match.group(1)]) not in {workflow for workflow, _ in REUSABLE.findall(code)}:
+            problems.append(f"{name}: a copy of Laching's {reusable}.yml: call it instead "
+                            f"(uses: vmihalachi/laching/.github/workflows/{reusable}.yml@{tag})")
+    return problems
+
+
 def link_target(root: Path, name: str) -> str | None:
     """Where the skill at `name` links: git's record of the link (mode 120000), else the file system's (a symlink, or
     the text file a checkout without symlinks leaves); None for a folder of its own."""
@@ -193,8 +226,8 @@ def problems(config: companion.Config) -> list[str]:
     """Every way the app forks or drifts from Laching's tools, one message each."""
     allowed = {entry["path"] for entry in config.get("conform.allow", [])}
     files = tracked(config.root)
-    return (wrapper_problems(config, files, allowed) + workflow_problems(config, files) + skill_problems(config)
-            + store_problems(config))
+    return (wrapper_problems(config, files, allowed) + workflow_problems(config, files)
+            + shared_workflow_problems(config, files, allowed) + skill_problems(config) + store_problems(config))
 
 
 def check(config: companion.Config) -> int:
