@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -17,6 +18,7 @@ from support import TOOLS, WINDOWS, FixtureAppTestCase
 
 sys.path.insert(0, str(TOOLS))
 import companion  # noqa: E402
+import sim  # noqa: E402
 
 spec = importlib.util.spec_from_file_location("ci_macos", TOOLS / "ci-macos.py")
 ci = importlib.util.module_from_spec(spec)
@@ -90,6 +92,14 @@ class MacCITests(FixtureAppTestCase):
         self.assertEqual(argv[argv.index("-derivedDataPath") + 1], str(config.root / "macos/build/dd-ios.noindex"))
         self.assertEqual(argv[-1], "test")
 
+    def test_ios_tests_run_on_a_simulator_of_the_apps_own(self):
+        phone = {"name": "iPhone 17", "udid": "SHARED", "runtime": "iOS-26", "deviceTypeIdentifier": "iPhone-17"}
+        with mock.patch.object(sim, "devices", return_value=[phone]), \
+                mock.patch.object(sim, "runtimes", return_value=[{"identifier": "iOS-26", "version": "26.0"}]), \
+                mock.patch.object(sim, "simctl", return_value="OWN\n") as simctl:
+            self.assertEqual(ci.ios_destination(self.config()), "platform=iOS Simulator,id=OWN")
+        simctl.assert_called_once_with("create", "fixture ci", "iPhone-17", "iOS-26")
+
     def test_vectors_regenerate_and_diff_the_conformance_folder_new_files_included(self):
         config = self.config()
         vectors = str(config.root / "conformance")
@@ -97,6 +107,11 @@ class MacCITests(FixtureAppTestCase):
             (config.root, [str(TOOLS / "conformance.sh")]),
             (config.root, ["git", "add", "--intent-to-add", "--", vectors]),
             (config.root, ["git", "diff", "--exit-code", "--stat", "--", vectors])])
+        for key in ("writeFlag", "corePackagePath"):
+            with self.subTest(without=key):
+                partial = self.config()
+                partial.data["conformance"].pop(key)
+                self.assertEqual(ci.commands(partial, "vectors"), [], "conformance.sh would run `env =1 swift test`")
         config.data.pop("conformance")
         self.assertEqual(ci.commands(config, "vectors"), [])
 
@@ -144,6 +159,9 @@ class MacCITests(FixtureAppTestCase):
         self.assertIn('path: "**/build/ci-*.log"', workflow)
         for stage in ci.STAGES:
             self.assertIn(f'tools/ci-macos.py" {stage}\n', workflow)
+        self.assertIn("default: false", workflow.split("      release:\n")[1].split("\n\n")[0], "the release input is off by default")
+        self.assertIn('if: inputs.release\n        run: python3 "./$LACHING_PATH/tools/ci-macos.py" release', workflow,
+                      "the Release builds run on request only")
         self.assertIn("if: inputs.release && inputs.hosted\n        run: python3 \"./$LACHING_PATH/tools/ci-macos.py\" smoke",
                       workflow, "the Release app launches on GitHub's runner only")
 
@@ -152,14 +170,14 @@ class MacCITests(FixtureAppTestCase):
 class SmokeReleaseTests(FixtureAppTestCase):
     """smoke-release.sh launches mac.app's executable and refuses to run where the Release app would share real data."""
 
-    def smoke(self, quits: bool, **env):
+    def smoke(self, quits: bool, then: str = "", seconds: int = 1, **env):
         binary = self.root / "Fixture.app/Contents/MacOS/Fixture"
         binary.parent.mkdir(parents=True)
-        binary.write_text("#!/bin/sh\necho started\n" + ("exit 3\n" if quits else "exec sleep 30\n"))
+        binary.write_text("#!/bin/sh\necho started\n" + then + ("exit 3\n" if quits else "exec sleep 30\n"))
         binary.chmod(0o755)
         (self.root / "home").mkdir()
         env = {**os.environ, "HOME": str(self.root / "home"), "CI": "true", "RUNNER_ENVIRONMENT": "github-hosted", **env}
-        return subprocess.run([str(TOOLS / "smoke-release.sh"), str(binary.parents[2]), "1"], env=env,
+        return subprocess.run([str(TOOLS / "smoke-release.sh"), str(binary.parents[2]), str(seconds)], env=env,
                               capture_output=True, encoding="utf8")
 
     def test_a_running_app_passes(self):
@@ -172,6 +190,24 @@ class SmokeReleaseTests(FixtureAppTestCase):
         self.assertEqual(done.returncode, 1)
         self.assertIn("exit status 3", done.stderr)
         self.assertIn("started", done.stderr)
+
+    def test_a_crash_report_fails_even_while_the_app_runs(self):
+        reports = '"$HOME/Library/Logs/DiagnosticReports"'
+        done = self.smoke(quits=False, seconds=2,
+                          then=f"mkdir -p {reports}\nsleep 1\necho 'EXC_BAD_ACCESS' > {reports}/Fixture-2026-11-02.ips\n")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("Running after 2 s.", done.stdout)
+        self.assertIn("Fixture-2026-11-02.ips", done.stderr)
+        self.assertIn("EXC_BAD_ACCESS", done.stderr)
+
+    def test_refuses_an_app_without_mac_app(self):
+        profile = self.root / "companion.json"
+        data = json.loads(profile.read_text())
+        data["mac"]["app"] = ""
+        profile.write_text(json.dumps(data))
+        done = self.smoke(quits=False)
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("mac.app", done.stderr)
 
     def test_refuses_outside_ci_and_on_a_self_hosted_runner(self):
         for env in ({"CI": ""}, {"RUNNER_ENVIRONMENT": "self-hosted"}):

@@ -3,7 +3,8 @@
 
 Runs one named stage at a time. Every command is an argument list, never shell code interpolated from workflow
 inputs or app names. Output is streamed to the job and saved under mac.dir/build/ci-<stage>.log for failure artifacts.
-A stage the app has nothing for (no mac.iosScheme for `ios`, no conformance section for `vectors`) runs no commands.
+A stage the app has nothing for (no mac.iosScheme for `ios`, no conformance dir, writeFlag and corePackagePath for
+`vectors`) runs no commands. Run locally, `vectors` leaves new vector files in the index (`git add --intent-to-add`).
 
     python3 laching/tools/ci-macos.py <stage>   # project, format, pins, content, vectors, core, test, ios, release, smoke
 """
@@ -22,12 +23,13 @@ TOOLS = Path(__file__).resolve().parent
 STAGES = ("project", "format", "pins", "content", "vectors", "core", "test", "ios", "release", "smoke")
 
 
-def ios_destination() -> str:
-    """The simulator ios-destination.py picks (it needs Xcode, so it's asked only when the app has an iOS scheme)."""
+def ios_destination(config: companion.Config) -> str:
+    """A simulator of the app's own ("<name> ci", made on first use), off the iPhone the Simulator panel and the screenshot
+    runs share on a self-hosted Mac. It needs Xcode, so it's asked only when the app has an iOS scheme."""
     spec = importlib.util.spec_from_file_location("ios_destination", TOOLS / "ios-destination.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.destination(None)
+    return module.destination(f"{config.require('name')} ci")
 
 
 def derived(config: companion.Config, suffix: str) -> Path:
@@ -73,7 +75,7 @@ def commands(config: companion.Config, stage: str) -> list[tuple[Path, list[str]
         return result
     if stage == "vectors":
         vectors = config.path("conformance.dir")
-        if vectors is None:
+        if vectors is None or not config.get("conformance.writeFlag") or not config.get("conformance.corePackagePath"):
             return []
         return [(root, [str(TOOLS / "conformance.sh")]),
                 (root, ["git", "add", "--intent-to-add", "--", str(vectors)]),
@@ -88,7 +90,7 @@ def commands(config: companion.Config, stage: str) -> list[tuple[Path, list[str]
         scheme = config.get("mac.iosScheme")
         if not scheme:
             return []
-        return [(mac, ["xcodebuild", "-project", config.require("mac.project"), "-scheme", scheme, "-destination", ios_destination(),
+        return [(mac, ["xcodebuild", "-project", config.require("mac.project"), "-scheme", scheme, "-destination", ios_destination(config),
                        "-derivedDataPath", str(derived(config, "ios")), "-quiet", *companion.xcode_cache_settings(), "test"])]
     if stage == "release":
         # What App Store review and customers get (hardened runtime, the Store bundle ID, Release-only strings), which
