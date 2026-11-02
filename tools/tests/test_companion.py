@@ -141,6 +141,7 @@ class LookupTests(unittest.TestCase):
             for path in ("windows/Fixture.App/App/AppModel.cs", "windows/Fixture.App.Tests/AppModelTests.cs"):
                 self.assertRegex(path, names["RE_WINDOWS_APP_TESTS"])
             self.assertNotRegex("windows/Fixture.Core/A.cs", names["RE_WINDOWS_APP_TESTS"])
+            self.assertRegex("windows/Directory.Packages.props", names["RE_WINDOWS_APP_TESTS"], "a bump moves the versions")
             # The WinUI build: the app, the core it references, the shared build settings and the SDK pin.
             for path in ("windows/Fixture.App/App.xaml", "windows/Fixture.Core/A.cs", "windows/Directory.Build.props",
                          "windows/Directory.Packages.props", "windows/global.json"):

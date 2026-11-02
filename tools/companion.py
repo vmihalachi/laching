@@ -320,22 +320,23 @@ def derived(config: Config) -> dict[str, str]:
         f"^{ere(landing_i18n)}/" if landing_i18n else "", "^companion\\.json$", *pin,
     ] if part)
     values["RE_CSHARP"] = f"^{ere(windows)}/.*\\.cs$" if windows else never
-    # The core and its tests, the vectors they replay, and the shared build settings and SDK pin: Laching.* versions
-    # live in Directory.Packages.props, so a bump runs the tests too.
+    # The shared build settings and SDK pin. With central package management the Laching.* versions live in
+    # Directory.Packages.props, so a bump runs every Windows test and build that compiles against them.
+    win_shared = f"^{ere(windows)}/(Directory\\.(Build|Packages)\\.props|global\\.json)$"
     values["RE_WINDOWS_CORE"] = (
-        f"^{ere(windows)}/{ere(win_core)}(\\.Tests)?/|^{ere(windows)}/(Directory\\.(Build|Packages)\\.props|global\\.json)$"
-        f"|^{ere(conformance)}/" if windows and win_core else never
+        f"^{ere(windows)}/{ere(win_core)}(\\.Tests)?/|{win_shared}|^{ere(conformance)}/" if windows and win_core else never
     )
     values["RE_WINDOWS_APP"] = f"^{ere(windows)}/{ere(values['WINDOWS_APP'])}/" if windows and values["WINDOWS_APP"] else never
     # The WinUI build: the app, the core it references and the shared build settings and SDK pin.
     values["RE_WINDOWS_BUILD"] = "|".join(part for part in [
         values["RE_WINDOWS_APP"] if windows and values["WINDOWS_APP"] else "",
         f"^{ere(windows)}/{ere(win_core)}/" if windows and win_core and values["WINDOWS_APP"] else "",
-        f"^{ere(windows)}/(Directory\\.(Build|Packages)\\.props|global\\.json)$" if windows and values["WINDOWS_APP"] else "",
+        win_shared if windows and values["WINDOWS_APP"] else "",
     ] if part) or never
-    # The app's model tests compile the app's own files, so either side changing runs them.
+    # The app's model tests compile the app's own files, so either side changing runs them, as do the shared settings.
     values["RE_WINDOWS_APP_TESTS"] = (
-        f"^{ere(windows)}/({ere(values['WINDOWS_APP'])}|{ere(win_app_tests)})/" if windows and win_app_tests else never
+        f"^{ere(windows)}/({ere(values['WINDOWS_APP'])}|{ere(win_app_tests)})/|{win_shared}"
+        if windows and win_app_tests else never
     )
     asset_sources = [rel(key) for key in ("windows.assets.source", "windows.assets.devSource") if config.get(key)]
     values["RE_WINDOWS_ASSETS"] = (
