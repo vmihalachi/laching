@@ -36,8 +36,8 @@ concurrency:
   cancel-in-progress: ${{ !inputs.commit }}
 
 env:
-  # scripts/verify.sh reads KTLINT_VERSION too, and skips its ktlint check for any other version. A new version
-  # takes the new download's sha256 here.
+  # scripts/verify.sh reads KTLINT_VERSION too, and skips its ktlint check for any other version;
+  # copilot-setup-steps.yml reads both. A new version takes the new download's sha256 here.
   KTLINT_VERSION: "1.8.0"
   KTLINT_SHA256: "a3fd620207d5c40da6ca789b95e7f823c54e854b7fade7f613e91096a3706d75"
 
@@ -55,7 +55,7 @@ jobs:
         with:
           ref: ${{ inputs.commit && github.ref || '' }}
 
-      # The checkout's own output, not git: in swift.yml's container git refuses the workspace (dubious ownership).
+      # The checkout's own output, not git: one check for every job, and swift.yml's linux container refuses git here.
       - name: The branch's tip is the commit the caller planned
         if: inputs.commit && steps.checkout.outputs.commit != inputs.commit
         run: |

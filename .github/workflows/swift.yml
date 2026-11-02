@@ -55,7 +55,7 @@ jobs:
         with:
           ref: ${{ inputs.commit && github.ref || '' }}
 
-      # The checkout's own output, not git: in swift.yml's container git refuses the workspace (dubious ownership).
+      # The checkout's own output, not git: one check for every job, and swift.yml's linux container refuses git here.
       - name: The branch's tip is the commit the caller planned
         if: inputs.commit && steps.checkout.outputs.commit != inputs.commit
         run: |
@@ -130,7 +130,7 @@ jobs:
         with:
           ref: ${{ inputs.commit && github.ref || '' }}
 
-      # The checkout's own output, not git: in swift.yml's container git refuses the workspace (dubious ownership).
+      # The checkout's own output, not git: one check for every job, and swift.yml's linux container refuses git here.
       - name: The branch's tip is the commit the caller planned
         if: inputs.commit && steps.checkout.outputs.commit != inputs.commit
         run: |

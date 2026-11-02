@@ -194,19 +194,24 @@ class TargetsTests(unittest.TestCase):
 
 
 class DotnetSdkTests(unittest.TestCase):
-    # The check exists once: every workflow that sets up .NET on a GitHub-hosted Windows runner asks the script first.
+    # The check exists once: every workflow that sets up .NET on a GitHub-hosted Windows runner asks the script first,
+    # but the Store release, whose Native AOT package ships the SDK's runtime.
     def test_the_workflows_run_the_one_check(self):
         workflows = REPO / ".github/workflows"
-        for name, run in (("dotnet.yml", "pwsh tools/windows/dotnet-sdk.ps1"),
-                          ("web.yml", "pwsh ../tools/windows/dotnet-sdk.ps1"),
-                          ("release.yml", "pwsh tools/windows/dotnet-sdk.ps1"),
-                          ("windows-app.yml", 'pwsh "${{ inputs.laching-path }}/tools/windows/dotnet-sdk.ps1"'),
-                          ("windows-release.yml", 'pwsh "${{ inputs.laching-path }}/tools/windows/dotnet-sdk.ps1"')):
+        for name, run in (("dotnet.yml", "pwsh tools/windows/dotnet-sdk.ps1\n"),
+                          ("web.yml", "pwsh ../tools/windows/dotnet-sdk.ps1\n"),
+                          ("release.yml", "pwsh tools/windows/dotnet-sdk.ps1\n"),
+                          # A Laching without the script falls through to setup-dotnet; the input never reaches run.
+                          ("windows-app.yml", "|\n          $script = Join-Path $env:LACHING_PATH tools/windows/dotnet-sdk.ps1\n"
+                           "          if (Test-Path $script) { pwsh $script } else {")):
             with self.subTest(workflow=name):
                 text = (workflows / name).read_text("utf8")
                 self.assertIn("        id: sdk\n", text)
-                self.assertIn(f"        run: {run}\n", text)
+                self.assertIn(f"        run: {run}", text)
                 self.assertIn("steps.sdk.outputs.use != 'true'", text)
+        release = (workflows / "windows-release.yml").read_text("utf8")
+        self.assertNotIn("id: sdk", release)
+        self.assertIn("      - uses: actions/setup-dotnet@v6\n        if: inputs.hosted\n", release)
         for workflow in sorted(workflows.glob("*.yml")):
             with self.subTest(copy=workflow.name):
                 self.assertNotIn("releases-index", workflow.read_text("utf8"))
