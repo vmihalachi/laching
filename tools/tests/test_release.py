@@ -298,9 +298,24 @@ class ReleaseTests(unittest.TestCase):
         # Nothing before the tag job writes to the repository, and the tag job waits for every build to pass.
         jobs = WORKFLOW.read_text("utf8").split("\n  tag:\n")
         self.assertNotIn("contents: write", jobs[0])
-        self.assertIn("needs: [plan, core, windows, web, landing]", jobs[1].split("\n  npm:\n")[0])
+        self.assertIn("needs: [plan, core, windows, web, landing, swift, kotlin]", jobs[1].split("\n  npm:\n")[0])
         for job in ("core", "windows", "web", "landing"):
             self.assertIn(f"(needs.{job}.result == 'success' || needs.{job}.result == 'skipped')", jobs[1])
+        # The Swift package and the Kotlin build take every tag: both run on every release, and skipped never tags.
+        self.assertIn("needs.swift.result == 'success' && needs.kotlin.result == 'success'", jobs[1])
+        for job in ("swift", "kotlin"):
+            self.assertNotIn(f"needs.{job}.result == 'skipped'", jobs[1])
+            self.assertIn(f"  {job}:\n    needs: plan\n    if: needs.plan.outputs.release == 'true'\n"
+                          f"    uses: ./.github/workflows/{job}.yml\n    with:\n      commit: ${{{{ needs.plan.outputs.base }}}}\n",
+                          jobs[0])
+            called = (WORKFLOW.parent / f"{job}.yml").read_text("utf8")
+            self.assertIn("  workflow_call:\n", called)
+            # Called, github.workflow and github.ref are Release's: a call can't share, cancel or be cancelled by a group.
+            self.assertIn(f"${{{{ inputs.commit && format('{job}-call-{{0}}', inputs.commit)\n", called)
+            self.assertIn("cancel-in-progress: ${{ !inputs.commit }}", called)
+            # The checkout never takes the caller's input (CodeQL's cache poisoning rule): the branch's tip, then a check.
+            self.assertIn("ref: ${{ inputs.commit && github.ref || '' }}", called)
+            self.assertIn("if: inputs.commit && steps.checkout.outputs.commit != inputs.commit", called)
 
         origin = self.origin()
         self.change("dotnet/Laching.Core/Clock.cs", pr=110)

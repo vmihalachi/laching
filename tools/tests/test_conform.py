@@ -18,7 +18,8 @@ import companion  # noqa: E402
 import conform  # noqa: E402
 
 WRAPPER = """# The app's smoke-package.ps1: Laching's, which says how.
-& "$PSScriptRoot/../../laching/tools/windows/smoke-package.ps1" @args
+$env:COMPANION_ROOT = (Resolve-Path "$PSScriptRoot/../..").Path
+try { & "$PSScriptRoot/../../laching/tools/windows/smoke-package.ps1" @args } finally { $env:COMPANION_ROOT = $null }
 exit $LASTEXITCODE
 """
 
@@ -32,6 +33,13 @@ class ConformTests(FixtureAppTestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, "utf8")
         return path
+
+    def link(self, name: str, target: str) -> None:
+        """A link recorded the way git records one (mode 120000), with the text file a checkout without symlinks has."""
+        self.write(name, target)
+        blob = subprocess.run(["git", "-C", str(self.root), "hash-object", "-w", "--stdin"], input=target,
+                              capture_output=True, encoding="utf8", check=True).stdout.strip()
+        git(self.root, "update-index", "--add", "--cacheinfo", f"120000,{blob},{name}")
 
     def edit_config(self, change) -> None:
         path = self.root / "companion.json"
@@ -49,9 +57,13 @@ class ConformTests(FixtureAppTestCase):
         self.write("store-listing/microsoft/import.py", (
             "#!/usr/bin/env python3\n# Laching's store/import.py for this app.\n"
             "import os, subprocess, sys; root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))\n"
-            "sys.exit(subprocess.call([sys.executable, os.path.join(root, 'laching', 'tools', 'store', 'import.py')]))\n"))
+            "os.environ['COMPANION_ROOT'] = root\n"
+            "sys.exit(subprocess.call([sys.executable, os.path.join(root, 'laching', 'tools', 'store', 'import.py'),\n"
+            "                          *sys.argv[1:]]))\n"))
         self.write("windows/scripts/screenshots.ps1", "<#\nA long comment\nblock of many lines\n#>\n"
-                   "& (Join-Path $PSScriptRoot '..\\..\\laching\\tools\\windows\\screenshots.ps1') @args\n")
+                   "$env:COMPANION_ROOT = (Resolve-Path \"$PSScriptRoot\\..\\..\").Path\n"
+                   "& (Join-Path $PSScriptRoot '..\\..\\laching\\tools\\windows\\screenshots.ps1') @args\n"
+                   "exit $LASTEXITCODE\n")
         self.assertEqual(self.problems(), [])
 
         self.write("windows/scripts/check-winui.py", "import re\nprint('my own rules')\n")
@@ -70,6 +82,72 @@ class ConformTests(FixtureAppTestCase):
         self.edit_config(lambda data: data.update(conform={"allow": [{"path": "windows/scripts/check-winui.py",
                                                                       "why": "rules of the app's own"}]}))
         self.assertEqual(len(self.problems()), 3)
+
+    def test_a_wrapper_sets_the_root_forwards_its_arguments_and_keeps_the_status(self):
+        # The forms the apps use, each with all three.
+        self.write("macos/scripts/check-layout.sh", "#!/bin/sh\nCOMPANION_ROOT=$(cd \"$(dirname \"$0\")/../..\" && pwd) "
+                   "exec \"$(dirname \"$0\")/../../laching/tools/check-layout.sh\" \"$@\"\n")
+        self.write("macos/scripts/conformance.sh", "#!/bin/sh\nexport COMPANION_ROOT=\"$(cd \"$(dirname \"$0\")/../..\" && pwd)\"\n"
+                   "exec \"$COMPANION_ROOT/laching/tools/conformance.sh\" \"$@\"\n")
+        self.write("macos/scripts/voice.py", "import os, sys; root = os.path.abspath(os.path.join(os.path.dirname(__file__), "
+                   "'..', '..')); os.environ['COMPANION_ROOT'] = root\nos.execv(sys.executable, [sys.executable, "
+                   "os.path.join(root, 'laching', 'tools', 'voice.py'), *sys.argv[1:]])\n")
+        self.write("macos/scripts/character.py", "import os, pathlib, runpy\nroot = pathlib.Path(__file__).resolve()"
+                   ".parents[2]\nos.environ['COMPANION_ROOT'] = str(root)\nrunpy.run_path(str(root / "
+                   "'laching/tools/character.py'), run_name='__main__')\n")
+        self.write("macos/scripts/conformance.py", "import os, subprocess, sys\nos.environ['COMPANION_ROOT'] = "
+                   "'..'\nsubprocess.call([sys.executable, '../laching/tools/conformance.sh'])\n")
+        self.write("windows/scripts/smoke-package.ps1", WRAPPER)
+        self.assertEqual(self.problems(), [
+            "macos/scripts/conformance.py: a wrapper of laching/tools/conformance.sh that doesn't forward its arguments "
+            "(sys.argv[1:]) or keep the exit status (os.execv, sys.exit(subprocess.call(...)) or runpy.run_path): see "
+            "the templates in laching/tools/README.md, *Staying on Laching's tools*"])
+        (self.root / "macos/scripts/conformance.py").unlink()
+
+        self.write("macos/scripts/install-dev.sh", "#!/bin/sh\nexec \"$(dirname \"$0\")/../../laching/tools/install-dev.sh\" \"$@\"\n")
+        self.write("macos/scripts/l10n.py", "import pathlib, runpy; runpy.run_path(str(pathlib.Path(__file__).resolve()"
+                   ".parents[2] / 'laching/tools/l10n.py'), run_name='__main__')\n")
+        self.write("windows/scripts/screenshots.ps1", "$ErrorActionPreference = 'Stop'\n"
+                   "& (Join-Path $PSScriptRoot '..\\..\\laching\\tools\\windows\\screenshots.ps1') @args\n"
+                   "if ($LASTEXITCODE) { throw \"screenshots.ps1 failed\" }\n")
+        self.write("scripts/verify.sh", "#!/bin/sh\nexport COMPANION_ROOT=\"$(cd \"$(dirname \"$0\")/..\" && pwd)\"\n"
+                   "\"$COMPANION_ROOT/laching/tools/verify.sh\" \"$@\" || true\n")
+        self.write("macos/scripts/phrases.py", "import os, sys; root = os.path.abspath(os.path.join(os.path.dirname(__file__), "
+                   "'..', '..')); os.environ['COMPANION_ROOT'] = root\nos.execv(sys.executable, [sys.executable, "
+                   "os.path.join(root, 'laching', 'tools', 'l10n.py'), *sys.argv[1:]])\n")
+        found = self.problems()
+        self.assertEqual(found, [
+            "macos/scripts/install-dev.sh: a wrapper of laching/tools/install-dev.sh that doesn't set COMPANION_ROOT: see "
+            "the templates in laching/tools/README.md, *Staying on Laching's tools*",
+            "macos/scripts/l10n.py: a wrapper of laching/tools/l10n.py that doesn't set COMPANION_ROOT: see the "
+            "templates in laching/tools/README.md, *Staying on Laching's tools*",
+            "macos/scripts/phrases.py: a wrapper of laching/tools/phrases.py that doesn't call laching/tools/phrases.py: "
+            "see the templates in laching/tools/README.md, *Staying on Laching's tools*",
+            "scripts/verify.sh: a wrapper of laching/tools/verify.sh that doesn't keep the exit status (exec): see the "
+            "templates in laching/tools/README.md, *Staying on Laching's tools*",
+            "windows/scripts/screenshots.ps1: a wrapper of laching/tools/windows/screenshots.ps1 that doesn't set "
+            "$env:COMPANION_ROOT or keep the exit status (exit $LASTEXITCODE): see the templates in "
+            "laching/tools/README.md, *Staying on Laching's tools*"], found)
+
+        self.edit_config(lambda data: data.update(conform={"allow": [{"path": "scripts/verify.sh", "why": "ours"}]}))
+        self.assertEqual(len(self.problems()), 4)
+
+    def test_setup_linux_checks_out_the_submodule_before_running_lachings(self):
+        head = "#!/bin/sh\nexport COMPANION_ROOT=\"$(cd \"$(dirname \"$0\")/..\" && pwd)\"\n"
+        run = "exec \"$COMPANION_ROOT/laching/tools/setup-linux.sh\" \"$@\"\n"
+        self.write("scripts/setup-linux.sh", head + run)
+        self.assertEqual(self.problems(), [
+            "scripts/setup-linux.sh: runs laching/tools/setup-linux.sh before checking out laching/, which a clone made "
+            "without its submodules lacks: check it out first ([ -f ... ] || git -C \"$COMPANION_ROOT\" submodule update "
+            "--init laching)"])
+        self.write("scripts/setup-linux.sh", head + run + "git submodule update --init laching\n")
+        self.assertEqual(len(self.problems()), 1, "too late")
+
+        self.write("scripts/setup-linux.sh", head + "[ -f \"$COMPANION_ROOT/laching/tools/setup-linux.sh\" ] || "
+                   "git -C \"$COMPANION_ROOT\" submodule update --init laching\n" + run)
+        self.assertEqual(self.problems(), [])
+        self.write("scripts/setup-linux.sh", head + "git -C \"$COMPANION_ROOT\" submodule update --init --quiet laching\n" + run)
+        self.assertEqual(self.problems(), [])
 
     def test_files_of_other_names_and_kinds_are_the_apps(self):
         self.write("windows/scripts/run-dev.ps1", "dotnet run\n")
@@ -113,18 +191,46 @@ class ConformTests(FixtureAppTestCase):
                    "    uses: vmihalachi/laching/.github/workflows/windows-core.yml@v0.5.0\n")
         self.assertEqual(self.problems(), [])
 
+    def test_shared_linux_workflows_are_called_not_copied(self):
+        self.write(".github/workflows/core.yml", "jobs:\n  test:\n    container: swift:6.1\n    steps:\n"
+                   "      - run: swift test --package-path macos/FixtureCore\n")
+        self.write(".github/workflows/regenerate-vectors.yml", "# uses: vmihalachi/laching/.github/workflows/"
+                   "vectors-linux.yml@v0.5.0\njobs:\n  a:\n    steps:\n      - run: sh macos/scripts/conformance.sh\n")
+        self.write(".github/workflows/copilot-setup-steps.yml", "# scripts/setup-linux.sh does it in the cloud\n"
+                   "jobs:\n  copilot-setup-steps:\n    steps:\n      - uses: actions/setup-dotnet@v5\n")
+        found = self.problems()
+        self.assertEqual(len(found), 3, found)
+        self.assertIn(".github/workflows/core.yml: a copy of Laching's core-linux.yml: call it instead "
+                      "(uses: vmihalachi/laching/.github/workflows/core-linux.yml@v0.5.0)", found)
+        self.assertTrue(any(p.startswith(".github/workflows/regenerate-vectors.yml: a copy of Laching's vectors-linux.yml")
+                            for p in found), "a comment isn't a call")
+        self.assertTrue(any(p.startswith(".github/workflows/copilot-setup-steps.yml: sets up its own tools") for p in found))
+
+        self.write(".github/workflows/core.yml", "jobs:\n  test:\n"
+                   "    uses: vmihalachi/laching/.github/workflows/core-linux.yml@v0.5.0\n")
+        (self.root / ".github/workflows/regenerate-vectors.yml").unlink()
+        self.write(".github/workflows/regenerate-vectors.yaml", "jobs:\n  regenerate:\n"
+                   "    uses: vmihalachi/laching/.github/workflows/vectors-linux.yml@v0.5.0\n")
+        self.write(".github/workflows/copilot-setup-steps.yml", "jobs:\n  copilot-setup-steps:\n    steps:\n"
+                   "      - uses: actions/checkout@v7\n      - run: scripts/setup-linux.sh\n")
+        self.assertEqual(self.problems(), [])
+
+        # Kept on purpose, with why; and other names are the app's own.
+        self.write(".github/workflows/core.yml", "jobs: {}\n")
+        self.write(".github/workflows/core-extra.yml", "jobs: {}\n")
+        self.assertEqual(len(self.problems()), 1)
+        self.edit_config(lambda data: data.update(conform={"allow": [{"path": ".github/workflows/core.yml",
+                                                                      "why": "a core of the app's own"}]}))
+        self.assertEqual(self.problems(), [])
+
     def test_skills_link_into_laching(self):
         git(self.root, "init", "-q")
         skills = self.root / ".agents" / "skills"
         # A copy of Laching's skill, the app's own skill, and links recorded the way git records them (mode 120000).
         self.write(".agents/skills/release-windows/SKILL.md", "# Release the Windows app, our way\n")
         self.write(".agents/skills/add-exercise/SKILL.md", "# The app's own\n")
-        for name, target in (("localization", "../../laching/tools/skills/localization"),
-                             ("voice", "../../elsewhere/voice")):
-            self.write(f".agents/skills/{name}", target)
-            blob = subprocess.run(["git", "-C", str(self.root), "hash-object", "-w", "--stdin"], input=target,
-                                  capture_output=True, encoding="utf8", check=True).stdout.strip()
-            git(self.root, "update-index", "--add", "--cacheinfo", f"120000,{blob},.agents/skills/{name}")
+        self.link(".agents/skills/localization", "../../laching/tools/skills/localization")
+        self.link(".agents/skills/voice", "../../elsewhere/voice")
         git(self.root, "add", ".agents/skills/release-windows", ".agents/skills/add-exercise")
         found = sorted(p for p in self.problems() if p.startswith(".agents"))
         self.assertEqual(len(found), 2, found)
@@ -132,6 +238,34 @@ class ConformTests(FixtureAppTestCase):
         self.assertIn(".agents/notes/release-windows.md", found[0])
         self.assertIn(".agents/skills/voice: links to ../../elsewhere/voice", found[1])
         self.assertTrue(skills.is_dir())
+
+    def test_every_agent_finds_the_skills_through_links(self):
+        git(self.root, "init", "-q")
+        self.write(".agents/skills/add-exercise/SKILL.md", "# The app's own\n")
+        self.link(".agents/skills/localization", "../../laching/tools/skills/localization")
+        git(self.root, "add", ".agents/skills/add-exercise")
+        self.assertEqual(self.problems(), [
+            ".github/skills: missing: ln -s ../.agents/skills .github/skills",
+            ".junie/skills: missing: ln -s ../.agents/skills .junie/skills",
+            ".claude/skills/add-exercise: missing: ln -s ../../.agents/skills/add-exercise .claude/skills/add-exercise",
+            ".claude/skills/localization: missing: ln -s ../../.agents/skills/localization .claude/skills/localization"])
+
+        self.link(".github/skills", "../.agents/skills")
+        self.link(".junie/skills", "../.agents/skills/")
+        self.link(".claude/skills/add-exercise", "../../.agents/skills/add-exercise")
+        self.link(".claude/skills/localization", "../../.agents/skills/localization")
+        self.write(".claude/skills/claude-only/SKILL.md", "# Claude Code's alone\n")
+        self.assertEqual(self.problems(), [])
+
+        self.link(".github/skills", "../skills")
+        git(self.root, "update-index", "--force-remove", ".claude/skills/add-exercise")
+        (self.root / ".claude/skills/add-exercise").unlink()
+        self.write(".claude/skills/add-exercise/SKILL.md", "# A copy\n")
+        git(self.root, "add", ".claude/skills/add-exercise")
+        self.assertEqual(self.problems(), [
+            ".github/skills: links to ../skills, not ../.agents/skills",
+            ".claude/skills/add-exercise: a folder of its own: make it a link (ln -s ../../.agents/skills/add-exercise "
+            ".claude/skills/add-exercise)"])
 
     def test_store_microsoft_as_the_schema_wants_it(self):
         self.edit_config(lambda data: data["store"].update(microsoft={"screenshotCount": 8, "publisher": "Fixture Studio"}))

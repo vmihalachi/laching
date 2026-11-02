@@ -4,13 +4,28 @@
 # ktlint, the l10n and voice checks and the landing build. Names come from companion.json. Idempotent and quiet when
 # everything is already there.
 #
-#   laching/tools/setup-linux.sh        (the app's scripts/setup-linux.sh execs it)
+#   laching/tools/setup-linux.sh        (the app's scripts/setup-linux.sh checks the submodule out and execs it)
 #
-# Claude Code runs it at session start in cloud sessions (CLAUDE_CODE_REMOTE=true, .claude/settings.json). It never
-# touches an existing landing node_modules, so it's safe in a shared checkout.
+# Claude Code runs it at session start in cloud sessions (CLAUDE_CODE_REMOTE=true, .claude/settings.json), and the
+# app's copilot-setup-steps.yml as a step, after actions/setup-node for Node 24. It never touches an existing landing
+# node_modules, so it's safe in a shared checkout.
 set -uo pipefail
 TOOLS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 has() { command -v "$1" >/dev/null 2>&1; }
+# Hands a variable or a PATH entry on to what runs next: the rest of a Claude Code session (SessionStart hooks get
+# CLAUDE_ENV_FILE) or the later steps of a GitHub Actions job, such as Copilot's setup (GITHUB_ENV, GITHUB_PATH).
+hand_on() {
+  export "$1=$2"
+  [ -n "${CLAUDE_ENV_FILE:-}" ] && echo "export $1=\"$2\"" >>"$CLAUDE_ENV_FILE"
+  [ -n "${GITHUB_ENV:-}" ] && echo "$1=$2" >>"$GITHUB_ENV"
+  return 0
+}
+add_path() {
+  export PATH="$1:$PATH"
+  [ -n "${CLAUDE_ENV_FILE:-}" ] && echo "export PATH=\"$1:\$PATH\"" >>"$CLAUDE_ENV_FILE"
+  [ -n "${GITHUB_PATH:-}" ] && echo "$1" >>"$GITHUB_PATH"
+  return 0
+}
 has python3 || { echo "error: python3 is required (the tools are Python)" >&2; exit 1; }
 eval "$(python3 "$TOOLS/companion.py" env)" || exit 1
 cd "$ROOT"
@@ -36,11 +51,9 @@ if [ -n "$WINDOWS_DIR" ]; then
       echo "warning: .NET install failed; dotnet test and dotnet format won't run" >&2
   fi
   if [ -x "$HOME/.dotnet/dotnet" ]; then
-    export DOTNET_ROOT="$HOME/.dotnet" PATH="$HOME/.dotnet:$PATH"
-    # Hand PATH to the rest of a Claude Code session (SessionStart hooks get CLAUDE_ENV_FILE).
-    if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
-      echo "export DOTNET_ROOT=\"$HOME/.dotnet\" PATH=\"$HOME/.dotnet:\$PATH\" DOTNET_CLI_TELEMETRY_OPTOUT=1" >>"$CLAUDE_ENV_FILE"
-    fi
+    hand_on DOTNET_ROOT "$HOME/.dotnet"
+    hand_on DOTNET_CLI_TELEMETRY_OPTOUT 1
+    add_path "$HOME/.dotnet"
   fi
   tests="$WINDOWS_DIR/$WINDOWS_CORE_TESTS/$WINDOWS_CORE_TESTS.csproj"
   [ -n "$WINDOWS_CORE_TESTS" ] && [ -f "$tests" ] && has dotnet && dotnet restore "$tests" -v q --nologo >/dev/null 2>&1
@@ -66,10 +79,7 @@ if [ -n "$ANDROID_DIR" ]; then
       curl -fsSL "https://github.com/pinterest/ktlint/releases/download/1.8.0/ktlint" -o "$HOME/.local/bin/ktlint" &&
       chmod +x "$HOME/.local/bin/ktlint" || echo "warning: ktlint install failed; the Kotlin style check won't run" >&2
   fi
-  if ! has ktlint && [ -x "$HOME/.local/bin/ktlint" ]; then
-    export PATH="$HOME/.local/bin:$PATH"
-    [ -n "${CLAUDE_ENV_FILE:-}" ] && echo "export PATH=\"$HOME/.local/bin:\$PATH\"" >>"$CLAUDE_ENV_FILE"
-  fi
+  has ktlint || [ ! -x "$HOME/.local/bin/ktlint" ] || add_path "$HOME/.local/bin"
 fi
 
 # Node 24 and the landing dependencies, which bring its build tool.

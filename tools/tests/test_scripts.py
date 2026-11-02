@@ -489,6 +489,39 @@ while not (state / "killed").exists():
         self.assertIn("skip  ktlint: brew install ktlint, or setup-linux.sh", skipped.stdout)
         self.assertIn("skip  gradlew :core:test: needs android/gradlew and a JDK 17 (setup-linux.sh)", skipped.stdout)
 
+    @unittest.skipIf(WINDOWS, "the fakes are sh scripts")
+    def test_setup_linux_hands_its_tools_on_to_the_next_steps(self):
+        self.android_config(extra_shot=False)
+        git(self.root, "init", "-q")
+        home = self.root / "home"
+        # An earlier run's SDK, which answers only the version check.
+        for tool, body in ((home / ".dotnet" / "dotnet", '[ "$1" = --list-sdks ] && echo "10.0.100 [/x]"; exit 0\n'),
+                           (home / ".local" / "bin" / "ktlint", "")):
+            tool.parent.mkdir(parents=True)
+            tool.write_text("#!/bin/sh\n" + body, "utf8")
+            tool.chmod(0o755)
+        # Everything already there: no download, no apt-get.
+        self.fake("dotnet", 'echo "10.0.100 [/x]"\n')
+        self.fake("java", 'echo \'openjdk version "17.0.1"\' >&2\n')
+        self.fake("curl", "exit 1\n")
+        self.fake("node", "echo v24.0.0\n")
+        files = {name: self.root / name.lower() for name in ("CLAUDE_ENV_FILE", "GITHUB_ENV", "GITHUB_PATH")}
+        # $PATH without the folders that hold a real ktlint (Homebrew's, on the maintainer's Mac).
+        without = [f for f in os.environ["PATH"].split(os.pathsep) if not (Path(f) / "ktlint").exists()]
+        path = os.pathsep.join([str(self.bin), str(Path(sys.executable).parent), *without])
+        done = self.run_script("setup-linux.sh", env={"HOME": str(home), "PATH": path,
+                                                      **{name: str(file) for name, file in files.items()}})
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("Installing", done.stdout)
+        # ~/.dotnet comes first on $PATH now: its dotnet (silent here) answers.
+        self.assertRegex(done.stdout, r"Linux setup done: , node v24\.0\.0, java 17\.0\.1")
+        claude = files["CLAUDE_ENV_FILE"].read_text("utf8")
+        self.assertIn(f'export DOTNET_ROOT="{home}/.dotnet"', claude)
+        self.assertIn(f'export PATH="{home}/.local/bin:$PATH"', claude)
+        self.assertEqual(files["GITHUB_ENV"].read_text("utf8"),
+                         f"DOTNET_ROOT={home}/.dotnet\nDOTNET_CLI_TELEMETRY_OPTOUT=1\n")
+        self.assertEqual(files["GITHUB_PATH"].read_text("utf8"), f"{home}/.dotnet\n{home}/.local/bin\n")
+
     def test_verify_runs_what_the_paths_need(self):
         result = self.run_script("verify.sh", "--fast", "--", "conformance/phrases.json")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

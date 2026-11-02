@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for tools/windows/: check-winui.py's rules, assets.py's images from the fixture app's icon, smoke-package.ps1's
-package check and the PowerShell scripts parsing (where PowerShell is installed), companion.targets as MSBuild XML."""
+package check and the PowerShell scripts parsing (where PowerShell is installed), companion.targets as MSBuild XML,
+dotnet-sdk.ps1's answer and the workflows that run it."""
 
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "windows"))
 import assets  # noqa: E402
-from support import TOOLS, fixture_app, git  # noqa: E402
+from support import REPO, TOOLS, fixture_app, git  # noqa: E402
 
 WINDOWS = TOOLS / "windows"
 CHECK_WINUI = WINDOWS / "check-winui.py"
@@ -192,6 +193,25 @@ class TargetsTests(unittest.TestCase):
         self.assertIn("CompanionKeepVoiceOutOfPri", targets)
 
 
+class DotnetSdkTests(unittest.TestCase):
+    # The check exists once: every workflow that sets up .NET on a GitHub-hosted Windows runner asks the script first.
+    def test_the_workflows_run_the_one_check(self):
+        workflows = REPO / ".github/workflows"
+        for name, run in (("dotnet.yml", "pwsh tools/windows/dotnet-sdk.ps1"),
+                          ("web.yml", "pwsh ../tools/windows/dotnet-sdk.ps1"),
+                          ("release.yml", "pwsh tools/windows/dotnet-sdk.ps1"),
+                          ("windows-app.yml", 'pwsh "${{ inputs.laching-path }}/tools/windows/dotnet-sdk.ps1"'),
+                          ("windows-release.yml", 'pwsh "${{ inputs.laching-path }}/tools/windows/dotnet-sdk.ps1"')):
+            with self.subTest(workflow=name):
+                text = (workflows / name).read_text("utf8")
+                self.assertIn("        id: sdk\n", text)
+                self.assertIn(f"        run: {run}\n", text)
+                self.assertIn("steps.sdk.outputs.use != 'true'", text)
+        for workflow in sorted(workflows.glob("*.yml")):
+            with self.subTest(copy=workflow.name):
+                self.assertNotIn("releases-index", workflow.read_text("utf8"))
+
+
 @unittest.skipUnless(POWERSHELL, "needs PowerShell")
 class PowerShellTests(unittest.TestCase):
     def powershell(self, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
@@ -291,6 +311,28 @@ class PowerShellTests(unittest.TestCase):
                     f"'{script}', [ref]$null, [ref]$errors); $errors | ForEach-Object {{ $_.ToString() }}"))
                 self.assertEqual(done.returncode, 0, done.stderr)
                 self.assertEqual(done.stdout.strip(), "")
+
+    def test_dotnet_sdk_uses_the_image_in_the_newest_band(self):
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            output = folder / "output"
+
+            def ask(image: str | None, newest: str) -> str:
+                # A fake dotnet first on PATH: it prints `image`, or fails as one that can't run here does.
+                (folder / "dotnet").write_text(f"#!/bin/sh\necho {image}\n" if image else "#!/bin/sh\nexit 1\n")
+                (folder / "dotnet").chmod(0o755)
+                (folder / "dotnet.cmd").write_text(f"@echo {image}\n" if image else "@exit /b 1\n")
+                output.write_text("")
+                env = {**os.environ, "PATH": f"{folder}{os.pathsep}{os.environ['PATH']}", "GITHUB_OUTPUT": str(output)}
+                done = self.powershell("-File", str(WINDOWS / "dotnet-sdk.ps1"), "-Newest", newest, env=env)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                return output.read_text().strip()
+
+            self.assertEqual(ask("10.0.105", "10.0.111"), "use=true", "a patch behind in the newest band")
+            self.assertEqual(ask("10.0.111", "10.0.111"), "use=true")
+            self.assertEqual(ask("10.0.105", "10.0.201"), "use=false", "a band behind")
+            self.assertEqual(ask("9.0.306", "10.0.111"), "use=false", "not .NET 10")
+            self.assertEqual(ask(None, "10.0.111"), "use=false", "no SDK that runs here")
 
     def package(self, folder: Path, *names: str) -> Path:
         manifest = ('<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">'

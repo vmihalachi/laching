@@ -26,12 +26,13 @@ version or tags.
 Nothing remote is written until everything that ships has been tested and packed. The plan job bumps in its runner and
 runs `scripts/verify.sh --version`; when NuGet ships, the core and windows jobs test and pack the six packages at X.Y.Z
 from that same bumped tree, when the web packages ship the web job tests (against a postgres service) and packs them,
-and the landing job packs `@laching/landing`. Only then does the tag job push the
-`X.Y.Z: release` commit and its `vX.Y.Z` tag to `master`, in one atomic push onto the commit that was planned (if
-`master` moved meanwhile it pushes nothing: dispatch again), and start the site's deploy. A red test or a refused push
-therefore spends no tag. After the tag, `npm` publishes the landing and `publish` pushes the packages through Trusted
-Publishing and makes the GitHub release: GitHub's notes from the merged pull requests' titles (*Breaking* first,
-`.github/release.yml`) and a *Packages* list of what shipped. If either fails, re-run that job.
+and the landing job packs `@laching/landing`. On every release the swift and kotlin jobs run `swift.yml` and
+`kotlin.yml` (the vectors check included) on the planned commit, and the tag waits for both green. Only then does the
+tag job push the `X.Y.Z: release` commit and its `vX.Y.Z` tag to `master`, in one atomic push onto the commit that was
+planned (if `master` moved meanwhile it pushes nothing: dispatch again), and start the site's deploy. A red test or a
+refused push therefore spends no tag. After the tag, `npm` publishes the landing and `publish` pushes the packages
+through Trusted Publishing and makes the GitHub release: GitHub's notes from the merged pull requests' titles
+(*Breaking* first, `.github/release.yml`) and a *Packages* list of what shipped. If either fails, re-run that job.
 
 By hand, from a checkout with its tags (`git fetch --tags`; `plan` reads the labels with `gh`, or takes
 `--bump patch|minor|major`):

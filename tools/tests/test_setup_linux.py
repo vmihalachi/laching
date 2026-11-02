@@ -165,8 +165,9 @@ class SetupLinuxTests(FixtureAppTestCase):
         self.assertTrue(os.access(self.home / ".local/bin/ktlint", os.X_OK))
         self.assertTrue((self.root / "landing/node_modules").is_dir())
         exports = self.exports()
-        self.assertIn(f'export DOTNET_ROOT="{home}/.dotnet" PATH="{home}/.dotnet:$PATH" DOTNET_CLI_TELEMETRY_OPTOUT=1',
-                      exports)
+        for line in (f'export DOTNET_ROOT="{home}/.dotnet"', 'export DOTNET_CLI_TELEMETRY_OPTOUT="1"',
+                     f'export PATH="{home}/.dotnet:$PATH"'):
+            self.assertIn(line, exports)
         self.assertIn(f'export PATH="{home}/.local/bin:$PATH"', exports)
         self.assertEqual(first.stdout.splitlines(), [
             "Installing the .NET 10 SDK into ~/.dotnet",
