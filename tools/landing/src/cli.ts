@@ -36,20 +36,32 @@ export async function main(
   const [command, ...rest] = args;
   let configFile: string | undefined;
   const positional: string[] = [];
+  let unknown = false;
   for (let index = 0; index < rest.length; index++) {
-    if (rest[index] === "--config") configFile = rest[++index];
-    else positional.push(rest[index]!);
+    const arg = rest[index]!;
+    if (arg === "--config") configFile = rest[++index] ?? "";
+    else if (arg.startsWith("--config=")) configFile = arg.slice("--config=".length);
+    else if (arg.startsWith("-")) unknown = true;
+    else positional.push(arg);
   }
-  if (command !== "check" || positional.length > 1 || (rest.includes("--config") && !configFile)) {
+  if (command !== "check" || unknown || positional.length > 1 || configFile === "") {
     print(usage);
     return 2;
   }
-  const loaded = await loadConfigFromFile(
-    { command: "build", mode: "production" },
-    configFile && resolve(cwd, configFile),
-    cwd,
-    "silent",
-  );
+  let loaded: Awaited<ReturnType<typeof loadConfigFromFile>>;
+  try {
+    loaded = await loadConfigFromFile(
+      { command: "build", mode: "production" },
+      configFile && resolve(cwd, configFile),
+      cwd,
+      "silent",
+    );
+  } catch (error) {
+    print(
+      `Can't load ${configFile ?? "the Vite config"}: ${(error as Error).message.split("\n")[0]}`,
+    );
+    return 2;
+  }
   if (!loaded) {
     print(`No Vite config in ${cwd}.`);
     return 2;

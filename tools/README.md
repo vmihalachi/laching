@@ -370,7 +370,9 @@ set up as `store/google-api-setup.md` says).
 ## `landing/`
 
 `@laching/landing`, an npm package (Node 24): a landing page's localized pages, legal pages, sitemap, `_headers` and
-social cards as Vite plugins. Published to npm by `release.yml`; the app's landing repository depends on it by version.
+social cards as Vite plugins, and `laching-landing check`, an offline check of the built site (links, hreflang, the
+legal pages; `checkLanding` as a function). Published to npm by `release.yml`; the app's landing repository depends on
+it by version.
 
 ## `hooks/hook.py`
 
