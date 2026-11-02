@@ -66,15 +66,19 @@ What each tool does: [`tools/README.md`](../tools/README.md).
 2. **`companion.json`** at the app's root, every section the app has (see the schema and the drafts in
    `tools/tests/*.companion.json`). Check it: `python3 laching/tools/companion.py validate`.
 
-3. **Two-line wrappers**, so the documented commands keep working, e.g. `scripts/verify.sh`:
+3. **Three-line wrappers**, so the documented commands keep working, e.g. `scripts/verify.sh`:
 
    ```sh
    #!/bin/sh
-   exec "$(dirname "$0")/../laching/tools/verify.sh" "$@"
+   export COMPANION_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+   exec "$COMPANION_ROOT/laching/tools/verify.sh" "$@"
    ```
 
-   and the same for `setup-linux.sh`, `conformance.sh`, `screenshots.sh`, `check-layout.sh`, `install-dev.sh` (the scheme's post-action);
-   Python tools are called directly (`python3 laching/tools/l10n.py status`).
+   and the same for `conformance.sh`, `screenshots.sh`, `check-layout.sh`, `install-dev.sh` (the scheme's post-action);
+   `setup-linux.sh` also checks the submodule out first. Python tools are called directly
+   (`python3 laching/tools/l10n.py status`). Each wrapper sets `COMPANION_ROOT`, forwards its arguments and keeps the
+   exit status, or `companion.py conform` fails; the templates for `sh`, Python and PowerShell, and `setup-linux.sh`'s:
+   [*Staying on Laching's tools*](../tools/README.md#staying-on-lachings-tools).
 
 4. **The hook.** Claude Code, `.claude/settings.json`:
 
@@ -103,12 +107,17 @@ What each tool does: [`tools/README.md`](../tools/README.md).
    inside GitHub Actions only). What the hook guards and refuses:
    [`tools/README.md`, *`hooks/hook.py`*](../tools/README.md#hookshookpy).
 
-5. **Skills.** Symlink the generic ones next to the app's own:
+5. **Skills.** Symlink the generic ones next to the app's own, then link every skill where Claude Code, Copilot and
+   Junie look for them:
 
    ```sh
    for s in localization add-phrase add-setting conformance voice windows-port release-mac release-ios release-windows review-invariants landing-copy; do
      ln -s "../../laching/tools/skills/$s" ".agents/skills/$s"
    done
+   mkdir -p .claude/skills .github .junie
+   for s in .agents/skills/*; do ln -s "../../$s" ".claude/skills/${s##*/}"; done   # again for each new skill
+   ln -s ../.agents/skills .github/skills
+   ln -s ../.agents/skills .junie/skills
    ```
 
    What they read from the app: [`tools/README.md`, *`skills/`*](../tools/README.md#skills). A skill of Laching's is

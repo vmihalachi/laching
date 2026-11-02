@@ -6,6 +6,8 @@ conform fails, one line per problem, when the app:
     store-screenshots.*, verify.sh, ...: every script under tools/, by name without its extension, and the names the
     tools replaced, such as store-packages.ps1) that isn't a thin wrapper: at most WRAPPER_LINES lines of code (comments
     and blank lines aside) that name `<laching.path>/tools/`;
+  - has a wrapper that doesn't name its own tool, set COMPANION_ROOT, forward every argument and keep the exit status
+    (WRAPPER_FORM), or a setup-linux.sh that runs Laching's before checking out the submodule a fresh clone lacks;
   - builds or bundles its Store packages in a workflow of its own (GenerateAppxPackageOnBuild, makeappx, smoke-package)
     instead of calling Laching's reusable windows-release.yml and windows-app.yml, or calls any shared workflow at another release than
     the one it pins (`laching.tag`); with `windows.app`, it must call both;
@@ -14,6 +16,8 @@ conform fails, one line per problem, when the app:
     setup-linux.sh (which Claude Code's cloud sessions run too);
   - has a skill in .agents/skills named like one of tools/skills that isn't a link into `<laching.path>/tools/skills/`
     (the app's own words for a skill go in .agents/notes/<skill>.md);
+  - lacks a link Claude Code, Copilot or Junie finds the skills through: .claude/skills/<skill> to
+    ../../.agents/skills/<skill> for each skill, and .github/skills and .junie/skills to ../.agents/skills;
   - has a `store.microsoft` the schema refuses.
 `conform.allow` in companion.json lists the files that are the app's own on purpose, each with why.
 """
@@ -43,16 +47,35 @@ CALLERS = {"core": "core-linux", "regenerate-vectors": "vectors-linux"}
 # Copilot's setup job can't call a reusable workflow, so it runs the setup Claude Code's cloud sessions run.
 COPILOT_SETUP = "copilot-setup-steps"
 SETUP_LINUX = re.compile(r"setup-linux\.sh\b")
+# What a wrapper does besides calling its tool, by kind: (what's missing, the code that does it). It sets the app's root,
+# so the tool works from any folder, forwards every argument and keeps the exit status.
+WRAPPER_FORM = {
+    ".sh": (("set COMPANION_ROOT", r"COMPANION_ROOT="), ('forward its arguments ("$@")', r'"\$@"'),
+            ("keep the exit status (exec)", r"(^|[\s;&|])exec\s")),
+    # runpy.run_path(..., run_name="__main__") runs the tool in this process: sys.argv[1:] and its SystemExit carry over.
+    ".py": (("set COMPANION_ROOT", r"COMPANION_ROOT"),
+            ("forward its arguments (sys.argv[1:])", r"sys\.argv\[1:\]|runpy\.run_path\("),
+            ("keep the exit status (os.execv, sys.exit(subprocess.call(...)) or runpy.run_path)",
+             r"os\.exec\w*\(|(sys\.exit|SystemExit)\((subprocess\.call\(|.*\.returncode)|runpy\.run_path\(")),
+    ".ps1": (("set $env:COMPANION_ROOT", r"\$env:COMPANION_ROOT\s*="), ("forward its arguments (@args)", r"@args\b"),
+             ("keep the exit status (exit $LASTEXITCODE)", r"exit\s+\$LASTEXITCODE")),
+}
+# setup-linux.sh's first step in a clone made without its submodules.
+BOOTSTRAP = re.compile(r"\bgit\b.*\bsubmodule\s+update\b.*--init")
+
+
+def tool_paths(tools: Path = TOOLS) -> list[str]:
+    """Every tool script's path under tools/ (tests, skills and the landing package aside)."""
+    return [path.relative_to(tools).as_posix() for path in sorted(tools.rglob("*"))
+            if path.suffix in SCRIPT_SUFFIXES and path.relative_to(tools).parts[0] not in ("tests", "skills", "landing")
+            and path.is_file()]
 
 
 def tool_names(tools: Path = TOOLS) -> dict[str, str]:
-    """Every tool script's name without its extension → its path under tools/ (tests, skills and the landing package
-    aside), plus the retired names."""
+    """Every tool script's name without its extension → its path under tools/, plus the retired names."""
     names = dict(RETIRED)
-    for path in sorted(tools.rglob("*")):
-        parts = path.relative_to(tools).parts
-        if path.suffix in SCRIPT_SUFFIXES and parts[0] not in ("tests", "skills", "landing") and path.is_file():
-            names.setdefault(path.stem, path.relative_to(tools).as_posix())
+    for path in tool_paths(tools):
+        names.setdefault(Path(path).stem, path)
     return names
 
 
@@ -88,15 +111,36 @@ def code_lines(text: str, suffix: str) -> list[str]:
     return lines
 
 
+def flat(text: str) -> str:
+    """The script with forward slashes and os.path.join's "laching", "tools" as laching/tools."""
+    return re.sub(r"""["']\s*,\s*["']""", "/", text.replace("\\", "/"))
+
+
 def delegates(text: str, laching: str) -> bool:
     """Whether a script names Laching's tools folder: laching/tools/... with either slash, or os.path.join's
     "laching", "tools"."""
-    flat = re.sub(r"""["']\s*,\s*["']""", "/", text.replace("\\", "/"))
-    return f"{laching.strip('/')}/tools/" in flat
+    return f"{laching.strip('/')}/tools/" in flat(text)
+
+
+def form_problems(code: list[str], suffix: str, tool: str, laching: str) -> list[str]:
+    """What a wrapper's code (code_lines) leaves out of WRAPPER_FORM, its own tool's name first."""
+    text = "\n".join(code)
+    stem = re.escape(Path(tool).stem)
+    missing = [] if re.search(rf"{re.escape(laching.strip('/'))}/tools/([\w.-]+/)*{stem}\.(py|sh|ps1)\b", flat(text)) \
+        else [f"call {tool}"]
+    return missing + [what for what, pattern in WRAPPER_FORM[suffix] if not re.search(pattern, text, re.MULTILINE)]
+
+
+def bootstrapped(code: list[str], laching: str) -> bool:
+    """Whether setup-linux.sh checks out the submodule no later than the first line that names Laching's tools."""
+    first = next((i for i, line in enumerate(code) if delegates(line, laching)), len(code))
+    return any(BOOTSTRAP.search(line) for line in code[:first + 1])
 
 
 def wrapper_problems(config: companion.Config, files: list[str], allowed: set[str]) -> list[str]:
     names = tool_names()
+    # screenshots.ps1 wraps windows/screenshots.ps1, not screenshots.sh.
+    alike = {Path(path).name: path for path in reversed(tool_paths())}
     laching = config.get("laching.path", "laching")
     problems = []
     for name in files:
@@ -113,14 +157,23 @@ def wrapper_problems(config: companion.Config, files: list[str], allowed: set[st
         except (OSError, UnicodeDecodeError):
             continue
         # store-listing/microsoft/push.py is push-microsoft.py's copy, not push.py's (google/push.py push-google.py's).
-        tool = f"{laching}/tools/{names.get(f'{path.stem}-{path.parent.name}', names[path.stem])}"
+        own = names.get(f"{path.stem}-{path.parent.name}") or alike.get(path.name) or names[path.stem]
+        tool = f"{laching}/tools/{own}"
         if not delegates(text, laching):
             problems.append(f"{name}: a copy of {tool}: delete it and run the tool, make it a wrapper that calls it, "
                             "or, when it is the app's own and not a copy, list it in conform.allow with why")
-        elif len(code_lines(text, path.suffix)) > WRAPPER_LINES:
-            problems.append(f"{name}: {len(code_lines(text, path.suffix))} lines of code around {tool}: a wrapper only "
+        elif len(code := code_lines(text, path.suffix)) > WRAPPER_LINES:
+            problems.append(f"{name}: {len(code)} lines of code around {tool}: a wrapper only "
                             f"calls the tool (at most {WRAPPER_LINES}); move the rest into the tool, or into "
                             "conform.allow with why")
+        elif path.suffix in WRAPPER_FORM and (missing := form_problems(code, path.suffix, tool, laching)):
+            said = missing[0] if len(missing) == 1 else f"{', '.join(missing[:-1])} or {missing[-1]}"
+            problems.append(f"{name}: a wrapper of {tool} that doesn't {said}: see the templates in "
+                            f"{laching}/tools/README.md, *Staying on Laching's tools*")
+        if path.stem == "setup-linux" and delegates(text, laching) and not bootstrapped(code_lines(text, path.suffix), laching):
+            problems.append(f"{name}: runs {tool} before checking out {laching}/, which a clone made without its "
+                            f"submodules lacks: check it out first ([ -f ... ] || git -C \"$COMPANION_ROOT\" submodule "
+                            f"update --init {laching})")
     return problems
 
 
@@ -213,6 +266,38 @@ def skill_problems(config: companion.Config) -> list[str]:
     return problems
 
 
+def present(root: Path, name: str) -> bool:
+    """Whether the app has `name`, as a file, folder or link, on disk or in git."""
+    path = root / name
+    if path.exists() or path.is_symlink():
+        return True
+    done = companion.git(root, "ls-files", "--", name)
+    return done.returncode == 0 and bool(done.stdout.strip())
+
+
+def skill_link_problems(config: companion.Config, allowed: set[str]) -> list[str]:
+    """The links the agents find .agents/skills through: per skill from .claude/skills, the whole folder from
+    .github/skills (Copilot) and .junie/skills."""
+    folder = config.root / ".agents" / "skills"
+    if not folder.is_dir():
+        return []
+    want = {name: "../.agents/skills" for name in (".github/skills", ".junie/skills")}
+    for entry in sorted(folder.iterdir()):
+        if entry.is_dir() or entry.is_symlink() or link_target(config.root, f".agents/skills/{entry.name}"):
+            want[f".claude/skills/{entry.name}"] = f"../../.agents/skills/{entry.name}"
+    problems = []
+    for name, target in want.items():
+        if name in allowed:
+            continue
+        if not present(config.root, name):
+            problems.append(f"{name}: missing: ln -s {target} {name}")
+        elif (found := link_target(config.root, name)) is None:
+            problems.append(f"{name}: a folder of its own: make it a link (ln -s {target} {name})")
+        elif found.rstrip("/") != target:
+            problems.append(f"{name}: links to {found}, not {target}")
+    return problems
+
+
 def store_problems(config: companion.Config) -> list[str]:
     microsoft = config.get("store.microsoft")
     if microsoft is None:
@@ -227,7 +312,8 @@ def problems(config: companion.Config) -> list[str]:
     allowed = {entry["path"] for entry in config.get("conform.allow", [])}
     files = tracked(config.root)
     return (wrapper_problems(config, files, allowed) + workflow_problems(config, files)
-            + shared_workflow_problems(config, files, allowed) + skill_problems(config) + store_problems(config))
+            + shared_workflow_problems(config, files, allowed) + skill_problems(config)
+            + skill_link_problems(config, allowed) + store_problems(config))
 
 
 def check(config: companion.Config) -> int:

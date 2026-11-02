@@ -4,7 +4,7 @@
 # ktlint, the l10n and voice checks and the landing build. Names come from companion.json. Idempotent and quiet when
 # everything is already there.
 #
-#   laching/tools/setup-linux.sh        (the app's scripts/setup-linux.sh execs it)
+#   laching/tools/setup-linux.sh        (the app's scripts/setup-linux.sh checks the submodule out and execs it)
 #
 # Claude Code runs it at session start in cloud sessions (CLAUDE_CODE_REMOTE=true, .claude/settings.json), and the
 # app's copilot-setup-steps.yml as a step, after actions/setup-node for Node 24. It never touches an existing landing

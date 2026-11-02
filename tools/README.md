@@ -156,6 +156,41 @@ fail when the app drifts from the tools (each rule: `conform.py`'s docstring):
   `setup-linux.sh`, ..., and `store-packages.ps1`, which `store-release.ps1` replaced) is a thin wrapper: at most 12 lines
   of code that name `laching/tools/`. One that is the app's own on purpose (a conformance script writing the app's own
   vectors) goes in `conform.allow`, with why.
+- **Wrappers of one form.** A wrapper calls the tool it's named after, sets `COMPANION_ROOT` to the app's root (the
+  tools find the app from it, not from the working directory, so a wrapper run from anywhere checks the right app),
+  forwards every argument and keeps the tool's exit status, so a failing check fails the caller. The templates, for a
+  wrapper in `scripts/` (one more `..` per folder deeper):
+
+  ```sh
+  #!/bin/sh
+  export COMPANION_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+  exec "$COMPANION_ROOT/laching/tools/verify.sh" "$@"
+  ```
+
+  ```python
+  import os, subprocess, sys
+  root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+  os.environ["COMPANION_ROOT"] = root
+  sys.exit(subprocess.call([sys.executable, os.path.join(root, "laching", "tools", "l10n.py"), *sys.argv[1:]]))
+  ```
+
+  ```powershell
+  $env:COMPANION_ROOT = (Resolve-Path "$PSScriptRoot/..").Path
+  try { & "$PSScriptRoot/../laching/tools/windows/screenshots.ps1" @args } finally { $env:COMPANION_ROOT = $null }
+  exit $LASTEXITCODE
+  ```
+
+  (`os.execv` and `runpy.run_path(..., run_name="__main__")` also pass for Python, but on Windows `os.execv` returns
+  before the tool ends and loses its status; the PowerShell `finally` keeps the variable out of the rest of an
+  interactive session.) `scripts/setup-linux.sh` runs first in a fresh clone, often one made without its submodules, so
+  it checks Laching out before calling it:
+
+  ```sh
+  #!/bin/sh
+  export COMPANION_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+  [ -f "$COMPANION_ROOT/laching/tools/setup-linux.sh" ] || git -C "$COMPANION_ROOT" submodule update --init laching
+  exec "$COMPANION_ROOT/laching/tools/setup-linux.sh" "$@"
+  ```
 - **The reusable workflows**, at the release the app pins: an app with `windows.app` calls both
   `windows-release.yml` and `windows-app.yml`, and no workflow of its own publishes, smoke-tests or bundles Store
   packages. Every call of a Laching reusable workflow, including `macos-app.yml`, must name the pinned release. An
@@ -163,6 +198,9 @@ fail when the app drifts from the tools (each rule: `conform.py`'s docstring):
   `copilot-setup-steps.yml` runs `scripts/setup-linux.sh` ([Linux checks](#linux-checks)).
 - **Linked skills.** A skill in `.agents/skills` named like one of `tools/skills` is a link to
   `../../laching/tools/skills/<name>`; the app's own words for it go in `.agents/notes/<name>.md`.
+- **Skill links for every agent.** With an `.agents/skills` folder, `.claude/skills/<name>` is a link to
+  `../../.agents/skills/<name>` for each skill in it (Claude Code), and `.github/skills` (Copilot) and `.junie/skills`
+  (Junie) are links to `../.agents/skills`; a skill only in `.claude/skills` is Claude Code's alone and passes.
 - **`store.microsoft`** is the schema's shape: `shots` and `publisher`, and `storeId` for the submission API.
 
 `companion.py apps` (or `bump-apps.sh --report`), in the Laching checkout, lists the apps next to it:
@@ -405,8 +443,9 @@ says when a platform, store or purchase changes, then `laching-landing check`).
 
 They read the app's prose from its `DESIGN.md` (the character's voice, the glossary, the palette) and from
 `.agents/notes/<skill>.md` when present (voices chosen, the team ID, who reviews which language);
-`review-invariants` adds the app's `.agents/review-appendix.md` to its checklist. Linking them into an app:
-[`docs/getting-started.md`](../docs/getting-started.md), step 5.
+`review-invariants` adds the app's `.agents/review-appendix.md` to its checklist. Linking them into an app, and the
+links Claude Code, Copilot and Junie find the skills through: [`docs/getting-started.md`](../docs/getting-started.md),
+step 5.
 
 ## Mac apps
 
@@ -572,7 +611,8 @@ app builds, packages and checks the same way. Its `.csproj` sets its own propert
   `windows/scripts/screenshots.ps1` and `smoke-package.ps1`, e.g.
 
   ```powershell
-  & "$PSScriptRoot/../../laching/tools/windows/screenshots.ps1" @args
+  $env:COMPANION_ROOT = (Resolve-Path "$PSScriptRoot/../..").Path
+  try { & "$PSScriptRoot/../../laching/tools/windows/screenshots.ps1" @args } finally { $env:COMPANION_ROOT = $null }
   exit $LASTEXITCODE
   ```
 
