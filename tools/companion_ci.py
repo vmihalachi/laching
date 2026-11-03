@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import TextIO
 
 import companion
 
@@ -39,15 +40,30 @@ def run(config: companion.Config, commands: list[Command], log_name: str) -> int
         for cwd, command in commands:
             print(f"::group::{Path(command[0]).name} {' '.join(command[1:])}", flush=True)
             try:
-                with subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE,
-                                      stderr=subprocess.STDOUT, encoding="utf8", errors="replace") as process:
-                    for line in process.stdout:
-                        print(line, end="", flush=True)
-                        log.write(line)
-                        log.flush()
-                    code = process.wait()
+                code = stream(command, cwd, env, log)
             finally:
                 print("::endgroup::", flush=True)
             if code:
                 return code
     return 0
+
+
+def stream(command: list[str], cwd: Path, env: dict[str, str], log: TextIO) -> int:
+    """Run one command, printing and logging its output. One that can't start (a companion.json folder that doesn't
+    exist, a program that isn't installed) is a line saying so and exit code 1, not a traceback."""
+    try:
+        process = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, encoding="utf8", errors="replace")
+    except OSError as error:
+        reason = "no such folder" if not Path(cwd).is_dir() else str(error)
+        line = f"can't run {Path(command[0]).name} in {cwd}: {reason}\n"
+        print(line, end="", flush=True)
+        log.write(line)
+        log.flush()
+        return 1
+    with process:
+        for line in process.stdout:
+            print(line, end="", flush=True)
+            log.write(line)
+            log.flush()
+        return process.wait()

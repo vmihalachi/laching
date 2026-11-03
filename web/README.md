@@ -70,11 +70,16 @@ that changed them, so it can trail Laching's tag.
 
 ## Develop
 
+From `web/`, so its `global.json` picks the SDK:
+
+```sh
+dotnet test Laching.Web.sln     # Jobs tests need PostgreSQL: LACHING_WEB_TEST_POSTGRES, or localhost:5432 postgres/postgres
+dotnet format Laching.Web.sln --verify-no-changes
+```
+
 From the repository's root:
 
 ```sh
-dotnet test web/Laching.Web.sln     # Jobs tests need PostgreSQL: LACHING_WEB_TEST_POSTGRES, or localhost:5432 postgres/postgres
-dotnet format web/Laching.Web.sln --verify-no-changes
 web/scripts/tailwind-sample.sh      # packs Laching.Web.Tailwind and builds the sample with it
 scripts/verify.sh                   # what applies to your changes, web/ included
 ```

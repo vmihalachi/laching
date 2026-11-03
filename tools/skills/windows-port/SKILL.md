@@ -13,14 +13,16 @@ companion shell (`Laching.Companion.Shell` and `Laching.Windows.Companion`, belo
 holds what's app-specific; its tests (`windows.coreTests`) replay the app's vectors. Platform differences and the
 folder map are in the app's `.agents/notes/windows-port.md` (or its parity doc).
 
-- Core and model tests run anywhere with the .NET 10 SDK: `dotnet test <windows.dir>/<windows.coreTests>` and
+- Run `dotnet` in `<windows.dir>`, never from the app's root: there the app's `global.json` picks the SDK, as in
+  `verify.sh` and CI, and a pin no installed SDK meets fails rather than falling back to the newest.
+- Core and model tests run anywhere with the .NET 10 SDK: `cd <windows.dir> && dotnet test <windows.coreTests>` and
   `<windows.appTests>`. The WinUI app's XAML compiler needs Windows. On a Mac with the Parallels Windows VM, build it
   there from your working tree, uncommitted changes included: `laching/tools/windows/vm.sh build` (x64 and ARM64;
   `verify.sh` does it too), `vm.sh screenshots <folder>` to look at the windows you changed (the PNGs land in the Mac
   folder), `vm.sh smoke` for the Native AOT package. `vm.sh status` says whether the VM is there, and exits 4 while
   another session's run uses it (a run waits for that one, naming it). Without it (Linux, a cloud session), build on
   Windows or push and run the app's Windows workflow, and say so.
-- Formatting: `dotnet format whitespace <windows.dir> --folder` (the app's `.editorconfig`).
+- Formatting: `cd <windows.dir> && dotnet format whitespace . --folder` (the app's `.editorconfig`).
 - Swift → C#: the same type and member names, PascalCased; durations as `double` seconds with a `Seconds` suffix;
   string-backed ids (`FlavorId`, `SkinId`, `PaintRole`) as record structs; `PartContent.Vector` for Swift's `.shapes`.
   The app's bank and art load from the generated JSON (`PhraseBank.Parse`, `CharacterArt.Parse`), so new phrases and
@@ -61,8 +63,9 @@ The `.csproj` imports `laching/tools/windows/companion.targets` last (Laching's 
 x64 and ARM64, Debug unpackaged and every other configuration an MSIX with Native AOT, the voices, sounds and fonts
 linked from the Mac's folders.
 
-- **Run**: `dotnet run --project <windows.dir>/<windows.app> -p:Platform=x64` (or ARM64): the Debug app, unpackaged,
-  over a mock store when `PackageIdentity.IsPackaged` is false; its settings in `LocalSettingsStore.ForApp`'s JSON file.
+- **Run**: `cd <windows.dir> && dotnet run --project <windows.app> -p:Platform=x64` (or ARM64): the Debug app,
+  unpackaged, over a mock store when `PackageIdentity.IsPackaged` is false; its settings in
+  `LocalSettingsStore.ForApp`'s JSON file.
 - **Shoot**: `laching/tools/windows/screenshots.ps1 [-Only home] [-Language it] [-Configuration Release]` (or the
   app's `windows/scripts/` wrapper). Look at every shot you touched, light and dark; `-Only` runs hidden and fast, with
   the windows inactive (`-Front` for active ones), and `-Configuration Release` shoots the Native AOT build, which is

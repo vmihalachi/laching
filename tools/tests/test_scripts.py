@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import companion  # noqa: E402
 import fonts  # noqa: E402
 from support import (  # noqa: E402
-    BASH, HERE, NO_SHELL, TOOLS, WINDOWS, FixtureAppTestCase, fixture_app, git, search_path, shell,
+    BASH, DOTNET_HOST, HERE, NO_SHELL, TOOLS, WINDOWS, FixtureAppTestCase, fixture_app, git, search_path, shell,
 )
 
 
@@ -494,8 +494,9 @@ while not (state / "killed").exists():
         self.android_config(extra_shot=False)
         git(self.root, "init", "-q")
         home = self.root / "home"
-        # An earlier run's SDK, which answers only the version check.
-        for tool, body in ((home / ".dotnet" / "dotnet", '[ "$1" = --list-sdks ] && echo "10.0.100 [/x]"; exit 0\n'),
+        # An earlier run's SDK, which answers only the version checks.
+        for tool, body in ((home / ".dotnet" / "dotnet",
+                            'case "$1" in --version) echo 10.0.101 ;; --list-sdks) echo "10.0.101 [/x]" ;; esac\n'),
                            (home / ".local" / "bin" / "ktlint", "")):
             tool.parent.mkdir(parents=True)
             tool.write_text("#!/bin/sh\n" + body, "utf8")
@@ -514,8 +515,8 @@ while not (state / "killed").exists():
                                                       **{name: str(file) for name, file in files.items()}})
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn("Installing", done.stdout)
-        # ~/.dotnet comes first on $PATH now: its dotnet (silent here) answers.
-        self.assertRegex(done.stdout, r"Linux setup done: , node v24\.0\.0, java 17\.0\.1")
+        # ~/.dotnet comes first on $PATH now: its dotnet answers.
+        self.assertRegex(done.stdout, r"Linux setup done: 10\.0\.101, node v24\.0\.0, java 17\.0\.1")
         claude = files["CLAUDE_ENV_FILE"].read_text("utf8")
         self.assertIn(f'export DOTNET_ROOT="{home}/.dotnet"', claude)
         self.assertIn(f'export PATH="{home}/.local/bin:$PATH"', claude)
@@ -679,10 +680,11 @@ while not (state / "killed").exists():
     @unittest.skipUnless(WINDOWS, "Windows builds the WinUI app itself; elsewhere it's the VM's")
     def test_verify_builds_the_winui_app_itself_on_windows(self):
         self.commit_app()
-        self.fake("dotnet", f'echo "$*" >> "{self.log}"\n')
+        self.fake("dotnet", f'echo "$PWD: $*" >> "{self.log}"\n')
         result = self.run_script("verify.sh", "--", "windows/Fixture.App/Views/HomeView.xaml")
         self.assertIn("ok    WinUI app builds (Fixture.App)", result.stdout, result.stderr)
-        self.assertIn("build ", self.log.read_text())
+        # From windows/, where its global.json picks the SDK.
+        self.assertRegex(self.log.read_text(), r"/windows: build Fixture\.App/Fixture\.App\.csproj -p:Platform=")
 
     @unittest.skipIf(WINDOWS, "on Windows verify.sh builds the WinUI app itself and never asks for the Mac's VM")
     def test_verify_builds_the_winui_app_in_the_vm_when_there_is_one(self):
@@ -709,6 +711,75 @@ case "$1" in status) echo "VM $2 exist running" ;; exec) [ "$3" = --current-user
             self.assertIn("skip  WinUI app: builds on Windows or in the Parallels VM (left alone: "
                           f"{'--no-vm' if args else 'LACHING_NO_VM=1'})", result.stdout, result.stderr)
             self.assertFalse(self.log.exists(), "the VM isn't asked")
+
+    @unittest.skipIf(WINDOWS, "the fake dotnet is an sh script")
+    def test_verify_runs_dotnet_in_the_windows_folder_so_its_global_json_picks_the_sdk(self):
+        config = self.root / "companion.json"
+        data = json.loads(config.read_text("utf8"))
+        data["windows"]["coreTests"] = "Fixture.Core.Tests"
+        config.write_text(json.dumps(data), "utf8")
+        source = self.root / "windows/Fixture.Core/Sub/A.cs"
+        source.parent.mkdir()
+        source.write_text("class A { }\n", "utf8")
+        # The host with SDK 10.0.402 installed, and Git Bash's uname: the WinUI app builds here, not in the VM.
+        self.fake("dotnet", DOTNET_HOST)
+        self.fake("uname", "echo MINGW64_NT-10.0-26100\n")
+        env = {"LOG": str(self.log), "FAKE_SDK": "10.0.402", "PROCESSOR_ARCHITECTURE": "AMD64"}
+        checks = ("dotnet format whitespace", "dotnet test (Fixture.Core.Tests)", "dotnet test (Fixture.App.Tests)",
+                  "WinUI app builds (Fixture.App)")
+
+        def verify(*args: str):
+            if self.log.exists():
+                self.log.unlink()
+            return self.run_script("verify.sh", *(args or ("--", str(source.relative_to(self.root)),
+                                                            "windows/Fixture.App/Views/HomeView.xaml")), env=env)
+
+        windows = self.root / "windows"
+        result = verify()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for check in checks:
+            self.assertIn(f"ok    {check}\n", result.stdout)
+        # From windows/, the paths relative to it: the format's workspace is the folder, its --include the file in it.
+        self.assertEqual(sorted(self.log.read_text("utf8").splitlines()), sorted([
+            f"{windows}: dotnet format whitespace . --folder --verify-no-changes --include Fixture.Core/Sub/A.cs",
+            f"{windows}: dotnet test Fixture.Core.Tests/Fixture.Core.Tests.csproj -v q --nologo",
+            f"{windows}: dotnet test Fixture.App.Tests/Fixture.App.Tests.csproj -v q --nologo",
+            f"{windows}: dotnet build Fixture.App/Fixture.App.csproj -p:Platform=x64 -v q --nologo",
+        ]))
+        # windows/global.json pins an SDK that isn't installed: every check fails, as in CI, rather than passing on the
+        # SDK the root picks.
+        pin = windows / "global.json"
+        pin.write_text('{"sdk": {"version": "10.0.999", "rollForward": "disable"}}\n', "utf8")
+        result = verify()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        for check in checks:
+            self.assertIn(f"FAIL  {check}\n", result.stdout)
+        self.assertIn("A compatible .NET SDK was not found", result.stdout)
+        # The SDK it pins is installed.
+        pin.write_text('{"sdk": {"version": "10.0.402", "rollForward": "disable"}}\n', "utf8")
+        result = verify()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for check in checks:
+            self.assertIn(f"ok    {check}\n", result.stdout)
+        # Every C# file: the folder.
+        result = verify("--all", "--fast")
+        self.assertIn("ok    dotnet format whitespace\n", result.stdout, result.stdout + result.stderr)
+        self.assertIn(f"{windows}: dotnet format whitespace . --folder --verify-no-changes",
+                      self.log.read_text("utf8").splitlines())
+
+    @unittest.skipIf(WINDOWS, "the fake dotnet is an sh script")
+    def test_verify_names_a_windows_dir_that_is_no_folder(self):
+        config = self.root / "companion.json"
+        data = json.loads(config.read_text("utf8"))
+        data["windows"]["dir"] = "win"
+        config.write_text(json.dumps(data), "utf8")
+        self.fake("dotnet", DOTNET_HOST)
+        self.fake("uname", "echo Linux\n")
+        result = self.run_script("verify.sh", "--all", "--fast", env={"LOG": str(self.log)})
+        self.assertIn("FAIL  dotnet format whitespace\n", result.stdout, result.stdout + result.stderr)
+        self.assertIn("windows.dir (win) isn't a folder: check companion.json", result.stdout)
+        self.assertNotIn("Traceback", result.stdout + result.stderr)
+        self.assertFalse(self.log.exists(), "no dotnet ran")
 
     def test_verify_reads_the_submodules_under_a_git_hook(self):
         self.commit_app()
@@ -755,6 +826,52 @@ case "$1" in status) echo "VM $2 exist running" ;; exec) [ "$3" = --current-user
         release = self.run_script("install-dev.sh", env={**env, "CONFIGURATION": "Release", "HOME": str(self.root / "h2")})
         self.assertEqual(release.returncode, 0)
         self.assertFalse((self.root / "h2").exists(), "Release builds are skipped")
+
+
+@unittest.skipIf(WINDOWS, "the fake dotnet is an sh script")
+class LachingVerifyTests(unittest.TestCase):
+    """Laching's own scripts/verify.sh, in a repository with only it and verify-lib.sh, and a C# file changed in web/."""
+
+    def test_web_dotnet_runs_in_web_so_its_global_json_picks_the_sdk(self):
+        temp = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, temp)
+        repo, fakes, log = temp / "repo", temp / "bin", temp / "calls.log"
+        for path in ("scripts/verify.sh", "tools/verify-lib.sh"):
+            (repo / path).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(TOOLS.parent / path, repo / path)
+        git(repo, "init", "-q")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", "repo")
+        web = repo / "web"
+        (web / "src").mkdir(parents=True)
+        (web / "src" / "A.cs").write_text("class A { }\n", "utf8")
+        fakes.mkdir()
+        (fakes / "dotnet").write_text("#!/bin/sh\n" + DOTNET_HOST, "utf8")
+        (fakes / "dotnet").chmod(0o755)
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        env.update(PATH=os.pathsep.join([str(fakes), env["PATH"]]), LOG=str(log), FAKE_SDK="10.0.402")
+
+        def verify():
+            if log.exists():
+                log.unlink()
+            return subprocess.run(["bash", "scripts/verify.sh"], cwd=repo, env=env, capture_output=True, encoding="utf8")
+
+        # The version strings it always compares aren't here, so the run fails on those; the web checks are what count.
+        result = verify()
+        for check in ("dotnet format whitespace (web)", "dotnet format (web)"):
+            self.assertIn(f"ok    {check}\n", result.stdout, result.stdout + result.stderr)
+        self.assertRegex(result.stdout, r"ok    dotnet build \+ test \(web(, without Jobs)?\)\n")
+        calls = log.read_text("utf8").splitlines()
+        self.assertIn(f"{web}: dotnet format whitespace . --folder --verify-no-changes", calls)
+        self.assertIn(f"{web}: dotnet format Laching.Web.sln --verify-no-changes", calls)
+        self.assertTrue([call for call in calls if call.startswith(f"{web}: dotnet test Laching.Web.sln -v q --nologo")],
+                        calls)
+        # web/global.json pins an SDK that isn't installed: refused, as in CI.
+        (web / "global.json").write_text('{"sdk": {"version": "10.0.999", "rollForward": "disable"}}\n', "utf8")
+        result = verify()
+        for check in ("dotnet format whitespace (web)", "dotnet format (web)"):
+            self.assertIn(f"FAIL  {check}\n", result.stdout, result.stdout + result.stderr)
+        self.assertRegex(result.stdout, r"FAIL  dotnet build \+ test \(web(, without Jobs)?\)\n")
 
 
 class FontsPlanTests(unittest.TestCase):

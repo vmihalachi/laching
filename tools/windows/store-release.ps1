@@ -123,7 +123,9 @@ function Find-Root {
 $root = Find-Root
 $config = Read-Companion (Join-Path $root "companion.json")
 if (-not $config.windows -or -not $config.windows.app) { throw "companion.json has no windows.app." }
-$appDir = Join-Path $root (Join-Path $config.windows.dir $config.windows.app)
+if (-not $config.windows.dir) { throw "companion.json has no windows.dir." }
+$windowsDir = Join-Path $root $config.windows.dir
+$appDir = Join-Path $windowsDir $config.windows.app
 $project = Join-Path $appDir "$($config.windows.app).csproj"
 $release = $config.windows.release
 if (-not $Platforms) { $Platforms = if ($release -and $release.platforms) { @($release.platforms) } else { @("x64", "ARM64") } }
@@ -229,7 +231,9 @@ function Format-Argument([string] $argument) {
 }
 
 # dotnet publish of one platform, started in the background so it runs while the previous package's install check does,
-# its output in <Out>/logs/publish-<name>.log. Wait-Publish waits for it and returns its .msix.
+# its output in <Out>/logs/publish-<name>.log. Wait-Publish waits for it and returns its .msix. It runs in windows.dir:
+# the host picks the SDK from the global.json nearest its working folder (or above), never the project's, so
+# <windows.dir>/global.json pins it, and an SDK it pins that isn't installed fails the publish.
 function Start-Publish($build) {
     # A trailing / and never \: a quoted argument ending in \" would swallow the quote.
     $dir = ($build.Folder -replace '\\', '/').TrimEnd('/') + "/"
@@ -241,7 +245,7 @@ function Start-Publish($build) {
     $errors = Join-Path $logs "publish-$($build.Name).err.log"
     Write-Step "== $($build.Name): publishing $version ($($build.Platform)), output in $log"
     $process = Start-Process dotnet -ArgumentList (($arguments | ForEach-Object { Format-Argument $_ }) -join " ") `
-        -RedirectStandardOutput $log -RedirectStandardError $errors -NoNewWindow -PassThru
+        -WorkingDirectory $windowsDir -RedirectStandardOutput $log -RedirectStandardError $errors -NoNewWindow -PassThru
     $null = $process.Handle # held, so its exit code can be read once it has exited
     [pscustomobject]@{ Build = $build; Process = $process; Log = $log; Errors = $errors; From = $runWatch.Elapsed }
 }

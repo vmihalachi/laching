@@ -3,7 +3,8 @@
 sends, the paths the VM sees, the PowerShell it runs for each command, the one line it prints when there's no VM
 (no prlctl, an unknown, stopped or suspended VM) or another run uses it against a fake `prlctl`, and one run at a time
 on the VM from any checkout, with real vm.py processes whose VM side is faked. Where PowerShell is installed,
-vm-guest.ps1's Sync-Tree runs over a folder: what it unpacks, deletes, keeps and asks for."""
+vm-guest.ps1's Sync-Tree runs over a folder: what it unpacks, deletes, keeps and asks for; and build's and test's
+steps run with a fake dotnet: from windows.dir, then the root again."""
 
 from __future__ import annotations
 
@@ -142,16 +143,41 @@ class BodyTests(FixtureAppTestCase):
         self.ctx = vm.Context(self.root, config, "Windows 11", vm.checkout_key(self.root), self.root / "stage")
 
     def test_build_both_platforms_with_extra_arguments(self):
-        body = vm.build_body(self.ctx, ["x64", "ARM64"], "-c Release")
-        project = r"'windows\Fixture.App\Fixture.App.csproj'"
-        self.assertIn(f"dotnet build {project} -p:Platform=x64 -v q -nologo '-clp:NoSummary' -c Release", body)
-        self.assertIn(f"dotnet build {project} -p:Platform=ARM64 -v q -nologo '-clp:NoSummary' -c Release", body)
-        self.assertTrue(body.endswith("Exit-Steps"))
+        # dotnet from windows.dir, whose global.json picks the SDK only from there (laching#244), the project from
+        # there too, and back in the root in a finally, inside the step, so nothing after it runs from windows.dir.
+        step = ("Invoke-Step 'dotnet build windows/Fixture.App/Fixture.App.csproj (PLATFORM, Debug)' { "
+                "Push-Location -LiteralPath (Join-Path $Root 'windows'); "
+                r"try { dotnet build 'Fixture.App\Fixture.App.csproj' -p:Platform=PLATFORM -v q -nologo '-clp:NoSummary' "
+                "-c Release } finally { Pop-Location } }")
+        self.assertEqual(vm.build_body(self.ctx, ["x64", "ARM64"], "-c Release").splitlines(),
+                         [step.replace("PLATFORM", "x64"), step.replace("PLATFORM", "ARM64"), "Exit-Steps"])
 
     def test_test_runs_the_test_projects(self):
-        body = vm.test_body(self.ctx, "")
-        self.assertIn(r"dotnet test 'windows\Fixture.App.Tests\Fixture.App.Tests.csproj'", body)
-        self.assertNotIn("Core.Tests", body, "the fixture names no windows.coreTests")
+        # The fixture names no windows.coreTests: one step.
+        self.assertEqual(vm.test_body(self.ctx, "--filter Name~Stats").splitlines(), [
+            "Invoke-Step 'dotnet test windows/Fixture.App.Tests/Fixture.App.Tests.csproj' { "
+            "Push-Location -LiteralPath (Join-Path $Root 'windows'); "
+            r"try { dotnet test 'Fixture.App.Tests\Fixture.App.Tests.csproj' -v q --nologo --filter Name~Stats } "
+            "finally { Pop-Location } }",
+            "Exit-Steps"])
+
+    def test_the_dotnet_commands_go_into_the_windows_dir_companion_json_names(self):
+        nested = self.root / "platforms" / "win"
+        nested.mkdir(parents=True)
+        self.ctx.config.data["windows"]["dir"] = "platforms/win"
+        self.assertIn(r"Push-Location -LiteralPath (Join-Path $Root 'platforms\win'); try { dotnet build "
+                      r"'Fixture.App\Fixture.App.csproj'", vm.build_body(self.ctx, ["x64"], ""))
+        # Missing, or naming no folder: one clear line (vm.sh's exit 2), before the VM is asked anything.
+        for folder, said in ((None, "companion.json has no windows.dir"),
+                             ("windws", f"companion.json's windows.dir, windws, isn't a folder in {self.root}")):
+            self.ctx.config.data["windows"]["dir"] = folder
+            for command, body in (("build", lambda: vm.build_body(self.ctx, ["x64"], "")),
+                                  ("test", lambda: vm.test_body(self.ctx, "")),
+                                  ("smoke", lambda: vm.smoke_body(self.ctx, None, ""))):
+                with self.subTest(folder=folder, command=command):
+                    with self.assertRaises(vm.Usage) as raised:
+                        body()
+                    self.assertEqual(str(raised.exception), said)
 
     def test_screenshots_take_the_apps_wrapper_when_it_has_one(self):
         shots = Path("/tmp/shots")
@@ -175,10 +201,25 @@ class BodyTests(FixtureAppTestCase):
         self.assertEqual(vm.layout_folder(self.ctx), self.root / "windows" / "build" / "layout-check")
 
     def test_smoke_publishes_then_runs_the_smoke_script(self):
-        body = vm.smoke_body(self.ctx, None, "-SideBySide")
-        self.assertIn("$platform = Get-GuestPlatform", body)
-        self.assertIn("dotnet publish 'windows\\Fixture.App\\Fixture.App.csproj' -c Release -p:Platform=$platform", body)
-        self.assertIn("-Package $msix.FullName -SideBySide", body)
+        # The app's own smoke script, whose path is from the copy's root.
+        own = self.root / "windows" / "scripts" / "smoke-package.ps1"
+        own.parent.mkdir(parents=True, exist_ok=True)
+        own.write_text("& \"$PSScriptRoot/../../laching/tools/windows/smoke-package.ps1\" @args\n", "utf8")
+        lines = vm.smoke_body(self.ctx, None, "-SideBySide").splitlines()
+        self.assertEqual(lines[0], "$platform = Get-GuestPlatform")
+        publish = next(i for i, line in enumerate(lines) if line.startswith("Invoke-Step 'dotnet publish"))
+        smoke = next(i for i, line in enumerate(lines) if line.startswith("Invoke-Step 'smoke"))
+        self.assertLess(publish, smoke)
+        self.assertTrue(lines[publish].startswith(
+            "Invoke-Step 'dotnet publish windows/Fixture.App/Fixture.App.csproj (Release, Native AOT)' { "
+            "Push-Location -LiteralPath (Join-Path $Root 'windows'); "
+            r"try { dotnet publish 'Fixture.App\Fixture.App.csproj' -c Release -p:Platform=$platform "), lines[publish])
+        self.assertIn("\"-p:AppxPackageDir=$packages/\"", lines[publish], "$packages is absolute")
+        # Back in the root inside the publish step, before the smoke script runs.
+        self.assertTrue(lines[publish].endswith(" } finally { Pop-Location } }"), lines[publish])
+        self.assertEqual(lines[smoke], r"Invoke-Step 'smoke (windows\scripts\smoke-package.ps1)' { "
+                                       r"& 'windows\scripts\smoke-package.ps1' -Package $msix.FullName -SideBySide }")
+        self.assertEqual("".join(lines).count("Push-Location"), 1)
         self.assertIn("$platform = 'x64'", vm.smoke_body(self.ctx, "x64", ""))
 
     def test_the_script_loads_the_guest_functions_from_the_share(self):
@@ -448,6 +489,18 @@ echo "ran $*"
                 self.assertEqual(done.returncode, 2, done.stderr)
                 self.assertIn(words, done.stderr)
 
+    def test_a_windows_dir_that_isnt_a_folder_is_a_usage_mistake(self):
+        # The dotnet commands run from it (laching#244): one line, and the VM is never synced to.
+        self.prlctl('echo "VM $2 exist running"')
+        config = self.root / "companion.json"
+        data = json.loads(config.read_text("utf8"))
+        data["windows"]["dir"] = "windws"
+        config.write_text(json.dumps(data), "utf8")
+        for command in ("build", "test", "smoke"):
+            with self.subTest(command=command):
+                done = self.run_vm(command)
+                self.assertEqual((done.returncode, done.stdout, done.stderr),
+                                 (2, "", f"vm.sh: companion.json's windows.dir, windws, isn't a folder in {self.root}\n"))
 
     def test_each_command_has_its_own_help(self):
         # No prlctl at all: the help needs neither the VM nor a sync.
@@ -622,6 +675,74 @@ class SyncTreeTests(unittest.TestCase):
             self.assertTrue((root / "obj/project.assets.json").exists())
             self.assertTrue((root / "a/bin/App.dll").exists())
             self.assertEqual((stage / "need.txt").read_text("utf8").split(), ["c.txt"])
+
+
+@unittest.skipUnless(POWERSHELL, "needs PowerShell")
+class GuestStepsTests(FixtureAppTestCase):
+    """build's and test's PowerShell run as the VM runs it (guest_script, vm-guest.ps1's Invoke-Step), with a folder
+    for the copy and a fake dotnet that logs the folder it runs in: dotnet runs from windows.dir, where the app's
+    global.json picks the SDK (laching#244), and each step leaves the root the current folder again, failed or not."""
+
+    def setUp(self):
+        super().setUp()
+        import companion
+
+        self.ctx = vm.Context(self.root, companion.load(self.root), "Windows 11", vm.checkout_key(self.root),
+                              self.root / "stage")
+        self.copy = self.root.parent / "copy"
+        (self.copy / "windows").mkdir(parents=True)
+        self.bin = self.root.parent / "bin"
+        self.bin.mkdir()
+        self.log = self.root.parent / "log.txt"
+        # Logs its folder and arguments; a Core.Tests project's tests fail.
+        (self.bin / "dotnet").write_text(f"""#!/bin/sh
+printf 'dotnet\\t%s\\t%s\\n' "$(pwd -P)" "$*" >> '{self.log}'
+case "$*" in *Core.Tests*) exit 3 ;; esac
+""", "utf8")
+        (self.bin / "dotnet").chmod(0o755)
+
+    def run_body(self, body: str) -> tuple[subprocess.CompletedProcess, list[list[str]]]:
+        """`body` in guest_script, with vm-guest.ps1 from here and the copy as $Root, logging the current folder after
+        each step. What PowerShell did, and the log: [dotnet, its folder, its first two words] or [here, the folder]."""
+        here = f"Add-Content -LiteralPath {vm.ps(str(self.log))} -Value \"here`t$((Get-Location).Path)\""
+        lines = [part for line in body.splitlines() for part in ([line, here] if line.startswith("Invoke-Step") else [line])]
+        script = vm.guest_script(self.ctx, "\n".join(lines))
+        for share, local in ((vm.guest_path(vm.GUEST_SCRIPT), str(vm.GUEST_SCRIPT)), (self.ctx.guest_root, str(self.copy))):
+            self.assertIn(vm.ps(share), script)
+            script = script.replace(vm.ps(share), vm.ps(local))
+        file = self.root.parent / "run.ps1"
+        file.write_text(script, "utf-8-sig")
+        self.log.unlink(missing_ok=True)
+        done = subprocess.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-File", str(file)], capture_output=True,
+                              encoding="utf8", env={**os.environ, "PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}"})
+        logged = self.log.read_text("utf8").splitlines() if self.log.exists() else []
+        return done, [[*entry[:2], *" ".join(entry[2:]).split()[:2]] for entry in (line.split("\t") for line in logged)]
+
+    def test_build_runs_dotnet_from_the_windows_dir_and_the_next_step_from_the_root(self):
+        done, logged = self.run_body(vm.build_body(self.ctx, ["x64", "ARM64"], ""))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        windows, root = str(self.copy / "windows"), str(self.copy)
+        build = ["build", r"Fixture.App\Fixture.App.csproj"]
+        self.assertEqual(logged, [["dotnet", windows, *build], ["here", root], ["dotnet", windows, *build], ["here", root]])
+        for platform in ("x64", "ARM64"):
+            self.assertIn(f"ok    dotnet build windows/Fixture.App/Fixture.App.csproj ({platform}, Debug)", done.stdout)
+
+    def test_a_failed_step_leaves_the_root_for_the_next(self):
+        self.ctx.config.data["windows"]["coreTests"] = "Fixture.Core.Tests"
+        done, logged = self.run_body(vm.test_body(self.ctx, ""))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        windows, root = str(self.copy / "windows"), str(self.copy)
+        self.assertEqual(logged, [["dotnet", windows, "test", r"Fixture.Core.Tests\Fixture.Core.Tests.csproj"], ["here", root],
+                                  ["dotnet", windows, "test", r"Fixture.App.Tests\Fixture.App.Tests.csproj"], ["here", root]])
+        self.assertIn("FAIL  dotnet test windows/Fixture.Core.Tests/Fixture.Core.Tests.csproj (exit code 3", done.stdout)
+        self.assertIn("ok    dotnet test windows/Fixture.App.Tests/Fixture.App.Tests.csproj", done.stdout)
+
+    def test_a_copy_without_the_windows_dir_fails_the_step(self):
+        (self.copy / "windows").rmdir()
+        done, logged = self.run_body(vm.build_body(self.ctx, ["x64"], ""))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(logged, [["here", str(self.copy)]], "dotnet never ran, and the root is still the current folder")
+        self.assertIn("FAIL  dotnet build windows/Fixture.App/Fixture.App.csproj (x64, Debug)", done.stdout)
 
 
 if __name__ == "__main__":

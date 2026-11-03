@@ -61,6 +61,7 @@ if (-not $Project -or $Languages.Count -eq 0) {
     if ($Languages.Count -eq 0) { $Languages = @($config.languages.all) }
     if (-not $Project) {
         if (-not $config.windows -or -not $config.windows.app) { throw "companion.json has no windows.app." }
+        if (-not $config.windows.dir) { throw "companion.json has no windows.dir." }
         $Project = (Resolve-Path (Join-Path $root "$($config.windows.dir)/$($config.windows.app)/$($config.windows.app).csproj")).Path
         if (-not $Out) { $Out = Join-Path $root "$($config.windows.dir)/build/layout-check" }
     }
@@ -71,7 +72,10 @@ $Out = [IO.Path]::GetFullPath($Out)
 if ($LASTEXITCODE) { exit 1 }
 # A packaged app (WindowsPackageType MSIX) runs from its one development registration, one copy at a time: a second
 # language's run would find the first one's copy running, or close it by registering the package again.
-$packageType = (dotnet msbuild $Project -p:Platform=$Platform -p:Configuration=Debug -getProperty:WindowsPackageType | Out-String).Trim()
+# In windows.dir, the folder above the project's, as screenshots.ps1 builds: its global.json picks the SDK.
+Push-Location -LiteralPath (Split-Path (Split-Path $Project))
+try { $packageType = (dotnet msbuild $Project -p:Platform=$Platform -p:Configuration=Debug -getProperty:WindowsPackageType | Out-String).Trim() }
+finally { Pop-Location }
 if ($Jobs -gt 1 -and $Languages.Count -gt 1 -and $packageType -and $packageType -ne "None") {
     "The app is packaged: one run for every language."
     $Jobs = 1

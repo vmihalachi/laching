@@ -337,9 +337,12 @@ app checks alone, so only the store listing's check and the app's own checks mar
 runs the iOS tests too, on `ios-destination.py --own "<name> verify"`. `--staged`, the pre-commit hook's mode,
 generates the Xcode project from the index in a scratch copy, so another session's untracked sources don't count.
 The WinUI app builds when the app, the Windows core it references, `Directory.Build.props`,
-`Directory.Packages.props` or `global.json` changes; `--no-vm` (or `LACHING_NO_VM=1`) leaves the Parallels VM to a session that holds it. On a Mac, Gradle gets Homebrew's
-openjdk@17 and Android Studio's SDK unless `JAVA_HOME` and `ANDROID_HOME` are set. `verify.sh` runs
-`character.py --check` and `synth.py --check` when their inputs, their outputs or the `laching/` pin change.
+`Directory.Packages.props` or `global.json` changes; `--no-vm` (or `LACHING_NO_VM=1`) leaves the Parallels VM to a
+session that holds it. Its `dotnet` checks (the C# format, the Windows tests, the WinUI build) run in `windows.dir`, as
+CI's do, so a `global.json` pin there that no installed SDK meets fails them ([*Windows apps*](#windows-apps)). On a
+Mac, Gradle gets Homebrew's openjdk@17 and Android Studio's SDK unless `JAVA_HOME` and `ANDROID_HOME` are set.
+`verify.sh` runs `character.py --check` and `synth.py --check` when their inputs, their outputs or the `laching/` pin
+change.
 
 The app's own checks, which a copied `verify.sh` used to hold, are `verify.checks` in `companion.json`: each a `name`, the
 `paths` that trigger it (an extended regular expression), the command to `run` (bash, from the root), `slow` for one
@@ -373,7 +376,8 @@ that name (the same model, made on first use) that the Simulator panel and the s
 
 ## `setup-linux.sh`
 
-Prepares a Linux container (cloud agents): submodules, .NET, landing dependencies, and for an app with an `android`
+Prepares a Linux container (cloud agents): submodules, .NET (the newest 10.0 SDK, and the one the app's
+`windows/global.json` pins when the newest doesn't meet it), landing dependencies, and for an app with an `android`
 section a JDK 17 and ktlint. Claude Code's cloud sessions run it at session start, and the app's
 `copilot-setup-steps.yml` as a step ([Linux checks](#linux-checks)). It hands `PATH` and `DOTNET_ROOT` on to what runs
 next: the session through `CLAUDE_ENV_FILE`, the job's later steps through `GITHUB_PATH` and `GITHUB_ENV`.
@@ -509,12 +513,14 @@ An app's `windows-core.yml` keeps its dispatch, concurrency and runner policy an
 `vmihalachi/laching/.github/workflows/windows-core.yml@vX.Y.Z`. Its inputs match the Mac workflow: `hosted: true`
 selects `ubuntu-latest`; `runner` supplies the self-hosted JSON labels; `laching-path` must match the profile;
 `submodules: "false"` checks out only Laching explicitly, while `"true"` also initializes recorded voices for app tests.
-The self-hosted machine supplies .NET 10 and Python; hosted runs install them.
+The self-hosted machine supplies .NET 10 and Python; hosted runs install them, and the SDK the app's
+`windows/global.json` pins.
 
 `ci-windows-core.py` runs `pins`, `content`, `strings`, `format`, `lint`, `core` and `app`. Paths come from `windows.dir`,
 `windows.strings`, `windows.coreTests` and optional `windows.appTests`; test paths can name a project or its directory.
-Content checks include localization and an existing phrase bank. Generated `.resw` files are exported to a fresh
-scratch directory and compared as a complete tree, allowing CRLF on Windows. An app with `windows.app` gets WinUI
+`format`, `core` and `app` run `dotnet` in `windows.dir` ([*Windows apps*](#windows-apps)). Content checks include
+localization and an existing phrase bank. Generated `.resw` files are exported to a fresh scratch directory and compared
+as a complete tree, allowing CRLF on Windows. An app with `windows.app` gets WinUI
 lint; without `windows.appTests`, the model-test stage is empty. The app's catalog checks also work when its landing
 submodule is uninitialized. Logs go to `mac.dir/build/ci-windows-core-<stage>.log` and are uploaded on failure.
 
@@ -615,7 +621,9 @@ app builds, packages and checks the same way. Its `.csproj` sets its own propert
 <Import Project="..\..\laching\tools\windows\companion.targets" />
 ```
 
-- **Debug is unpackaged** (`dotnet run --project windows/MyApp.App -p:Platform=x64`): no Developer Mode, no
+- **`dotnet` runs in `windows.dir`** (every tool and workflow here does, and so should you), so the app's
+  `windows/global.json` picks the SDK and a pin no installed SDK meets fails rather than falling back to the newest.
+- **Debug is unpackaged** (`cd windows && dotnet run --project MyApp.App -p:Platform=x64`): no Developer Mode, no
   registration, the screenshot runner as is. Without package identity `LocalSettingsStore.ForApp` keeps the settings
   in a JSON file and the app takes `MockStoreBackend` (`PackageIdentity.IsPackaged`). **Every other configuration is an
   MSIX with Native AOT**; `-p:WindowsPackageType=None` builds a Release exe that runs unpackaged, which is what
@@ -704,11 +712,13 @@ checks them.
 ### `windows/dotnet-sdk.ps1`
 
 Whether a GitHub-hosted runner image's .NET SDK will do: it does when it is in the newest .NET 10 feature band and
-meets the current folder's `global.json`, if any, so the job skips `setup-dotnet`'s 300 MB download. It writes
-`use=true|false` to `$GITHUB_OUTPUT` and always exits 0. Laching's own workflows and the reusable `windows-app.yml`
-(from the app's submodule, when it has the script) run it before their `setup-dotnet`, which is gated on
-`steps.sdk.outputs.use != 'true'`. `windows-release.yml` never does: the app publishes Native AOT, so the runtime it
-ships is the SDK's, and an image a patch behind would ship last month's.
+meets the `global.json` of the folder it is asked in, if any (`windows.dir` in `windows-app.yml`, `web/` in `web.yml`),
+so the job skips `setup-dotnet`'s 300 MB download. It writes `use=true|false` to `$GITHUB_OUTPUT` and always exits 0.
+Laching's own workflows and the reusable `windows-app.yml` (from the app's submodule, when it has the script) run it
+before their `setup-dotnet`, which is gated on `steps.sdk.outputs.use != 'true'`. `windows-release.yml` never does: the
+app publishes Native AOT, so the runtime it ships is the SDK's, and an image a patch behind would ship last month's. The
+reusable Windows workflows hand `setup-dotnet` the app's `windows/global.json`, when it has one, so a hosted run also
+installs the SDK it pins.
 
 ### `windows/vm.sh`
 
@@ -726,11 +736,14 @@ the Mac folder, `check-layout [lang…]` runs `check-layout.ps1` there (one buil
 unless named) and copies each language's shots and `problems.txt` back into `<windows.dir>/build/layout-check/<lang>`,
 `smoke` publishes the Native AOT package for the VM's platform and runs `smoke-package.ps1` on it (`-- -SideBySide`
 where the Store copy is installed), `test` runs the test projects and `run -- <command>` anything else in the copy;
-arguments after `--` go to the command. The copy is incremental (only changed files travel, `bin` and `obj` stay), and
-`verify.sh` builds through it when the VM is there. The VM needs the .NET SDK, the Visual Studio Build Tools with the
-x64 and ARM64 C++ tools (Native AOT), Developer Mode (screenshots and smoke install packages), Parallels Tools, a user
-signed in, and the Mac's files shared (Parallels' "All Files", `\\Mac\AllFiles`). `LACHING_VM`, `LACHING_VM_SHARE` and
-`LACHING_VM_DIR` change the VM's name, the share and the folder the copies go in (`%USERPROFILE%\laching-vm`).
+arguments after `--` go to the command. `build`, `test` and `smoke` run `dotnet` in the copy's `<windows.dir>`, so a
+relative path in `build`'s or `test`'s arguments (`-bl`, `-o`) is from there; `run` starts in the copy's root. The copy
+is incremental (only changed files travel, `bin` and `obj` stay), and `verify.sh` builds through it when the VM is
+there. The VM needs the .NET SDK (the one the app's `windows/global.json` pins, if it has one), the Visual Studio Build
+Tools with the x64 and ARM64 C++ tools (Native AOT), Developer Mode (screenshots and smoke install packages), Parallels
+Tools, a user signed in, and the Mac's files shared (Parallels' "All Files", `\\Mac\AllFiles`). `LACHING_VM`,
+`LACHING_VM_SHARE` and `LACHING_VM_DIR` change the VM's name, the share and the folder the copies go in
+(`%USERPROFILE%\laching-vm`).
 
 ### `windows-release.yml` and `windows-app.yml`
 

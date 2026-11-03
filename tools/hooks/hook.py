@@ -115,8 +115,8 @@ def setup(root=None):
         ("conformance", NAMES["RE_PURE"], f"conformance vectors ({tools}/conformance.sh)"),
         ("swift-test", NAMES["RE_COREPKG"], f"core package tests (swift test --package-path {NAMES['MAC_CORE']})"),
         ("dotnet-test", NAMES["RE_WINDOWS_CORE"], "Windows Core tests"),
-        ("dotnet-app-test", NAMES["RE_WINDOWS_APP_TESTS"],
-         f"Windows app model tests (dotnet test {NAMES['WINDOWS_DIR']}/{NAMES['WINDOWS_APP_TESTS']})"),
+        ("dotnet-app-test", NAMES["RE_WINDOWS_APP_TESTS"],  # from the Windows folder: its global.json picks the SDK
+         f"Windows app model tests (cd {NAMES['WINDOWS_DIR']} && dotnet test {NAMES['WINDOWS_APP_TESTS']})"),
         ("landing-build", NAMES["RE_LANDING"], f"landing build ({landing} build)"),
         ("winui-build", NAMES["RE_WINDOWS_BUILD"],
          f"WinUI app build ({tools}/windows/vm.sh build in the Parallels VM, or dotnet build on Windows)"),
@@ -348,16 +348,19 @@ def format_file(path):
     swift_format = ROOT / mac / ".swift-format"
     # Kotlin under the Android project, or under kotlin/ (Laching's own Kotlin build, when the hook runs there).
     kotlin = path.endswith((".kt", ".kts")) and ((android and path.startswith(f"{android}/")) or path.startswith("kotlin/"))
+    cwd = ROOT
     if mac and path.startswith(f"{mac}/") and path.endswith(".swift") and sys.platform == "darwin" and swift_format.exists():
         command = ["xcrun", "swift-format", "format", "-i", "--configuration", str(swift_format), path]
     elif windows and path.startswith(f"{windows}/") and path.endswith(".cs"):
-        command = ["dotnet", "format", "whitespace", windows, "--folder", "--include", path[len(windows) + 1:]]
+        # In the Windows folder, so the SDK is the one its global.json pins (the host reads the working directory's).
+        cwd = ROOT / windows
+        command = ["dotnet", "format", "whitespace", ".", "--folder", "--include", path[len(windows) + 1:]]
     elif kotlin and shutil.which("ktlint"):
         command = ["ktlint", "-F", path]  # ktlint_official, the project's .editorconfig
     else:
         return
     try:
-        subprocess.run(command, cwd=ROOT, capture_output=True, timeout=45)
+        subprocess.run(command, cwd=cwd, capture_output=True, timeout=45)
     except (OSError, subprocess.TimeoutExpired):
         pass
 

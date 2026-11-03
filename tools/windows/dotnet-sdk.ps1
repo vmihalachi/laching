@@ -2,11 +2,15 @@
 Whether the runner image's .NET SDK will do, so a GitHub-hosted job can skip actions/setup-dotnet. setup-dotnet
 downloads the newest .NET 10 SDK (300 MB, 30-odd seconds) whenever the image is a patch behind; the image's own SDK does
 when it is in the newest feature band (10.0.1xx, 10.0.2xx…), the latitude a global.json's latestPatch gives. Asked in the
-current folder, so a global.json there must accept the image's SDK too. Writes use=true or use=false to $GITHUB_OUTPUT
-and always exits 0: with no dotnet, or no answer from builds.dotnet.microsoft.com, it says false and setup-dotnet runs.
+current folder, which is the one whose global.json picks the SDK (the .NET host takes the nearest from the working
+folder up): the step's working-directory, where the job then runs dotnet (the app's windows.dir in windows-app.yml,
+web/ in web.yml). A global.json there must accept the image's SDK too: one it doesn't meet fails dotnet --version, and
+the answer is false. Writes use=true or use=false to $GITHUB_OUTPUT and always exits 0: with no dotnet, or no answer
+from builds.dotnet.microsoft.com, it says false and setup-dotnet runs.
 
 Usage: a step with id sdk, then setup-dotnet with if: steps.sdk.outputs.use != 'true'
-  pwsh tools/windows/dotnet-sdk.ps1      (Laching's own workflows; windows-app.yml, from the app's submodule if it has it)
+  pwsh tools/windows/dotnet-sdk.ps1      (Laching's own workflows; web.yml runs ../tools/windows/dotnet-sdk.ps1 in web/,
+                                          windows-app.yml the app's submodule's copy, if it has it, by its full path)
   -Newest 10.0.1xx stands in for the download (the tests).
 Never for a build that ships: a Native AOT app ships the SDK's runtime, so windows-release.yml always runs setup-dotnet.
 #>

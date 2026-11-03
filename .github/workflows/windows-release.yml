@@ -102,13 +102,27 @@ jobs:
       - name: Check out ${{ inputs.laching-path }}/
         run: git submodule update --init "${{ inputs.laching-path }}"
 
-      # Always the newest .NET 10 SDK, never the image's a patch behind (tools/windows/dotnet-sdk.ps1's latitude): the
-      # app publishes Native AOT, so the runtime it ships is the SDK's. When the image's is the newest, nothing
-      # downloads. The self-hosted runner keeps its own .NET 10 SDK.
+      # The newest .NET 10 SDK, never the image's a patch behind (tools/windows/dotnet-sdk.ps1's latitude), unless the
+      # app's windows/global.json pins another: the app publishes Native AOT, so the runtime it ships is the SDK's, and
+      # store-release.ps1 publishes in windows.dir, where that global.json picks the SDK (a latestFeature pin still
+      # picks the newest). setup-dotnet installs both; when the image's is the newest, nothing downloads. The
+      # self-hosted runner keeps its own .NET 10 SDK, and a pin it doesn't meet fails the publish.
+      - name: The app's global.json
+        id: app
+        if: inputs.hosted
+        shell: pwsh
+        run: |
+          $windows = (Get-Content companion.json -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable).windows
+          if (-not $windows -or -not $windows.dir) { throw "companion.json has no windows.dir." }
+          if (-not (Test-Path -LiteralPath $windows.dir -PathType Container)) { throw "companion.json's windows.dir is $($windows.dir), which isn't a folder." }
+          $pin = "$($windows.dir)/global.json"
+          "global-json=$(if (Test-Path -LiteralPath $pin -PathType Leaf) { $pin })" >> $env:GITHUB_OUTPUT
+
       - uses: actions/setup-dotnet@v6
         if: inputs.hosted
         with:
           dotnet-version: "10.0.x"
+          global-json-file: ${{ steps.app.outputs.global-json }}
 
       # The install check needs Developer Mode (the package is unsigned). On by hand on the self-hosted runner, whose
       # service has no admin rights to turn it on.
