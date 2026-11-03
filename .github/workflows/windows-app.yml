@@ -69,37 +69,49 @@ jobs:
       - name: Check out ${{ inputs.laching-path }}/
         run: git submodule update --init "${{ inputs.laching-path }}"
 
-      # setup-dotnet downloads the newest .NET 10 SDK whenever the image is a patch behind; the image's own does when it
-      # is in the newest feature band and meets the app's global.json, if any (tools/windows/dotnet-sdk.ps1).
-      - name: The image's .NET SDK
-        id: sdk
-        if: inputs.hosted
-        env:
-          LACHING_PATH: ${{ inputs.laching-path }}
-        run: |
-          $script = Join-Path $env:LACHING_PATH tools/windows/dotnet-sdk.ps1
-          if (Test-Path $script) { pwsh $script } else { "No $script in this Laching: setup-dotnet runs." }
-
-      # The self-hosted runner keeps its own .NET 10 SDK and Python 3.
-      - uses: actions/setup-dotnet@v6
-        if: inputs.hosted && steps.sdk.outputs.use != 'true'
-        with:
-          dotnet-version: "10.0.x"
-
-      - uses: actions/setup-python@v7
-        if: inputs.hosted
-        with:
-          python-version: "3.12"
-
+      # Before the SDK, which is asked for, and dotnet run, in windows.dir: the .NET host takes the SDK from the
+      # global.json nearest its working folder, so the app's windows/global.json, if any, picks it. The test projects
+      # are relative to windows.dir.
       - name: The app's settings
         id: app
         shell: pwsh
         run: |
           if ('${{ inputs.screenshot-run }}' -notin 'release', 'package') { throw "screenshot-run is release or package, not '${{ inputs.screenshot-run }}'." }
           $windows = (Get-Content companion.json -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable).windows
+          if (-not $windows -or -not $windows.dir) { throw "companion.json has no windows.dir." }
+          if (-not (Test-Path -LiteralPath $windows.dir -PathType Container)) { throw "companion.json's windows.dir is $($windows.dir), which isn't a folder." }
+          $pin = "$($windows.dir)/global.json"
+          "windows-dir=$($windows.dir)" >> $env:GITHUB_OUTPUT
+          "global-json=$(if (Test-Path -LiteralPath $pin -PathType Leaf) { $pin })" >> $env:GITHUB_OUTPUT
           "assets=$([bool]$windows.assets)" >> $env:GITHUB_OUTPUT
-          "core-tests=$(if ($windows.coreTests) { "$($windows.dir)/$($windows.coreTests)/$($windows.coreTests).csproj" })" >> $env:GITHUB_OUTPUT
-          "app-tests=$(if ($windows.appTests) { "$($windows.dir)/$($windows.appTests)/$($windows.appTests).csproj" })" >> $env:GITHUB_OUTPUT
+          "core-tests=$(if ($windows.coreTests) { "$($windows.coreTests)/$($windows.coreTests).csproj" })" >> $env:GITHUB_OUTPUT
+          "app-tests=$(if ($windows.appTests) { "$($windows.appTests)/$($windows.appTests).csproj" })" >> $env:GITHUB_OUTPUT
+
+      # setup-dotnet downloads the newest .NET 10 SDK whenever the image is a patch behind, and the SDK the app's
+      # windows/global.json pins; the image's own does when it is in the newest feature band and meets that global.json,
+      # asked in windows.dir (tools/windows/dotnet-sdk.ps1).
+      - name: The image's .NET SDK
+        id: sdk
+        if: inputs.hosted
+        working-directory: ${{ steps.app.outputs.windows-dir }}
+        env:
+          LACHING_PATH: ${{ inputs.laching-path }}
+        run: |
+          $script = Join-Path $env:GITHUB_WORKSPACE "$env:LACHING_PATH/tools/windows/dotnet-sdk.ps1"
+          if (Test-Path $script) { pwsh $script } else { "No $script in this Laching: setup-dotnet runs." }
+
+      # The self-hosted runner keeps its own .NET 10 SDK and Python 3; a windows/global.json pin its SDK doesn't meet
+      # fails the steps that run dotnet.
+      - uses: actions/setup-dotnet@v6
+        if: inputs.hosted && steps.sdk.outputs.use != 'true'
+        with:
+          dotnet-version: "10.0.x"
+          global-json-file: ${{ steps.app.outputs.global-json }}
+
+      - uses: actions/setup-python@v7
+        if: inputs.hosted
+        with:
+          python-version: "3.12"
 
       # What builds and runs in Debug but breaks under Native AOT or in the XAML compiler.
       - name: WinUI traps
@@ -113,10 +125,12 @@ jobs:
       # Run on the Mac or Linux too; once on Windows catches what only differs there (paths, culture, the OS's libraries).
       - name: Core tests on Windows
         if: matrix.platform == 'x64' && steps.app.outputs.core-tests
+        working-directory: ${{ steps.app.outputs.windows-dir }}
         run: dotnet test "${{ steps.app.outputs.core-tests }}" -c Release
 
       - name: Model tests on Windows
         if: matrix.platform == 'x64' && steps.app.outputs.app-tests
+        working-directory: ${{ steps.app.outputs.windows-dir }}
         run: dotnet test "${{ steps.app.outputs.app-tests }}" -c Release
 
       # The install check needs Developer Mode (the package is unsigned). On by hand on the self-hosted runner, whose

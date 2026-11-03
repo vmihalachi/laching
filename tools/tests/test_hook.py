@@ -360,6 +360,22 @@ class StopAndParity(HookTestCase):
             self.hook.format_file("android/build.gradle.kts")
         self.assertFalse(log.exists(), "no ktlint, no formatting")
 
+    @unittest.skipIf(os.name == "nt", "the fake dotnet is a shell script")
+    def test_csharp_files_are_formatted_from_the_windows_folder_so_its_global_json_picks_the_sdk(self):
+        bin_dir = Path(self.tmp) / "bin"
+        bin_dir.mkdir()
+        log = Path(self.tmp) / "dotnet.log"
+        dotnet = bin_dir / "dotnet"
+        dotnet.write_text(f'#!/bin/sh\necho "$(pwd -P) $*" >> "{log}"\n', "utf8")
+        dotnet.chmod(0o755)
+        for path in ("windows/Fixture.Core/A.cs", "macos/Fixture/B.cs"):
+            (self.root / path).write_text("class A {}\n", "utf8")
+        with mock.patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}):
+            for path in ("windows/Fixture.Core/A.cs", "windows/Fixture.Core/Fixture.Core.csproj", "macos/Fixture/B.cs"):
+                self.hook.format_file(path)
+        self.assertEqual(log.read_text().splitlines(),
+                         [f"{self.root / 'windows'} format whitespace . --folder --include Fixture.Core/A.cs"])
+
     def test_app_model_tests_count_when_their_project_or_the_solution_ran(self):
         edit = {"session_id": "app", "tool_name": "Edit",
                 "tool_input": {"file_path": str(self.root / "windows/Fixture.App/App/AppModel.cs")}}
@@ -369,8 +385,13 @@ class StopAndParity(HookTestCase):
             self.run_hook("post", {"session_id": "app", "tool_name": "Bash", "tool_input": {"command": command}})
             return "Windows app model tests" in self.run_hook("stop", {"session_id": "app"}).stderr
 
+        # The reminder runs them from the Windows folder, so the SDK is the one its global.json pins.
+        label = dict((kind, label) for kind, _, label in self.hook.SLOW)["dotnet-app-test"]
+        self.assertEqual(label, "Windows app model tests (cd windows && dotnet test Fixture.App.Tests)")
         self.assertTrue(reminded_after("dotnet test windows/Fixture.Core.Tests"), "another test project")
+        self.assertTrue(reminded_after("cd windows && dotnet test Fixture.Core.Tests"), "another test project")
         self.assertFalse(reminded_after("dotnet test windows/Fixture.App.Tests"))
+        self.assertFalse(reminded_after("cd windows && dotnet test Fixture.App.Tests"), "the reminder's form")
         self.assertFalse(reminded_after("cd windows && dotnet test"), "the solution")
 
     def test_the_winui_build_counts_from_the_vm_or_dotnet(self):
@@ -389,10 +410,11 @@ class StopAndParity(HookTestCase):
         for command in ("laching/tools/windows/vm.sh build", "laching/tools/windows/vm.sh build ARM64 -- -c Release",
                         "laching/tools/windows/vm.sh screenshots /tmp/shots -- -Language fr",
                         "laching/tools/windows/vm.sh smoke", "dotnet build windows/Fixture.App -p:Platform=x64",
+                        "cd windows && dotnet build Fixture.App -p:Platform=x64",
                         "dotnet publish windows/Fixture.App/Fixture.App.csproj -c Release"):
             self.assertFalse(reminded_after(command), command)
         for command in ("laching/tools/windows/vm.sh status", "laching/tools/windows/vm.sh sync",
-                        "dotnet build windows/Fixture.Core"):
+                        "dotnet build windows/Fixture.Core", "cd windows && dotnet build Fixture.Core"):
             self.assertTrue(reminded_after(command), command)
 
     def test_vm_tests_count_as_the_dotnet_tests(self):

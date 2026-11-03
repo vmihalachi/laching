@@ -32,7 +32,8 @@ class CoveringTests(unittest.TestCase):
 
     def test_the_release_and_check_scripts_run_the_tests_that_run_them(self):
         self.assertEqual(covering.covering(["scripts/release.sh", ".github/workflows/release.yml"]), ["test_release"])
-        self.assertEqual(covering.covering(["scripts/verify.sh"]), ["test_covering", "test_release"])
+        self.assertEqual(covering.covering(["scripts/verify.sh"]),
+                         ["test_covering", "test_release", "test_scripts.LachingVerifyTests"])
         self.assertEqual(covering.covering(["scripts/fixture-art.sh"]), ["test_character"])
 
     def test_a_test_file_covers_itself_and_the_whole_module_wins(self):

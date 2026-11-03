@@ -98,6 +98,7 @@ if (-not $Project) {
     $root = Find-Root
     $config = Read-Companion (Join-Path $root "companion.json")
     if (-not $config.windows -or -not $config.windows.app) { throw "companion.json has no windows.app." }
+    if (-not $config.windows.dir) { throw "companion.json has no windows.dir." }
     $Project = Join-Path $root "$($config.windows.dir)/$($config.windows.app)/$($config.windows.app).csproj"
     if (-not $Out) {
         $folder = if ($config.windows.screenshots) { $config.windows.screenshots } else { "screenshots/windows" }
@@ -105,51 +106,68 @@ if (-not $Project) {
     }
 }
 $Project = (Resolve-Path $Project).Path
+# dotnet runs in the folder above the project's: windows.dir, which holds <app>/<app>.csproj (dotnet/ for Laching's
+# fixture app). The host picks the SDK from the global.json nearest its working folder (or above), never the project's,
+# so there <windows.dir>/global.json pins it, and an SDK it pins that isn't installed fails the build.
+$dotnetDir = Split-Path (Split-Path $Project)
 $name = [IO.Path]::GetFileNameWithoutExtension($Project)
 if (-not $Out) { $Out = Join-Path ([IO.Path]::GetTempPath()) "$name-shots" }
 $Out = [IO.Path]::GetFullPath($Out)
 $hide = -not $Front -and ($Hidden -or $Only)
 
-if ($Configuration -eq "Release") {
-    # Native AOT links with the Visual Studio tools, which it finds through vswhere: put it on the path when the
-    # installer's copy isn't there (a plain shell, a hosted runner).
-    $installer = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer"
-    if (-not (Get-Command vswhere.exe -ErrorAction SilentlyContinue) -and (Test-Path (Join-Path $installer "vswhere.exe"))) {
-        $env:PATH = "$installer;$env:PATH"
-    }
-    # Everything this build writes (restore, intermediate, output, publish) goes to a folder of its own per platform under
-    # the project's obj\, emptied first. In the project's own obj\ and bin\, after a packaged publish
-    # (GenerateAppxPackageOnBuild), the incremental build kept what it had made for the package and the app died at
-    # start (a XAML parse failure, 0xC000027B); a publish folder kept between runs mixed in the other platform's files.
-    # Right after a run, Windows can hold one of the app's DLLs for a few seconds (the first time an x64 build runs from
-    # that folder on ARM64; nothing has it loaded), so the removal tries again for up to a minute.
-    $artifacts = Join-Path (Split-Path $Project) "obj\screenshots\$Platform"
-    $publish = Join-Path $artifacts "app"
-    if (-not $NoBuild) {
-        for ($try = 1; Test-Path $artifacts; $try++) {
-            try { Remove-Item -LiteralPath $artifacts -Recurse -Force -ErrorAction Stop }
-            catch { if ($try -ge 60) { throw }; Start-Sleep -Seconds 1 }
+# dotnet in $dotnetDir (above); the app itself starts from the caller's folder, as before.
+Push-Location -LiteralPath $dotnetDir
+try {
+    if ($Configuration -eq "Release") {
+        # Native AOT links with the Visual Studio tools, which it finds through vswhere: put it on the path when the
+        # installer's copy isn't there (a plain shell, a hosted runner).
+        $installer = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer"
+        if (-not (Get-Command vswhere.exe -ErrorAction SilentlyContinue) -and (Test-Path (Join-Path $installer "vswhere.exe"))) {
+            $env:PATH = "$installer;$env:PATH"
         }
-        # The output only shows when it failed: the compiler's errors, not just that it did.
-        $log = dotnet publish $Project -c Release -p:Platform=$Platform -p:WindowsPackageType=None -p:ScreenshotMode=true --artifacts-path $artifacts -o $publish -v quiet -nologo
-        if ($LASTEXITCODE -ne 0) { $log | Write-Host; throw "The app didn't publish." }
+        # Everything this build writes (restore, intermediate, output, publish) goes to a folder of its own per platform
+        # under the project's obj\, emptied first. In the project's own obj\ and bin\, after a packaged publish
+        # (GenerateAppxPackageOnBuild), the incremental build kept what it had made for the package and the app died at
+        # start (a XAML parse failure, 0xC000027B); a publish folder kept between runs mixed in the other platform's
+        # files. Right after a run, Windows can hold one of the app's DLLs for a few seconds (the first time an x64
+        # build runs from that folder on ARM64; nothing has it loaded), so the removal tries again for up to a minute.
+        $artifacts = Join-Path (Split-Path $Project) "obj\screenshots\$Platform"
+        $publish = Join-Path $artifacts "app"
+        if (-not $NoBuild) {
+            for ($try = 1; Test-Path $artifacts; $try++) {
+                try { Remove-Item -LiteralPath $artifacts -Recurse -Force -ErrorAction Stop }
+                catch { if ($try -ge 60) { throw }; Start-Sleep -Seconds 1 }
+            }
+            # The output only shows when it failed: the compiler's errors, not just that it did.
+            $log = dotnet publish $Project -c Release -p:Platform=$Platform -p:WindowsPackageType=None -p:ScreenshotMode=true --artifacts-path $artifacts -o $publish -v quiet -nologo
+            if ($LASTEXITCODE -ne 0) { $log | Write-Host; throw "The app didn't publish." }
+        }
+        $folder = $publish
+        $assembly = dotnet msbuild $Project -getProperty:AssemblyName
+        if ($LASTEXITCODE -ne 0) {
+            $assembly | Write-Host; throw "Couldn't read the app's AssemblyName (dotnet msbuild exit $LASTEXITCODE)."
+        }
+        $assembly = "$assembly".Trim()
     }
-    $folder = $publish
-    $assembly = (dotnet msbuild $Project -getProperty:AssemblyName).Trim()
-}
-else {
-    if (-not $NoBuild) {
-        $log = dotnet build $Project -p:Platform=$Platform -c Debug -v quiet -nologo
-        if ($LASTEXITCODE -ne 0) { $log | Write-Host; throw "The app didn't build." }
+    else {
+        if (-not $NoBuild) {
+            $log = dotnet build $Project -p:Platform=$Platform -c Debug -v quiet -nologo
+            if ($LASTEXITCODE -ne 0) { $log | Write-Host; throw "The app didn't build." }
+        }
+        # One evaluation for all three (each costs about a second).
+        $query = dotnet msbuild $Project -p:Platform=$Platform -p:Configuration=Debug -getProperty:TargetDir -getProperty:AssemblyName -getProperty:WindowsPackageType | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            $query | Write-Host; throw "Couldn't read the app's build properties (dotnet msbuild exit $LASTEXITCODE)."
+        }
+        $properties = ($query | ConvertFrom-Json).Properties
+        $folder = $properties.TargetDir
+        $assembly = $properties.AssemblyName
+        # The build output's own manifest, not its AppX folder's: only Visual Studio's deploy step refreshes that one.
+        $manifest = Join-Path $folder "AppxManifest.xml"
+        $packaged = $properties.WindowsPackageType -and $properties.WindowsPackageType -ne "None" -and (Test-Path $manifest)
     }
-    # One evaluation for all three (each costs about a second).
-    $properties = (dotnet msbuild $Project -p:Platform=$Platform -p:Configuration=Debug -getProperty:TargetDir -getProperty:AssemblyName -getProperty:WindowsPackageType | Out-String | ConvertFrom-Json).Properties
-    $folder = $properties.TargetDir
-    $assembly = $properties.AssemblyName
-    # The build output's own manifest, not its AppX folder's: only Visual Studio's deploy step refreshes that one.
-    $manifest = Join-Path $folder "AppxManifest.xml"
-    $packaged = $properties.WindowsPackageType -and $properties.WindowsPackageType -ne "None" -and (Test-Path $manifest)
 }
+finally { Pop-Location }
 $exe = Join-Path $folder "$assembly.exe"
 if (-not (Test-Path $exe)) { throw "No $exe$(if ($NoBuild) { '; build it first (without -NoBuild)' } else { ' after the build' })." }
 if ($BuildOnly) { exit 0 }

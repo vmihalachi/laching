@@ -40,23 +40,46 @@ fi
 git config submodule.recurse true; git config push.recurseSubmodules on-demand
 [ -d .githooks ] && git config core.hooksPath .githooks
 
-# .NET 10 SDK, into ~/.dotnet.
-if [ -n "$WINDOWS_DIR" ]; then
+# The SDK dotnet picks where verify.sh and CI run it, in windows.dir (the root without one): the host reads the
+# global.json nearest the working directory. Prints nothing and fails without dotnet, or when no installed SDK meets
+# that global.json's pin (the host then lists the installed ones on stdout, so its output is no version).
+dotnet_sdk() {
+  local dir=. sdk
+  [ -d "$WINDOWS_DIR" ] && dir="$WINDOWS_DIR"
+  has dotnet && sdk="$(cd "$dir" && dotnet --version 2>/dev/null)" && echo "$sdk"
+}
+
+# .NET 10 SDK, into ~/.dotnet: the latest 10.0, and the one windows/global.json pins when that one doesn't meet it.
+if [ -n "$WINDOWS_DIR" ] && [ ! -d "$WINDOWS_DIR" ]; then
+  echo "warning: windows.dir ($WINDOWS_DIR) isn't a folder: check companion.json; the .NET SDK isn't set up" >&2
+elif [ -n "$WINDOWS_DIR" ]; then
   # An earlier run's SDK, which a fresh shell doesn't have on PATH.
   [ -x "$HOME/.dotnet/dotnet" ] && export PATH="$HOME/.dotnet:$PATH"
-  if ! has dotnet || ! dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then
+  # Any 10.0 SDK, though a newer one may be the one picked where global.json pins nothing.
+  if ! dotnet_sdk >/dev/null || ! dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then
     echo "Installing the .NET 10 SDK into ~/.dotnet"
-    curl -fsSL https://dot.net/v1/dotnet-install.sh -o "${TMPDIR:-/tmp}/dotnet-install.sh" &&
-      bash "${TMPDIR:-/tmp}/dotnet-install.sh" --channel 10.0 --install-dir "$HOME/.dotnet" >/dev/null ||
+    installer="${TMPDIR:-/tmp}/dotnet-install.sh"
+    if curl -fsSL https://dot.net/v1/dotnet-install.sh -o "$installer" &&
+      bash "$installer" --channel 10.0 --install-dir "$HOME/.dotnet" >/dev/null; then
+      case ":$PATH:" in *":$HOME/.dotnet:"*) ;; *) export PATH="$HOME/.dotnet:$PATH" ;; esac
+      if ! dotnet_sdk >/dev/null && [ -f "$WINDOWS_DIR/global.json" ]; then
+        echo "Installing the .NET SDK $WINDOWS_DIR/global.json pins into ~/.dotnet"
+        bash "$installer" --jsonfile "$WINDOWS_DIR/global.json" --install-dir "$HOME/.dotnet" >/dev/null
+      fi
+      dotnet_sdk >/dev/null ||
+        echo "warning: no installed .NET SDK meets $WINDOWS_DIR/global.json; dotnet test and dotnet format won't run" >&2
+    else
       echo "warning: .NET install failed; dotnet test and dotnet format won't run" >&2
+    fi
   fi
   if [ -x "$HOME/.dotnet/dotnet" ]; then
     hand_on DOTNET_ROOT "$HOME/.dotnet"
     hand_on DOTNET_CLI_TELEMETRY_OPTOUT 1
     add_path "$HOME/.dotnet"
   fi
-  tests="$WINDOWS_DIR/$WINDOWS_CORE_TESTS/$WINDOWS_CORE_TESTS.csproj"
-  [ -n "$WINDOWS_CORE_TESTS" ] && [ -f "$tests" ] && has dotnet && dotnet restore "$tests" -v q --nologo >/dev/null 2>&1
+  tests="$WINDOWS_CORE_TESTS/$WINDOWS_CORE_TESTS.csproj"
+  [ -n "$WINDOWS_CORE_TESTS" ] && [ -f "$WINDOWS_DIR/$tests" ] && has dotnet &&
+    (cd "$WINDOWS_DIR" && dotnet restore "$tests" -v q --nologo) >/dev/null 2>&1
 fi
 
 # JDK 17 and ktlint, for `./gradlew :<android.core>:test` and the Kotlin style check. The app module itself needs the
@@ -99,5 +122,5 @@ if [ -n "$LANDING_DIR" ] && [ -d "$LANDING_DIR" ]; then
   fi
 fi
 
-echo "Linux setup done: $(has dotnet && dotnet --version || echo 'no dotnet'), node $(node -v 2>/dev/null || echo none)\
+echo "Linux setup done: $(has dotnet && { dotnet_sdk || echo 'no .NET SDK meets global.json'; } || echo 'no dotnet'), node $(node -v 2>/dev/null || echo none)\
 ${ANDROID_DIR:+, java $(java -version 2>&1 | sed -n 's/.*version "\([^"]*\)".*/\1/p' | grep . || echo none)}"

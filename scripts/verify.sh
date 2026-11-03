@@ -46,8 +46,8 @@ darwin=0; [ "$(uname)" = Darwin ] && darwin=1
 swift='^Package\.swift$|^Sources/|^Tests/|^\.swift-format$'
 dotnet='^dotnet/|^conformance/|^Tests/LachingCompanionTests/Resources/|^Tests/LachingShellTests/Resources/'
 kotlin='^kotlin/'
-# release.sh, verify.sh and release.yml are what test_release runs, and the packages' READMEs and the build files that
-# pack them what it reads; fixture-art.sh is what the fixture art check runs.
+# release.sh, verify.sh and release.yml are what test_release runs (verify.sh test_scripts too), and the packages'
+# READMEs and the build files that pack them what it reads; fixture-art.sh is what the fixture art check runs.
 tools='^tools/|^Tests/Fixtures/|^scripts/(release|verify|fixture-art)\.sh$|^\.github/workflows/release\.yml$'
 tools+='|^(dotnet|web)/(README\.md|Directory\.Build\.targets)$'
 web='^web/'
@@ -60,6 +60,10 @@ web_postgres() {
   port="$(printf '%s' "$server" | sed -n 's/.*Port=\([0-9]*\).*/\1/p')"
   (exec 3<>"/dev/tcp/${host:-localhost}/${port:-5432}") 2>/dev/null
 }
+
+# dotnet in web/, paths relative to it: the host picks the SDK from the global.json nearest the working directory, so
+# web/global.json counts only from there (a pin no installed SDK meets fails the check).
+web_dotnet() { (cd web && dotnet "$@"); }
 
 vectors_current() {
   scripts/conformance.sh || return 1
@@ -160,7 +164,7 @@ if touched "$dotnet"; then
   else skip "dotnet format: needs the .NET SDK"; fi
 fi
 if touched "$web"; then
-  if has dotnet; then check "dotnet format whitespace (web)" dotnet format whitespace web --folder --verify-no-changes
+  if has dotnet; then check "dotnet format whitespace (web)" web_dotnet format whitespace . --folder --verify-no-changes
   else skip "dotnet format (web): needs the .NET SDK"; fi
 fi
 if touched "$kotlin"; then
@@ -202,14 +206,14 @@ if [ "$fast" = 0 ]; then
   fi
   if touched "$web"; then
     if has dotnet; then
-      check "dotnet format (web)" dotnet format web/Laching.Web.sln --verify-no-changes
+      check "dotnet format (web)" web_dotnet format Laching.Web.sln --verify-no-changes
       # The whole solution in one run, the Jobs tests filtered out (still built) when PostgreSQL isn't there.
       if web_postgres; then
-        check "dotnet build + test (web)" dotnet test web/Laching.Web.sln -v q --nologo
+        check "dotnet build + test (web)" web_dotnet test Laching.Web.sln -v q --nologo
       else
         skip "Laching.Web.Jobs.Tests: needs PostgreSQL (LACHING_WEB_TEST_POSTGRES, or docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16)"
         check "dotnet build + test (web, without Jobs)" \
-          dotnet test web/Laching.Web.sln -v q --nologo --filter 'FullyQualifiedName!~Laching.Web.Jobs.Tests'
+          web_dotnet test Laching.Web.sln -v q --nologo --filter 'FullyQualifiedName!~Laching.Web.Jobs.Tests'
       fi
       if touched "$tailwind"; then check "Tailwind sample" web/scripts/tailwind-sample.sh; fi
     else skip "dotnet test (web): needs the .NET SDK"; fi

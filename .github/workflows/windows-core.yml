@@ -38,14 +38,30 @@ jobs:
           submodules: ${{ inputs.submodules }}
       - name: Check out the pinned Laching tools
         run: git submodule update --init -- "$LACHING_PATH"
-      - uses: actions/setup-dotnet@v6
-        if: inputs.hosted
-        with:
-          dotnet-version: "10.0.x"
       - uses: actions/setup-python@v7
         if: inputs.hosted
         with:
           python-version: "3.12"
+      # ci-windows-core.py runs dotnet in windows.dir, where the app's windows/global.json, if any, picks the SDK:
+      # setup-dotnet installs the one it pins beside the newest .NET 10. The self-hosted runner keeps its own.
+      - name: The app's global.json
+        id: app
+        if: inputs.hosted
+        run: |
+          if ! dir=$(python3 "./$LACHING_PATH/tools/companion.py" get windows.dir); then
+            echo "::error::companion.json has no windows.dir, or couldn't be read (see above)."
+            exit 1
+          fi
+          if [ ! -d "$dir" ]; then
+            echo "::error::companion.json's windows.dir is $dir, which isn't a folder."
+            exit 1
+          fi
+          if [ -f "$dir/global.json" ]; then echo "global-json=$dir/global.json" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/setup-dotnet@v6
+        if: inputs.hosted
+        with:
+          dotnet-version: "10.0.x"
+          global-json-file: ${{ steps.app.outputs.global-json }}
       - name: Check release pins and shared tooling
         run: python3 "./$LACHING_PATH/tools/ci-windows-core.py" pins
       - name: Check strings and phrase keys

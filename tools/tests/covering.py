@@ -74,9 +74,10 @@ COVERS: dict[str, tuple[str, ...]] = {
     # The repository's fixture skins, which test_character compiles.
     "Tests/Fixtures/*": ("test_character",),
     # The repository's own files verify.sh sends here: test_release runs release.sh, verify.sh --version and
-    # release.yml's plan step, test_covering verify.sh --fast; fixture-art.sh compiles the fixture skins.
+    # release.yml's plan step, test_covering verify.sh --fast, test_scripts its web checks; fixture-art.sh compiles the
+    # fixture skins.
     "scripts/release.sh": ("test_release",),
-    "scripts/verify.sh": ("test_covering", "test_release"),
+    "scripts/verify.sh": ("test_covering", "test_release", "test_scripts.LachingVerifyTests"),
     "scripts/fixture-art.sh": ("test_character",),
     ".github/workflows/release.yml": ("test_release",),
     # The packages' READMEs and the build files that pack them: test_release checks that every link is absolute.

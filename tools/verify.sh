@@ -29,7 +29,8 @@
 #   global.json: a bump moves the Laching.* versions there)    dotnet test (windows.coreTests)
 #   windows.app, windows.appTests          check-winui.py; dotnet test (windows.appTests, any OS); the app builds on
 #                                          Windows, or on a Mac in the Parallels VM (windows/vm.sh build); the tests
-#                                          and the build also for the shared settings
+#                                          and the build also for the shared settings; dotnet runs in windows.dir,
+#                                          so its global.json picks the SDK, as in CI, and a pin that isn't met fails
 #   windows.assets (the icon, Assets/)     windows/assets.py --check (the MSIX images match the icon)
 #   android.dir/**/*.kt(s)                 ktlint; ./gradlew :<android.core>:test for android.core, conformance/ and
 #                                          the pin (JDK 17: JAVA_HOME, on a Mac Homebrew's openjdk@17 unless set;
@@ -242,13 +243,21 @@ winui_check() {
   python3 "$TOOLS/windows/check-winui.py" "${files[@]}"
 }
 
+# dotnet in windows.dir, its paths relative to it: the host picks the SDK from the global.json nearest the working
+# directory, not the project's, so the app's windows/global.json counts only from there (a pin it can't meet fails).
+windows_dotnet() {
+  [ -d "$WINDOWS_DIR" ] || { echo "windows.dir ($WINDOWS_DIR) isn't a folder: check companion.json"; return 1; }
+  (cd "$WINDOWS_DIR" && dotnet "$@")
+}
+
+# The workspace is windows.dir itself; --include is relative to it.
 csharp_format() {
   local files
   changed_files "$RE_CSHARP"
   if [ "$all" = 1 ]; then
-    dotnet format whitespace "$WINDOWS_DIR" --folder --verify-no-changes
+    windows_dotnet format whitespace . --folder --verify-no-changes
   elif [ ${#files[@]} -gt 0 ]; then
-    dotnet format whitespace "$WINDOWS_DIR" --folder --verify-no-changes --include "${files[@]#"$WINDOWS_DIR"/}"
+    windows_dotnet format whitespace . --folder --verify-no-changes --include "${files[@]#"$WINDOWS_DIR"/}"
   fi
 }
 
@@ -360,12 +369,12 @@ if [ "$fast" = 0 ]; then
   fi
   if touched "$RE_WINDOWS_CORE" && [ -n "$WINDOWS_CORE_TESTS" ]; then
     if has dotnet; then
-      check "dotnet test ($WINDOWS_CORE_TESTS)" dotnet test "$WINDOWS_DIR/$WINDOWS_CORE_TESTS/$WINDOWS_CORE_TESTS.csproj" -v q --nologo
+      check "dotnet test ($WINDOWS_CORE_TESTS)" windows_dotnet test "$WINDOWS_CORE_TESTS/$WINDOWS_CORE_TESTS.csproj" -v q --nologo
     else skip "dotnet test: needs the .NET SDK"; fi
   fi
   if touched "$RE_WINDOWS_APP_TESTS" && [ -n "$WINDOWS_APP_TESTS" ]; then
     if has dotnet; then
-      check "dotnet test ($WINDOWS_APP_TESTS)" dotnet test "$WINDOWS_DIR/$WINDOWS_APP_TESTS/$WINDOWS_APP_TESTS.csproj" -v q --nologo
+      check "dotnet test ($WINDOWS_APP_TESTS)" windows_dotnet test "$WINDOWS_APP_TESTS/$WINDOWS_APP_TESTS.csproj" -v q --nologo
     else skip "dotnet test ($WINDOWS_APP_TESTS): needs the .NET SDK"; fi
   fi
   if touched "$RE_WINDOWS_BUILD"; then
@@ -373,7 +382,7 @@ if [ "$fast" = 0 ]; then
     if [ "$windows" = 1 ] && has dotnet; then
       # Debug, unpackaged, for this machine's architecture, named for a project without companion.targets.
       case "${PROCESSOR_ARCHITECTURE:-}" in ARM64) platform=ARM64 ;; *) platform=x64 ;; esac
-      check "WinUI app builds ($WINDOWS_APP)" dotnet build "$WINDOWS_DIR/$WINDOWS_APP/$WINDOWS_APP.csproj" \
+      check "WinUI app builds ($WINDOWS_APP)" windows_dotnet build "$WINDOWS_APP/$WINDOWS_APP.csproj" \
         -p:Platform=$platform -v q --nologo
     elif [ -z "$novm" ] && vm="$("$TOOLS/windows/vm.sh" status 2>&1)"; then
       # On a Mac with the Parallels Windows VM: this working tree, Debug, x64 and ARM64.

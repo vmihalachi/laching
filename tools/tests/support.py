@@ -32,6 +32,32 @@ NO_SHELL = "Windows starts no shell script itself and has no Git for Windows bas
 NO_SHEBANG = "Windows can't start a `#!/bin/sh` file as a program, as this test's fake tool is"
 """The reason a test whose fake tool is a shell script skips on Windows."""
 
+# dotnet's host as far as the SDK goes, logging its working directory and arguments to $LOG: the SDKs are the ones
+# beside it, as dotnet-install.sh lays them out (else $FAKE_SDK), and the global.json nearest the working directory
+# picks one. A pin with rollForward "disable" that none meets is refused as the real host refuses it: the installed SDKs
+# on stdout, why on stderr, exit 155. test_setup_linux's and test_scripts' fake dotnet.
+DOTNET_HOST = r"""echo "$PWD: dotnet $*" >>"${LOG:-/dev/null}"
+installed=""
+for sdk in "$(dirname "$0")"/sdk/*; do [ -d "$sdk" ] && installed="$installed ${sdk##*/}"; done
+installed="${installed:- ${FAKE_SDK:-10.0.100}}"
+if [ "$1" = --list-sdks ]; then for sdk in $installed; do echo "$sdk [/fake/sdk]"; done; exit 0; fi
+picked="${installed##* }"
+dir="$PWD"
+while [ ! -f "$dir/global.json" ] && [ "$dir" != / ]; do dir="$(dirname "$dir")"; done
+if [ -f "$dir/global.json" ] && grep -q '"rollForward" *: *"disable"' "$dir/global.json"; then
+  picked="$(sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p' "$dir/global.json")"
+  case "$installed " in
+    *" $picked "*) ;;
+    *) for sdk in $installed; do echo "$sdk [/fake/sdk]"; done
+       printf 'A compatible .NET SDK was not found.\n\nRequested SDK version: %s\nglobal.json file: %s\n' \
+         "$picked" "$dir/global.json" >&2
+       exit 155 ;;
+  esac
+fi
+[ "$1" = --version ] && echo "$picked"
+exit 0
+"""
+
 
 def shell(script: Path) -> list[str]:
     """The command that runs `script`: the script itself on macOS and Linux, through `BASH` on Windows."""

@@ -68,7 +68,7 @@ cd kotlin && ./gradlew :core:test :testing:test   # a JDK 17, anywhere; replays 
 cd kotlin && ./gradlew :android:assembleDebug     # needs the Android SDK
 cd kotlin && ktlint "**/*.kt" "**/*.kts" "!**/build/**"   # Kotlin style (kotlin/.editorconfig; kotlin.yml pins ktlint)
 python3 tools/tests/run.py [l10n] [--jobs N]  # the tools' tests, side by side (one process per CPU; a word filters by file name)
-dotnet test web/Laching.Web.sln                # the web packages; Jobs tests need PostgreSQL (LACHING_WEB_TEST_POSTGRES, or localhost:5432)
+cd web && dotnet test Laching.Web.sln          # the web packages; Jobs tests need PostgreSQL (LACHING_WEB_TEST_POSTGRES, or localhost:5432)
 web/scripts/tailwind-sample.sh                 # packs Laching.Web.Tailwind and builds the sample with it
 scripts/verify.sh                              # runs what applies to your changes; --all for everything
 # a Stop hook runs scripts/verify.sh --fast on the files you edited; fix what it reports before ending

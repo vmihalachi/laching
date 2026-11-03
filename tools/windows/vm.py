@@ -24,6 +24,10 @@ it has them, else Laching's beside this file. `screenshots`, `check-layout` and 
 unless `-Platform` / a platform is given. `check-layout` runs every language in companion.json's `languages.all` unless
 some are named, and replaces their folders' shots and problems.txt on the Mac.
 
+`build`, `test` and `smoke` run dotnet from the copy's `<windows.dir>`, so the app's global.json there picks the SDK as
+it does on Windows and in CI (one the VM lacks fails the step), and a relative path in build's or test's ARGS (`-bl`,
+`-o`, `--results-directory`) is from that folder. The scripts and `run` start in the copy's root.
+
 The copy: the files git sees (tracked and untracked but not ignored, submodules included, symlinks left out) are
 mirrored into `%USERPROFILE%\laching-vm\<checkout>-<hash>` in the VM through the Mac's shared folders. The VM lists
 the files it lacks or holds in another version (size, mtime), the Mac sends a tar of just those, and the VM unpacks
@@ -96,11 +100,13 @@ Mirrors the working tree (and a linked Laching checkout) into the VM's copy and 
 first; this one takes no words.""",
     "build": """vm.sh build [x64|ARM64…] [-- ARGS]
 
-Builds the WinUI app (windows.app in companion.json), Debug, for the platforms named (both by default). ARGS go to
-`dotnet build` as they are (`-- -p:Foo=bar`).""",
+Builds the WinUI app (windows.app in companion.json), Debug, for the platforms named (both by default), from
+<windows.dir>, so its global.json picks the SDK. ARGS go to `dotnet build` as they are (`-- -p:Foo=bar`); a relative
+path in them (`-bl`, `-o`) is from <windows.dir>.""",
     "test": """vm.sh test [-- ARGS]
 
-Runs windows.coreTests and windows.appTests with `dotnet test`; ARGS go to it as they are (`-- --filter Name~Stats`).""",
+Runs windows.coreTests and windows.appTests with `dotnet test` from <windows.dir>, so its global.json picks the SDK;
+ARGS go to it as they are (`-- --filter Name~Stats`), a relative path in them (`--results-directory`) from there.""",
     "screenshots": """vm.sh screenshots DIR [-- ARGS]
 
 Runs the screenshot script (<windows.dir>/scripts/screenshots.ps1, else Laching's) in the VM and copies its PNGs and
@@ -117,13 +123,14 @@ replaces each one's shots and problems.txt in <windows.dir>/build/layout-check/<
 script: `-Only home,settings`, `-Jobs 2`.""",
     "smoke": """vm.sh smoke [x64|ARM64] [-- ARGS]
 
-Publishes the MSIX (Release, Native AOT) for one platform (the VM's own by default), then runs smoke-package.ps1 on
-it; ARGS go to that script (`-- -SideBySide`).""",
+Publishes the MSIX (Release, Native AOT) for one platform (the VM's own by default) from <windows.dir>, so its
+global.json picks the SDK, then runs smoke-package.ps1 on it; ARGS go to that script (`-- -SideBySide`).""",
     "run": """vm.sh run -- COMMAND…
 
-Runs a PowerShell command in the VM's copy of the checkout, after the sync; exits with its exit code.
+Runs a PowerShell command in the VM's copy of the checkout, after the sync; exits with its exit code. It starts in the
+copy's root: go into <windows.dir> first for dotnet to take the SDK the app's global.json there pins.
 
-    vm.sh run -- dotnet --info""",
+    vm.sh run -- 'cd windows; dotnet --info'""",
 }
 
 
@@ -256,13 +263,20 @@ class Context:
         except ValueError:
             return guest_path(path)
 
-    def windows_project(self, key: str) -> str | None:
-        """`<windows.dir>/<name>/<name>.csproj` for the project companion.json names at `key`, relative to the root."""
-        name = self.config.get(key)
+    def windows_dir(self) -> str:
+        """companion.json's windows.dir, which the dotnet commands run from (see in_windows). Raises Usage when it's
+        missing or isn't a folder of the checkout, so the VM's copy has none either."""
         folder = self.config.get("windows.dir")
-        if not name or not folder:
-            return None
-        return f"{folder}/{name}/{name}.csproj"
+        if not folder:
+            raise Usage("companion.json has no windows.dir")
+        if not (self.root / folder).is_dir():
+            raise Usage(f"companion.json's windows.dir, {folder}, isn't a folder in {self.root}")
+        return folder
+
+    def windows_project(self, key: str) -> str | None:
+        """`<name>/<name>.csproj` for the project companion.json names at `key`, relative to windows.dir."""
+        name = self.config.get(key)
+        return f"{name}/{name}.csproj" if name else None
 
     def script(self, name: str) -> str:
         """The app's own `<windows.dir>/scripts/<name>` when it has one, else Laching's beside this file."""
@@ -561,12 +575,23 @@ def step(label: str, command: str) -> str:
     return f"Invoke-Step {ps(label)} {{ {command} }}"
 
 
+def in_windows(folder: str, command: str) -> str:
+    """`command` run from the copy's `folder` (windows.dir), then back in the copy's root however it ends, so the next
+    step runs from there. The .NET host picks the SDK from the global.json nearest the folder it runs in, never the
+    project's, so the app's <windows.dir>/global.json pins it only from there, and one it can't meet fails the step
+    as it does on Windows and in CI (laching#244)."""
+    return (f"Push-Location -LiteralPath (Join-Path $Root {ps(windows_rel(folder))}); "
+            f"try {{ {command} }} finally {{ Pop-Location }}")
+
+
 def build_body(ctx: Context, platforms: list[str], extra: str) -> str:
     project = ctx.windows_project("windows.app")
     if not project:
         raise Usage("companion.json has no windows.app to build")
-    lines = [step(f"dotnet build {project} ({platform}, Debug)",
-                  f"dotnet build {ps(windows_rel(project))} -p:Platform={platform} -v q -nologo '-clp:NoSummary' {extra}".rstrip())
+    folder = ctx.windows_dir()
+    lines = [step(f"dotnet build {folder}/{project} ({platform}, Debug)",
+                  in_windows(folder, f"dotnet build {ps(windows_rel(project))} -p:Platform={platform} -v q -nologo "
+                                     f"'-clp:NoSummary' {extra}".rstrip()))
              for platform in platforms]
     return "\n".join([*lines, "Exit-Steps"])
 
@@ -575,7 +600,9 @@ def test_body(ctx: Context, extra: str) -> str:
     projects = [p for p in (ctx.windows_project("windows.coreTests"), ctx.windows_project("windows.appTests")) if p]
     if not projects:
         raise Usage("companion.json names no windows.coreTests or windows.appTests")
-    lines = [step(f"dotnet test {project}", f"dotnet test {ps(windows_rel(project))} -v q --nologo {extra}".rstrip())
+    folder = ctx.windows_dir()
+    lines = [step(f"dotnet test {folder}/{project}",
+                  in_windows(folder, f"dotnet test {ps(windows_rel(project))} -v q --nologo {extra}".rstrip()))
              for project in projects]
     return "\n".join([*lines, "Exit-Steps"])
 
@@ -618,15 +645,17 @@ def smoke_body(ctx: Context, platform: str | None, extra: str) -> str:
     project = ctx.windows_project("windows.app")
     if not project:
         raise Usage("companion.json has no windows.app to package")
+    folder = ctx.windows_dir()
     script, packages = ctx.script("smoke-package.ps1"), ctx.guest_out + "\\packages\\"
     return "\n".join((
         f"$platform = {ps(platform) if platform else 'Get-GuestPlatform'}",
         f"$packages = Reset-GuestFolder ({ps(packages)} + $platform)",
         "Add-VsWhere",
-        step(f"dotnet publish {project} (Release, Native AOT)",
-             f"dotnet publish {ps(windows_rel(project))} -c Release -p:Platform=$platform "
-             "-p:GenerateAppxPackageOnBuild=true -p:AppxPackageSigningEnabled=false -p:AppxBundle=Never "
-             "\"-p:AppxPackageDir=$packages/\" -v q -nologo '-clp:NoSummary'"),
+        # From windows.dir, as build's; $packages is absolute, and the smoke script runs from the root again.
+        step(f"dotnet publish {folder}/{project} (Release, Native AOT)",
+             in_windows(folder, f"dotnet publish {ps(windows_rel(project))} -c Release -p:Platform=$platform "
+                                "-p:GenerateAppxPackageOnBuild=true -p:AppxPackageSigningEnabled=false -p:AppxBundle=Never "
+                                "\"-p:AppxPackageDir=$packages/\" -v q -nologo '-clp:NoSummary'")),
         "if ($global:VmFailures.Count) { Exit-Steps }",
         "$msix = Find-Package $packages",
         step(f"smoke ({script})", f"& {ps(script)} -Package $msix.FullName {extra}".rstrip()),

@@ -16,6 +16,9 @@ STAGES = ("pins", "content", "strings", "format", "lint", "core", "app")
 
 
 def commands(config: companion.Config, stage: str, export_dir: Path | None = None) -> list[companion_ci.Command]:
+    """The stage's commands. dotnet runs in windows.dir, its paths relative to it: the .NET host takes the SDK from the
+    global.json nearest its working directory, so an app's windows/global.json pins it, and a pin that no installed SDK
+    meets fails the stage."""
     root = config.root
     tool = lambda name, *args: companion_ci.tool(config, TOOLS, name, *args)
     if stage == "pins":
@@ -30,14 +33,14 @@ def commands(config: companion.Config, stage: str, export_dir: Path | None = Non
         return [tool("l10n.py", "export-windows", "--out", str(export_dir)),
                 (root, ["diff", "-r", "--strip-trailing-cr", str(export_dir), str(config.require_path("windows.strings"))])]
     if stage == "format":
-        return [(root, ["dotnet", "format", "whitespace", str(config.require_path("windows.dir")),
-                        "--folder", "--verify-no-changes"])]
+        return [(config.require_path("windows.dir"), ["dotnet", "format", "whitespace", ".", "--folder", "--verify-no-changes"])]
     if stage == "lint":
         return [tool("windows/check-winui.py")] if config.get("windows.app") else []
     if stage in ("core", "app"):
         key = "windows.coreTests" if stage == "core" else "windows.appTests"
-        project = config.require_path(key, "windows.dir") if stage == "core" else config.path(key, "windows.dir")
-        return [(root, ["dotnet", "test", str(project), "-c", "Release"])] if project else []
+        # The project as companion.json names it, relative to windows.dir, where dotnet runs.
+        project = config.require(key) if stage == "core" else config.get(key)
+        return [(config.require_path("windows.dir"), ["dotnet", "test", project, "-c", "Release"])] if project else []
     raise ValueError(f"unknown stage: {stage}")
 
 
@@ -56,7 +59,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("stage", choices=STAGES)
     args = parser.parse_args(argv)
     config = companion_ci.load_config(parser, TOOLS)
-    return run(config, args.stage)
+    try:
+        return run(config, args.stage)
+    except companion.ConfigError as error:  # say, an app without a windows section
+        sys.exit(f"ci-windows-core: {error}")
 
 
 if __name__ == "__main__":
