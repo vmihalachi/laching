@@ -351,6 +351,27 @@ describe("laching-landing check", () => {
     ).toEqual([]);
   });
 
+  it("reads no link inside a comment, script or style, and ends each where a browser does", () => {
+    expect(
+      checkChanged((copy) =>
+        edit(
+          copy,
+          "index.html",
+          "<footer>",
+          "<footer><!-- <a href='/c/'> <!-- --><!--><a href='/after-comment/'>" +
+            "<script>'<!--'; '<a href=\"/s/\">'</script\n bar><a href='/after-script/'>" +
+            "<STYLE>a::after { content: '<a href=\"/t/\">' }</style ><a href='/after-style/'>" +
+            "<scripts><a href='/after-scripts/'></scripts>",
+        ),
+      ),
+    ).toEqual([
+      "/: dead link /after-comment/",
+      "/: dead link /after-script/",
+      "/: dead link /after-style/",
+      "/: dead link /after-scripts/",
+    ]);
+  });
+
   it("fails on a dead link and a dead anchor", () => {
     expect(
       checkChanged((copy) => {

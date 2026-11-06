@@ -67,12 +67,42 @@ function decodeEntities(value: string) {
   );
 }
 
+/**
+ * The page with its comments left out and its scripts' and styles' bodies and end tags emptied, in one pass from the
+ * start, so a comment inside a script (or a script inside a comment) ends where a browser ends it.
+ */
+function withoutRawText(html: string) {
+  const opening = /<!--|<(script|style)(?=[\s/>])[^>]*>/gi;
+  let kept = "";
+  let from = 0;
+  for (let match = opening.exec(html); match; match = opening.exec(html)) {
+    const element = match[1];
+    kept += html.slice(from, element ? opening.lastIndex : match.index);
+    from = element ? rawTextEnd(html, opening.lastIndex, element) : commentEnd(html, match.index);
+    opening.lastIndex = from;
+  }
+  return kept + html.slice(from);
+}
+
+/** Past the end of the comment opened at `start`: its `-->` (`<!-->` and `<!--->` end at once), or the page's end. */
+function commentEnd(html: string, start: number) {
+  const end = html.indexOf("-->", start + 2);
+  return end < 0 ? html.length : end + 3;
+}
+
+/**
+ * Past the end tag of the script's or style's body starting at `from`: `</script` followed by a space, `/` or `>`,
+ * up to the next `>` (whatever junk the tag carries, `</script\n bar>` included), or the page's end.
+ */
+function rawTextEnd(html: string, from: number, element: string) {
+  const closing = new RegExp(`</${element}(?=[\\s/>]|$)[^>]*>?`, "gi");
+  closing.lastIndex = from;
+  return closing.exec(html) ? closing.lastIndex : html.length;
+}
+
 /** The tags, ids and text of an HTML page, with comments and the bodies of scripts and styles left out. */
 function parsePage(path: string, html: string): Page {
-  const stripped = html
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/(<script\b[^>]*>)[\s\S]*?<\/script\s*>/gi, "$1")
-    .replace(/(<style\b[^>]*>)[\s\S]*?<\/style\s*>/gi, "$1");
+  const stripped = withoutRawText(html);
   const tags: Tag[] = [];
   const ids = new Set<string>();
   for (const [, name, rest] of stripped.matchAll(/<([a-zA-Z][\w-]*)\b([^>]*)>/g)) {
