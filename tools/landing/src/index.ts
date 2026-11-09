@@ -52,6 +52,7 @@ export { checkLanding, type LandingCheckOptions, type LandingStores } from "./ch
 export { headersFile, hostingConfigPlugin, inlineScriptHashes } from "./hosting.js";
 export {
   createRenderer,
+  icoFromPngs,
   socialAssets,
   socialAssetsPlugin,
   type OgCopy,

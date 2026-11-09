@@ -70,11 +70,39 @@ export function createRenderer(options: Omit<OgOptions, "iconPath" | "copy">) {
   return { renderOgImage, renderIcon };
 }
 
-/** The link-preview cards and PNG icons, by file name. */
+/**
+ * Packs square PNGs (each at most 256 px) into one `.ico`, PNG-compressed entries as Windows Vista and every browser
+ * read them. Crawlers and old clients ask for `/favicon.ico` whatever the page's `<link rel="icon">` says, and get a 404
+ * without one.
+ */
+export function icoFromPngs(pngs: { size: number; png: Buffer }[]) {
+  const header = Buffer.alloc(6 + 16 * pngs.length);
+  header.writeUInt16LE(1, 2); // type: icon
+  header.writeUInt16LE(pngs.length, 4);
+  let offset = header.length;
+  pngs.forEach(({ size, png }, index) => {
+    if (size < 1 || size > 256) throw new Error(`An .ico entry is 1 to 256 px, not ${size}`);
+    const entry = 6 + 16 * index;
+    header.writeUInt8(size % 256, entry); // width, 0 meaning 256
+    header.writeUInt8(size % 256, entry + 1); // height
+    header.writeUInt16LE(1, entry + 4); // color planes
+    header.writeUInt16LE(32, entry + 6); // bits per pixel
+    header.writeUInt32LE(png.length, entry + 8);
+    header.writeUInt32LE(offset, entry + 12);
+    offset += png.length;
+  });
+  return Buffer.concat([header, ...pngs.map(({ png }) => png)]);
+}
+
+const contentTypes: Record<string, string> = { png: "image/png", ico: "image/x-icon" };
+
+/** The link-preview cards and icons (PNGs and `favicon.ico`), by file name. */
 export function socialAssets(options: OgOptions) {
   const { renderOgImage, renderIcon } = createRenderer(options);
   const icon = readFileSync(options.iconPath, "utf8");
+  const favicon = icoFromPngs([16, 32, 48].map((size) => ({ size, png: renderIcon(icon, size) })));
   const files = new Map<string, Buffer>([
+    ["favicon.ico", favicon],
     ["favicon-32.png", renderIcon(icon, 32)],
     ["apple-touch-icon.png", renderIcon(icon, 180, { padded: true })],
     ["icon-192.png", renderIcon(icon, 192, { padded: true })],
@@ -87,7 +115,7 @@ export function socialAssets(options: OgOptions) {
 }
 
 /**
- * Renders link-preview images and PNG icons from SVG sources. They are emitted into the build output and served from
+ * Renders link-preview images and the icons from SVG sources. They are emitted into the build output and served from
  * memory by the dev server, so nothing generated is committed.
  */
 export function socialAssetsPlugin(options: OgOptions): Plugin {
@@ -97,11 +125,12 @@ export function socialAssetsPlugin(options: OgOptions): Plugin {
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         const name = req.url?.split("?")[0]?.replace(/^\//, "");
-        if (!name?.endsWith(".png")) return next();
+        const contentType = contentTypes[name?.split(".").pop() ?? ""];
+        if (!name || !contentType) return next();
         assets ??= socialAssets(options);
         const file = assets.get(name);
         if (!file) return next();
-        res.setHeader("Content-Type", "image/png");
+        res.setHeader("Content-Type", contentType);
         res.end(file);
       });
     },

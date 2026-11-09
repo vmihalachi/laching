@@ -9,6 +9,7 @@ import {
   companionLanding,
   createRenderer,
   headersFile,
+  icoFromPngs,
   socialAssets,
   type Language,
   type LandingCheckOptions,
@@ -236,12 +237,32 @@ describe("companionLanding", () => {
     expect([...files.keys()].sort()).toEqual([
       "apple-touch-icon.png",
       "favicon-32.png",
+      "favicon.ico",
       "icon-192.png",
       "icon-512.png",
       "og-en.png",
       "og-it.png",
     ]);
-    for (const png of files.values()) expect(png.subarray(1, 4).toString()).toBe("PNG");
+    for (const [name, png] of files) {
+      if (name.endsWith(".png")) expect(png.subarray(1, 4).toString()).toBe("PNG");
+    }
+    // favicon.ico: an icon directory of 16, 32 and 48 px PNG entries, each pointing at its PNG.
+    const ico = files.get("favicon.ico")!;
+    expect([ico.readUInt16LE(0), ico.readUInt16LE(2), ico.readUInt16LE(4)]).toEqual([0, 1, 3]);
+    const entries = [0, 1, 2].map((index) => 6 + 16 * index);
+    expect(entries.map((entry) => ico.readUInt8(entry))).toEqual([16, 32, 48]);
+    for (const entry of entries) {
+      const offset = ico.readUInt32LE(entry + 12);
+      const png = ico.subarray(offset, offset + ico.readUInt32LE(entry + 8));
+      expect(png.subarray(1, 4).toString()).toBe("PNG");
+      expect(png.readUInt32BE(16)).toBe(ico.readUInt8(entry)); // the PNG's IHDR width
+    }
+  });
+
+  it("writes a 256 px .ico entry as 0 and refuses larger ones", () => {
+    const png = Buffer.from("\x89PNG");
+    expect(icoFromPngs([{ size: 256, png }]).readUInt8(6)).toBe(0);
+    expect(() => icoFromPngs([{ size: 512, png }])).toThrow("1 to 256 px");
   });
 
   it("pads an icon whatever comes before its root tag, in linear time", () => {
