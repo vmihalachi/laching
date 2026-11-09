@@ -45,7 +45,7 @@ A new app from zero (the packages, the submodule, `companion.json`, the hook and
 **Swift** (macOS 14+), in `Package.swift` or Xcode's package list, pinned to a tag:
 
 ```swift
-.package(url: "https://github.com/vmihalachi/laching", exact: "0.21.1")
+.package(url: "https://github.com/vmihalachi/laching", exact: "0.21.2")
 ```
 
 **.NET** (10), from NuGet.org. `Laching.Windows` and `Laching.Windows.Companion` need **Windows 11**: they target
@@ -213,7 +213,7 @@ holding the nuget.org username; without them it says so and attaches the package
 `Laching.Web.*` packages work the same way on their own version, `LachingWebVersion` (`web/Directory.Build.props`). It
 publishes `@laching/landing` to npm when it changed, through trusted publishing as well
 ([`tools/landing/README.md`](tools/landing/README.md)), and makes the GitHub release, its notes generated from the
-merged pull requests' titles. The latest release is `v0.21.1`.
+merged pull requests' titles. The latest release is `v0.21.2`.
 
 ## License
 
