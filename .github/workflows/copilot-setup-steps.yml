@@ -1,6 +1,6 @@
 name: Copilot setup steps
 
-# Prepares GitHub Copilot's cloud coding agent (Ubuntu): the .NET 10 SDK and the restored test projects, so
+# Prepares GitHub Copilot's cloud coding agent (Ubuntu): the .NET 11 SDK and the restored test projects, so
 # `dotnet test` works once the agent's firewall is up, and a JDK 17 with the Kotlin build's Gradle caches warm, so
 # `./gradlew :core:test` does too, and ktlint at the version kotlin.yml pins, so verify.sh lints Kotlin. Swift needs
 # macOS; the agent verifies it through swift.yml (see AGENTS.md). Also runs when edited, so a broken setup shows up in
@@ -31,7 +31,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: "11.0.x"
 
       # The four test projects that run anywhere (what verify.sh runs).
       - name: Restore the test projects

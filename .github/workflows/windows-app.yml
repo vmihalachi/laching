@@ -87,7 +87,7 @@ jobs:
           "core-tests=$(if ($windows.coreTests) { "$($windows.coreTests)/$($windows.coreTests).csproj" })" >> $env:GITHUB_OUTPUT
           "app-tests=$(if ($windows.appTests) { "$($windows.appTests)/$($windows.appTests).csproj" })" >> $env:GITHUB_OUTPUT
 
-      # setup-dotnet downloads the newest .NET 10 SDK whenever the image is a patch behind, and the SDK the app's
+      # setup-dotnet downloads the newest .NET 11 SDK whenever the image is a patch behind, and the SDK the app's
       # windows/global.json pins; the image's own does when it is in the newest feature band and meets that global.json,
       # asked in windows.dir (tools/windows/dotnet-sdk.ps1).
       - name: The image's .NET SDK
@@ -100,12 +100,12 @@ jobs:
           $script = Join-Path $env:GITHUB_WORKSPACE "$env:LACHING_PATH/tools/windows/dotnet-sdk.ps1"
           if (Test-Path $script) { pwsh $script } else { "No $script in this Laching: setup-dotnet runs." }
 
-      # The self-hosted runner keeps its own .NET 10 SDK and Python 3; a windows/global.json pin its SDK doesn't meet
+      # The self-hosted runner keeps its own .NET 11 SDK and Python 3; a windows/global.json pin its SDK doesn't meet
       # fails the steps that run dotnet.
       - uses: actions/setup-dotnet@v6
         if: inputs.hosted && steps.sdk.outputs.use != 'true'
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: "11.0.x"
           global-json-file: ${{ steps.app.outputs.global-json }}
 
       - uses: actions/setup-python@v7

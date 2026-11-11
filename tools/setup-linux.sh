@@ -49,18 +49,18 @@ dotnet_sdk() {
   has dotnet && sdk="$(cd "$dir" && dotnet --version 2>/dev/null)" && echo "$sdk"
 }
 
-# .NET 10 SDK, into ~/.dotnet: the latest 10.0, and the one windows/global.json pins when that one doesn't meet it.
+# .NET 11 SDK, into ~/.dotnet: the latest 11.0, and the one windows/global.json pins when that one doesn't meet it.
 if [ -n "$WINDOWS_DIR" ] && [ ! -d "$WINDOWS_DIR" ]; then
   echo "warning: windows.dir ($WINDOWS_DIR) isn't a folder: check companion.json; the .NET SDK isn't set up" >&2
 elif [ -n "$WINDOWS_DIR" ]; then
   # An earlier run's SDK, which a fresh shell doesn't have on PATH.
   [ -x "$HOME/.dotnet/dotnet" ] && export PATH="$HOME/.dotnet:$PATH"
-  # Any 10.0 SDK, though a newer one may be the one picked where global.json pins nothing.
-  if ! dotnet_sdk >/dev/null || ! dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then
-    echo "Installing the .NET 10 SDK into ~/.dotnet"
+  # Any 11.0 SDK, though a newer one may be the one picked where global.json pins nothing.
+  if ! dotnet_sdk >/dev/null || ! dotnet --list-sdks 2>/dev/null | grep -q '^11\.'; then
+    echo "Installing the .NET 11 SDK into ~/.dotnet"
     installer="${TMPDIR:-/tmp}/dotnet-install.sh"
     if curl -fsSL https://dot.net/v1/dotnet-install.sh -o "$installer" &&
-      bash "$installer" --channel 10.0 --install-dir "$HOME/.dotnet" >/dev/null; then
+      bash "$installer" --channel 11.0 --install-dir "$HOME/.dotnet" >/dev/null; then
       case ":$PATH:" in *":$HOME/.dotnet:"*) ;; *) export PATH="$HOME/.dotnet:$PATH" ;; esac
       if ! dotnet_sdk >/dev/null && [ -f "$WINDOWS_DIR/global.json" ]; then
         echo "Installing the .NET SDK $WINDOWS_DIR/global.json pins into ~/.dotnet"

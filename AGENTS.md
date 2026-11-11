@@ -54,7 +54,7 @@ product imports and what runs where, is `docs/layout.md`.
 swift build && swift test                      # needs macOS (LachingSystem/Shell/Store import AppKit, CoreAudio, StoreKit)
 LACHING_WRITE_CONFORMANCE=1 swift test --filter 'ConformanceTests/testWriteVectors'   # or scripts/conformance.sh
 xcrun swift-format lint -r --strict --configuration .swift-format Sources Tests
-cd dotnet && dotnet test Laching.Core.Tests   # anywhere with the .NET 10 SDK (Laching.Windows builds on Windows only)
+cd dotnet && dotnet test Laching.Core.Tests   # anywhere with the .NET 11 SDK (Laching.Windows builds on Windows only)
 cd dotnet && dotnet test Laching.Companion.Tests   # the companion vectors, the same anywhere
 cd dotnet && dotnet test Laching.Companion.Shell.Tests   # the companion shell's logic, the same anywhere
 cd dotnet && dotnet test Laching.Testing.Tests   # the mocks, the conformance helpers and the fixtures, the same anywhere

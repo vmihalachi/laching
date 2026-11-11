@@ -51,7 +51,7 @@ Android (`laching.core`, the scheduler, store and drawing; `laching.android`, Pl
 `laching.testing`, the fakes), the six `Laching.Web.*` packages (jobs, the Cloudflare origin check and headers,
 Turnstile, Aspire ingress, Tailwind, images), and `tools/` (Python tools, scripts and agent skills a companion app
 vendors as a submodule).
-macOS 14+, iOS 17+, Windows 11 (.NET 10) and Android 8+ (Kotlin); menu bar, tray and phone. Version 0.x: minor versions may change public types. The package ships no strings.
+macOS 14+, iOS 17+, Windows 11 (.NET 11) and Android 8+ (Kotlin); menu bar, tray and phone. Version 0.x: minor versions may change public types. The package ships no strings.
 
 ## Brand Commitments
 

@@ -376,7 +376,7 @@ that name (the same model, made on first use) that the Simulator panel and the s
 
 ## `setup-linux.sh`
 
-Prepares a Linux container (cloud agents): submodules, .NET (the newest 10.0 SDK, and the one the app's
+Prepares a Linux container (cloud agents): submodules, .NET (the newest 11.0 SDK, and the one the app's
 `windows/global.json` pins when the newest doesn't meet it), landing dependencies, and for an app with an `android`
 section a JDK 17 and ktlint. Claude Code's cloud sessions run it at session start, and the app's
 `copilot-setup-steps.yml` as a step ([Linux checks](#linux-checks)). It hands `PATH` and `DOTNET_ROOT` on to what runs
@@ -513,7 +513,7 @@ An app's `windows-core.yml` keeps its dispatch, concurrency and runner policy an
 `vmihalachi/laching/.github/workflows/windows-core.yml@vX.Y.Z`. Its inputs match the Mac workflow: `hosted: true`
 selects `ubuntu-latest`; `runner` supplies the self-hosted JSON labels; `laching-path` must match the profile;
 `submodules: "false"` checks out only Laching explicitly, while `"true"` also initializes recorded voices for app tests.
-The self-hosted machine supplies .NET 10 and Python; hosted runs install them, and the SDK the app's
+The self-hosted machine supplies .NET 11 and Python; hosted runs install them, and the SDK the app's
 `windows/global.json` pins.
 
 `ci-windows-core.py` runs `pins`, `content`, `strings`, `format`, `lint`, `core` and `app`. Paths come from `windows.dir`,
@@ -611,7 +611,7 @@ app builds, packages and checks the same way. Its `.csproj` sets its own propert
 
 ```xml
 <PropertyGroup>
-  <TargetFramework>net10.0-windows10.0.22000.0</TargetFramework>  <!-- Windows 11, as the Laching.Windows packages -->
+  <TargetFramework>net11.0-windows10.0.22000.0</TargetFramework>  <!-- Windows 11, as the Laching.Windows packages -->
   <TargetPlatformMinVersion>10.0.22000.0</TargetPlatformMinVersion>  <!-- the MSIX's MinVersion -->
   <AssemblyName>MyApp</AssemblyName>
   <CompanionVoiceFolder>..\..\voices\Voice</CompanionVoiceFolder>           <!-- → Voice\<lang>\<voice>\<id>.m4a -->
@@ -636,7 +636,7 @@ app builds, packages and checks the same way. Its `.csproj` sets its own propert
   goes through `XamlCast.As<T>`; `check-winui.py` fails on the patterns, and `verify.sh` runs it on the changed files.
   The Release screenshots and `smoke-package.ps1` on the built package are the proof before an upload.
 - **The model tests run on any OS.** The app's model, its words and the window list use no WinUI type; what has a
-  WinUI half sits under `#if WINDOWS` (defined for `-windows` target frameworks only). A `net10.0` test project
+  WinUI half sits under `#if WINDOWS` (defined for `-windows` target frameworks only). A `net11.0` test project
   (`windows.appTests`) compiles those files by link and reads the app's English `.resw` through `ReswStrings`, so its
   assertions read the real words; `verify.sh` runs it when the app or it changes.
 - **Wrappers**, as for the shell scripts ([*Adopt the tools*](../docs/getting-started.md#adopt-the-tools), step 3):
@@ -711,7 +711,7 @@ checks them.
 
 ### `windows/dotnet-sdk.ps1`
 
-Whether a GitHub-hosted runner image's .NET SDK will do: it does when it is in the newest .NET 10 feature band and
+Whether a GitHub-hosted runner image's .NET SDK will do: it does when it is in the newest .NET 11 feature band and
 meets the `global.json` of the folder it is asked in, if any (`windows.dir` in `windows-app.yml`, `web/` in `web.yml`),
 so the job skips `setup-dotnet`'s 300 MB download. It writes `use=true|false` to `$GITHUB_OUTPUT` and always exits 0.
 Laching's own workflows and the reusable `windows-app.yml` (from the app's submodule, when it has the script) run it

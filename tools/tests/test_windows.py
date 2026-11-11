@@ -30,7 +30,7 @@ CHECK_WINUI = WINDOWS / "check-winui.py"
 POWERSHELL = shutil.which("pwsh") or shutil.which("powershell")
 PWSH = shutil.which("pwsh")
 """The shell of the workflows' `shell: pwsh` steps (ConvertFrom-Json -AsHashtable), which Windows PowerShell isn't."""
-PIN = '{"sdk": {"version": "10.0.999", "rollForward": "disable"}}'
+PIN = '{"sdk": {"version": "11.0.999", "rollForward": "disable"}}'
 """A windows/global.json pinning an SDK no machine has."""
 
 
@@ -279,7 +279,7 @@ class AppWorkflowTests(unittest.TestCase):
                 setup = step(steps, uses="actions/setup-dotnet@v6")
                 self.assertLess(steps.index(step(steps, id="app")), steps.index(setup), "its global.json found first")
                 self.assertEqual(setup["with.global-json-file"], "${{ steps.app.outputs.global-json }}")
-                self.assertEqual(setup["with.dotnet-version"], '"10.0.x"', "beside the newest .NET 10")
+                self.assertEqual(setup["with.dotnet-version"], '"11.0.x"', "beside the newest .NET 11")
 
     def test_windows_app_asks_and_tests_in_windows_dir(self):
         steps = workflow_steps("windows-app.yml", "app")
@@ -312,7 +312,7 @@ class AppWorkflowTests(unittest.TestCase):
 
             done = look()
             self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-            self.assertEqual(outputs(output), {}, "no global.json: the newest .NET 10 alone")
+            self.assertEqual(outputs(output), {}, "no global.json: the newest .NET 11 alone")
             (root / "windows" / "global.json").write_text(PIN, "utf8")
             done = look()
             self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -494,7 +494,7 @@ class PowerShellTests(unittest.TestCase):
                 self.assertTrue(cwd.samefile(root / "windows"), f"dotnet {command} ran in {cwd}")
 
             pin = root / "windows" / "global.json"
-            pin.write_text('{"sdk": {"version": "10.0.999", "rollForward": "disable"}}', "utf8")
+            pin.write_text('{"sdk": {"version": "11.0.999", "rollForward": "disable"}}', "utf8")
             done = build()
             self.assertNotEqual(done.returncode, 0)
             self.assertIn("A compatible .NET SDK was not found", done.stdout + done.stderr)
@@ -541,11 +541,11 @@ class PowerShellTests(unittest.TestCase):
                 self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
                 return output.read_text().strip()
 
-            self.assertEqual(ask("10.0.105", "10.0.111"), "use=true", "a patch behind in the newest band")
-            self.assertEqual(ask("10.0.111", "10.0.111"), "use=true")
-            self.assertEqual(ask("10.0.105", "10.0.201"), "use=false", "a band behind")
-            self.assertEqual(ask("9.0.306", "10.0.111"), "use=false", "not .NET 10")
-            self.assertEqual(ask(None, "10.0.111"), "use=false", "no SDK that runs here")
+            self.assertEqual(ask("11.0.105", "11.0.111"), "use=true", "a patch behind in the newest band")
+            self.assertEqual(ask("11.0.111", "11.0.111"), "use=true")
+            self.assertEqual(ask("11.0.105", "11.0.201"), "use=false", "a band behind")
+            self.assertEqual(ask("10.0.306", "11.0.111"), "use=false", "not .NET 11")
+            self.assertEqual(ask(None, "11.0.111"), "use=false", "no SDK that runs here")
 
     def package(self, folder: Path, *names: str) -> Path:
         manifest = ('<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">'
@@ -669,7 +669,7 @@ class PowerShellTests(unittest.TestCase):
             self.assertEqual([command for command, _ in ran], ["publish"])
             self.assertTrue(ran[0][1].samefile(root / "windows"), ran)
 
-            (root / "windows" / "global.json").write_text('{"sdk": {"version": "10.0.999", "rollForward": "disable"}}',
+            (root / "windows" / "global.json").write_text('{"sdk": {"version": "11.0.999", "rollForward": "disable"}}',
                                                           "utf8")
             done = publish()
             self.assertNotEqual(done.returncode, 0)
@@ -753,7 +753,7 @@ class PowerShellTests(unittest.TestCase):
 
             done = look()
             self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-            self.assertEqual(outputs(output), {"global-json": ""}, "no global.json: the newest .NET 10 alone")
+            self.assertEqual(outputs(output), {"global-json": ""}, "no global.json: the newest .NET 11 alone")
             (root / "windows" / "global.json").write_text(PIN, "utf8")
             done = look()
             self.assertEqual(done.returncode, 0, done.stdout + done.stderr)

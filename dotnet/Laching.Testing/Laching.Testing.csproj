@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <IsPackable>true</IsPackable>
     <PackageId>Laching.Testing</PackageId>
     <Description>Test support for apps built on Laching.Core and Laching.Companion, mirrored from the Swift LachingTesting: mock clock, idle, busy and random sources; conformance helpers (finding the vectors folder, dates, names); the replay bodies that check an app's companion vectors (phrases, settings, picker, cadence, quiet timelines, character poses, desktop) and return their problems; loaders for Laching's fixture bank, defaults and art; fakes for the companion shell (speaker, chime, timers run by hand). No test framework dependency.</Description>

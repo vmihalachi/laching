@@ -22,13 +22,13 @@ spec = importlib.util.spec_from_file_location("ci_windows_core", TOOLS / "ci-win
 ci = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ci)
 
-# The .NET host's choice of SDK, with 10.0.402 installed: the global.json nearest the working directory (walking up)
-# pins it, and a pin that isn't 10.0.402 fails as the host does. Logs where it ran and its arguments.
+# The .NET host's choice of SDK, with 11.0.402 installed: the global.json nearest the working directory (walking up)
+# pins it, and a pin that isn't 11.0.402 fails as the host does. Logs where it ran and its arguments.
 FAKE_DOTNET = """#!/bin/sh
 dir=$(pwd -P)
 while :; do
   if [ -f "$dir/global.json" ]; then
-    grep -q '"10.0.402"' "$dir/global.json" || {{ echo "A compatible .NET SDK was not found."; exit 155; }}
+    grep -q '"11.0.402"' "$dir/global.json" || {{ echo "A compatible .NET SDK was not found."; exit 155; }}
     break
   fi
   [ "$dir" = / ] && break
@@ -69,10 +69,10 @@ class WindowsCoreCITests(FixtureAppTestCase):
             f'{{"sdk": {{"version": "{version}", "rollForward": "disable"}}}}', "utf8")
         with mock.patch.dict(os.environ, {"PATH": search_path(bin_dir)}), redirect_stdout(io.StringIO()):
             self.assertEqual(ci.run(config, "core"), 0, "no global.json: the newest SDK, as before")
-            pin("10.0.402")
+            pin("11.0.402")
             self.assertEqual(ci.run(config, "core"), 0, "a pin the installed SDK meets")
             self.assertEqual(ci.run(config, "format"), 0)
-            pin("10.0.999")
+            pin("11.0.999")
             self.assertEqual(ci.run(config, "core"), 155)
             self.assertEqual(ci.run(config, "format"), 155)
             # From the root, as the stages ran before, the host never saw windows/global.json.

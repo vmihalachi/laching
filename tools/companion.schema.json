@@ -54,7 +54,7 @@
         "app": { "type": "string" },
         "sln": { "type": "string" },
         "strings": { "type": "string", "description": "Where l10n.py export-windows writes <lang>/Resources.resw." },
-        "appTests": { "type": "string", "description": "The WinUI app's model tests (net10.0, any OS), under dir; verify.sh runs them when the app or they change." },
+        "appTests": { "type": "string", "description": "The WinUI app's model tests (net11.0, any OS), under dir; verify.sh runs them when the app or they change." },
         "assets": {
           "type": "object",
           "required": ["source", "out"],

@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <!-- Consumers publish with Native AOT; this runs the trim and AOT analyzers here too. -->
     <IsAotCompatible>true</IsAotCompatible>
     <IsPackable>true</IsPackable>

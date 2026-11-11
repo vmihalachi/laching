@@ -357,14 +357,14 @@
       </div>
       <div class="install-card">
         <h3>NuGet</h3>
-        <p class="req">.NET 10; every package an app ships is Native AOT compatible</p>
+        <p class="req">.NET 11; every package an app ships is Native AOT compatible</p>
 <pre tabindex="0"><code>dotnet add package Laching.Core
 dotnet add package Laching.Companion <span class="c"># a desk companion</span>
 dotnet add package Laching.Companion.Shell <span class="c"># its shell, any OS</span>
 dotnet add package Laching.Windows   <span class="c"># Windows 11</span>
 dotnet add package Laching.Windows.Companion <span class="c"># WinUI 3</span>
 dotnet add package Laching.Testing   <span class="c"># test projects</span></code></pre>
-        <p><code>Laching.Core</code>, <code>Laching.Companion</code> and <code>Laching.Companion.Shell</code> build anywhere .NET runs. <code>Laching.Windows</code> adds the tray, idle and busy services, and <code>Laching.Windows.Companion</code> a companion app's whole shell on WinUI 3, with <code>Laching.Companion.Shell</code> under it. Those two need Windows 11 (<code>net10.0-windows10.0.22000.0</code>).</p>
+        <p><code>Laching.Core</code>, <code>Laching.Companion</code> and <code>Laching.Companion.Shell</code> build anywhere .NET runs. <code>Laching.Windows</code> adds the tray, idle and busy services, and <code>Laching.Windows.Companion</code> a companion app's whole shell on WinUI 3, with <code>Laching.Companion.Shell</code> under it. Those two need Windows 11 (<code>net11.0-windows10.0.22000.0</code>).</p>
       </div>
       <div class="install-card">
         <h3>Gradle, for Android</h3>
@@ -392,7 +392,7 @@ implementation(<span class="s">"laching:core"</span>)</code></pre>
     <div class="split-copy">
       <h2>And for the website: Laching.Web</h2>
       <p>Six NuGet packages for small ASP.NET Core and Blazor sites on Azure Container Apps behind Cloudflare. They share nothing with the app packages, and no app here uses them; Adjudeca runs on them.</p>
-      <p>.NET 10. One version for all six, which moves only in a Laching release that changed them. <a href="https://github.com/vmihalachi/laching/blob/master/web/README.md">web/README.md</a> has the details.</p>
+      <p>.NET 11. One version for all six, which moves only in a Laching release that changed them. <a href="https://github.com/vmihalachi/laching/blob/master/web/README.md">web/README.md</a> has the details.</p>
 <pre tabindex="0"><code>dotnet add package Laching.Web.AspNetCore
 dotnet add package Laching.Web.Jobs</code></pre>
     </div>

@@ -60,9 +60,9 @@ exit 0
 """,
 }
 
-# The latest .NET 10 SDK in --install-dir, or the one --jsonfile pins (none with $FAKE_NO_PIN), beside the host ($HOST).
+# The latest .NET 11 SDK in --install-dir, or the one --jsonfile pins (none with $FAKE_NO_PIN), beside the host ($HOST).
 INSTALLER = r"""echo "dotnet-install $*" >>"$LOG"
-version=10.0.100
+version=11.0.100
 if [ "$1" = --jsonfile ]; then
   [ -z "${FAKE_NO_PIN:-}" ] || { echo "dotnet-install: no SDK $2 pins" >&2; exit 1; }
   version="$(sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p' "$2")"
@@ -152,7 +152,7 @@ class SetupLinuxTests(FixtureAppTestCase):
             "git config submodule.recurse true",
             "git config push.recurseSubmodules on-demand",
             f"curl -fsSL https://dot.net/v1/dotnet-install.sh -o {self.root.parent / 'tmp'}/dotnet-install.sh",
-            f"dotnet-install --channel 10.0 --install-dir {home}/.dotnet",
+            f"dotnet-install --channel 11.0 --install-dir {home}/.dotnet",
             "sudo -n apt-get install -y -qq openjdk-17-jdk-headless",
             "sudo -n apt-get update -qq",
             f"curl -fsSL https://github.com/pinterest/ktlint/releases/download/1.8.0/ktlint -o {home}/.local/bin/ktlint",
@@ -173,16 +173,16 @@ class SetupLinuxTests(FixtureAppTestCase):
             self.assertIn(line, exports)
         self.assertIn(f'export PATH="{home}/.local/bin:$PATH"', exports)
         self.assertEqual(first.stdout.splitlines(), [
-            "Installing the .NET 10 SDK into ~/.dotnet",
+            "Installing the .NET 11 SDK into ~/.dotnet",
             "Installing OpenJDK 17",
             "Installing ktlint into ~/.local/bin",
             "Installing landing dependencies",
-            "Linux setup done: 10.0.100, node v24.11.0, java 17.0.12",
+            "Linux setup done: 11.0.100, node v24.11.0, java 17.0.12",
         ])
 
         second = self.run_setup()
         self.assertEqual(second.returncode, 0, second.stderr)
-        self.assertEqual(second.stdout, "Linux setup done: 10.0.100, node v24.11.0, java 17.0.12\n")
+        self.assertEqual(second.stdout, "Linux setup done: 11.0.100, node v24.11.0, java 17.0.12\n")
         self.assertEqual(second.stderr, "")
         self.assertFalse([call for call in self.calls() if call.startswith(("curl", "apt-get", "sudo", "npm"))])
 
@@ -208,7 +208,7 @@ class SetupLinuxTests(FixtureAppTestCase):
     def test_a_dotnet_10_sdk_is_not_downloaded_and_restores_the_core_tests(self):
         self.fake("dotnet", FAKES["dotnet"])
         result = self.run_setup()
-        self.assertNotIn("Installing the .NET 10 SDK", result.stdout)
+        self.assertNotIn("Installing the .NET 11 SDK", result.stdout)
         self.assertFalse([call for call in self.calls() if "dotnet-install" in call])
         # From windows/, as verify.sh runs dotnet test: the SDK windows/global.json picks restores it.
         self.assertIn(f"{self.root}/windows: dotnet restore Fixture.Core.Tests/Fixture.Core.Tests.csproj -v q --nologo",
@@ -219,49 +219,49 @@ class SetupLinuxTests(FixtureAppTestCase):
         self.fake("dotnet", FAKES["dotnet"])
         result = self.run_setup(FAKE_SDK="8.0.400")
         self.assertIn(f"{self.root}/windows: dotnet --version", self.calls())
-        self.assertIn("Installing the .NET 10 SDK into ~/.dotnet", result.stdout)
+        self.assertIn("Installing the .NET 11 SDK into ~/.dotnet", result.stdout)
 
     def test_a_newer_sdk_beside_10_installs_nothing(self):
-        # Without a global.json the host picks .NET 11, but the 10.0 the app's projects target is there too.
+        # Without a global.json the host picks .NET 12, but the 11.0 the app's projects target is there too.
         self.fake("dotnet", FAKES["dotnet"])
-        result = self.run_setup(FAKE_SDK="10.0.100 11.0.100")
+        result = self.run_setup(FAKE_SDK="11.0.100 12.0.100")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse([call for call in self.calls() if "dotnet-install" in call], self.calls())
         self.assertNotIn("DOTNET_ROOT", self.exports())
-        self.assertIn("Linux setup done: 11.0.100, node", result.stdout)
+        self.assertIn("Linux setup done: 12.0.100, node", result.stdout)
 
     def pin(self, version: str) -> None:
         (self.root / "windows/global.json").write_text(
             json.dumps({"sdk": {"version": version, "rollForward": "disable"}}) + "\n", "utf8")
 
     def test_a_dotnet_10_sdk_the_windows_global_json_refuses_gets_the_pinned_one(self):
-        # A 10.0 SDK on PATH, and the latest 10.0 dotnet-install.sh brings, but windows/global.json pins another.
+        # A 11.0 SDK on PATH, and the latest 11.0 dotnet-install.sh brings, but windows/global.json pins another.
         self.fake("dotnet", FAKES["dotnet"])
-        self.pin("10.0.102")
+        self.pin("11.0.102")
         first = self.run_setup()
         self.assertEqual(first.returncode, 0, first.stderr)
         self.assertEqual(first.stderr, "")
         home = str(self.home)
         calls = self.calls()
         self.assertIn(f"{self.root}/windows: dotnet --version", calls)
-        self.assertIn(f"dotnet-install --channel 10.0 --install-dir {home}/.dotnet", calls)
+        self.assertIn(f"dotnet-install --channel 11.0 --install-dir {home}/.dotnet", calls)
         self.assertIn(f"dotnet-install --jsonfile windows/global.json --install-dir {home}/.dotnet", calls)
-        self.assertLess(calls.index(f"dotnet-install --channel 10.0 --install-dir {home}/.dotnet"),
+        self.assertLess(calls.index(f"dotnet-install --channel 11.0 --install-dir {home}/.dotnet"),
                         calls.index(f"dotnet-install --jsonfile windows/global.json --install-dir {home}/.dotnet"))
         self.assertEqual([line for line in first.stdout.splitlines() if ".NET" in line or "done" in line], [
-            "Installing the .NET 10 SDK into ~/.dotnet",
+            "Installing the .NET 11 SDK into ~/.dotnet",
             "Installing the .NET SDK windows/global.json pins into ~/.dotnet",
-            "Linux setup done: 10.0.102, node v24.11.0, java 17.0.12",
+            "Linux setup done: 11.0.102, node v24.11.0, java 17.0.12",
         ])
         self.assertIn(f'export PATH="{home}/.dotnet:$PATH"', self.exports())
         # The next run finds the pinned SDK in ~/.dotnet.
         second = self.run_setup()
-        self.assertEqual(second.stdout, "Linux setup done: 10.0.102, node v24.11.0, java 17.0.12\n")
+        self.assertEqual(second.stdout, "Linux setup done: 11.0.102, node v24.11.0, java 17.0.12\n")
         self.assertFalse([call for call in self.calls() if "dotnet-install" in call], self.calls())
 
     def test_a_pin_the_windows_global_json_makes_that_no_sdk_meets_warns_and_says_so(self):
         self.fake("dotnet", FAKES["dotnet"])
-        self.pin("10.0.999")
+        self.pin("11.0.999")
         result = self.run_setup(FAKE_NO_PIN="1")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("warning: no installed .NET SDK meets windows/global.json; dotnet test and dotnet format won't run",
@@ -272,11 +272,11 @@ class SetupLinuxTests(FixtureAppTestCase):
 
     def test_a_pin_the_sdk_on_path_meets_installs_nothing(self):
         self.fake("dotnet", FAKES["dotnet"])
-        self.pin("10.0.100")
+        self.pin("11.0.100")
         result = self.run_setup()
         self.assertFalse([call for call in self.calls() if "dotnet-install" in call], self.calls())
         self.assertNotIn(".NET", result.stdout)
-        self.assertIn("Linux setup done: 10.0.100, node", result.stdout)
+        self.assertIn("Linux setup done: 11.0.100, node", result.stdout)
 
     def test_a_windows_dir_that_is_no_folder_warns_instead_of_installing(self):
         self.config(lambda config: config["windows"].update(dir="win"))
