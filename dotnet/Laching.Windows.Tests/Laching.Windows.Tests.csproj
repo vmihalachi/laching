@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0-windows10.0.22000.0</TargetFramework>
+    <TargetFramework>net11.0-windows10.0.22000.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.22000.0</TargetPlatformMinVersion>
     <IsPackable>false</IsPackable>
     <!-- Runs on Windows only (dotnet.yml's windows job); compiles elsewhere like Laching.Windows. -->
@@ -11,6 +11,10 @@
     <WindowsAppSdkDeploymentManagerInitialize>false</WindowsAppSdkDeploymentManagerInitialize>
     <!-- As the apps: it turns off the projection's runtime-generated interop, so code that only works with it fails here. -->
     <PublishAot>true</PublishAot>
+    <!-- The .NET 11 SDK's projection flags every collection expression that becomes a read-only interface, in case it
+         crosses into WinRT. The libraries give theirs a concrete type; a test's list that did cross fails that test on
+         Windows (PublishAot above). -->
+    <NoWarn>$(NoWarn);CsWinRT1032</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />

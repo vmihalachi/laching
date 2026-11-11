@@ -223,13 +223,11 @@ public sealed partial class CharacterCanvas : UserControl
         if (XamlRoot is null || layers.Count == 0)
             return [];
         var toWindow = stage.TransformToVisual(null);
-        return
-        [
-            .. CharacterScene
-                .DrawnBounds(layers)
-                .Select(b => toWindow.TransformBounds(new global::Windows.Foundation.Rect(b.Origin.X, b.Origin.Y, b.Size.Width, b.Size.Height)))
-                .Select(b => new Rect(b.X, b.Y, b.Width, b.Height)),
-        ];
+        return CharacterScene
+            .DrawnBounds(layers)
+            .Select(b => toWindow.TransformBounds(new global::Windows.Foundation.Rect(b.Origin.X, b.Origin.Y, b.Size.Width, b.Size.Height)))
+            .Select(b => new Rect(b.X, b.Y, b.Width, b.Height))
+            .ToArray();
     }
 
     protected override AutomationPeer OnCreateAutomationPeer() => new CharacterCanvasPeer(this);

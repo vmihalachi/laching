@@ -44,7 +44,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: "11.0.x"
 
       - name: Check C# formatting (dotnet/.editorconfig)
         run: dotnet format whitespace dotnet --folder --verify-no-changes
@@ -78,7 +78,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # setup-dotnet downloads the newest .NET 10 SDK whenever the image is a patch behind; the image's own does when it
+      # setup-dotnet downloads the newest .NET 11 SDK whenever the image is a patch behind; the image's own does when it
       # is in the newest feature band (tools/windows/dotnet-sdk.ps1).
       - name: The image's .NET SDK
         id: sdk
@@ -87,7 +87,7 @@ jobs:
       - uses: actions/setup-dotnet@v6
         if: steps.sdk.outputs.use != 'true'
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: "11.0.x"
 
       # What builds and runs in Debug but breaks under Native AOT or in the XAML compiler (tools/windows/check-winui.py).
       - name: WinUI traps

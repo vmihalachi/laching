@@ -142,7 +142,7 @@ public static class ScreenshotCapture
 
     /// <summary>The language tags in <paramref name="raw"/>, comma-separated, each once, in order.</summary>
     public static IReadOnlyList<string> LanguagesFrom(string? raw) =>
-        [.. (raw ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Distinct(StringComparer.OrdinalIgnoreCase)];
+        (raw ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
     /// <summary>The skin asked for (<see cref="SkinVariable"/>), else null.</summary>
     public static SkinId? Skin => IsEnabled && Setting(SkinVariable) is { Length: > 0 } skin ? new SkinId(skin) : (SkinId?)null;
@@ -158,7 +158,7 @@ public static class ScreenshotCapture
         WantedIn(mode) is var wanted && (wanted.Count == 0 || wanted.Any(p => shot.StartsWith(p, StringComparison.Ordinal)));
 
     private static IReadOnlyList<string> WantedIn(string? mode) =>
-        [.. (mode ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Where(p => p != "all")];
+        (mode ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Where(p => p != "all").ToArray();
 
     /// <summary>
     /// <see cref="DirectoryVariable"/>, else a folder per process in the temporary directory (<c>screenshots-&lt;pid&gt;</c>),
@@ -181,8 +181,8 @@ public static class ScreenshotCapture
     /// </summary>
     public static IReadOnlyList<(string Name, ElementTheme Theme)> Appearances =>
         CompanionPalette.ContrastThemeIsOn
-            ? [("contrast", ElementTheme.Default)]
-            : [.. Themes.Select(theme => (theme, theme == "dark" ? ElementTheme.Dark : ElementTheme.Light))];
+            ? new[] { ("contrast", ElementTheme.Default) }
+            : Themes.Select(theme => (theme, theme == "dark" ? ElementTheme.Dark : ElementTheme.Light)).ToArray();
 
     /// <summary>The appearance names asked for (<see cref="ThemesVariable"/>): <c>light</c> and <c>dark</c>, in the order given; both when unset.</summary>
     public static IReadOnlyList<string> Themes => ThemesFrom(Setting(ThemesVariable));

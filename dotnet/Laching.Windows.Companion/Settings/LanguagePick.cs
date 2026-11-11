@@ -83,11 +83,11 @@ internal sealed class LanguagePick(string startedIn, LanguageSetting? setting)
         try
         {
             var specific = CultureInfo.CreateSpecificCulture(tag).Name;
-            return specific.Length == 0 || string.Equals(specific, tag, StringComparison.OrdinalIgnoreCase) ? [tag] : [tag, specific];
+            return specific.Length == 0 || string.Equals(specific, tag, StringComparison.OrdinalIgnoreCase) ? new[] { tag } : new[] { tag, specific };
         }
         catch (CultureNotFoundException)
         {
-            return [tag];
+            return new[] { tag };
         }
     }
 

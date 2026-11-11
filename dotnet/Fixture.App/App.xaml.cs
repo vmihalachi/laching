@@ -30,7 +30,7 @@ public partial class App : CompanionApp
     /// The languages Settings offers, the default first. The fixture's own words are English in each (it has no
     /// strings); WinUI's words, the dates and the language row follow the pick.
     /// </summary>
-    internal static readonly IReadOnlyList<string> Languages = ["en", "de", "ro"];
+    internal static readonly IReadOnlyList<string> Languages = new[] { "en", "de", "ro" };
 
     /// <summary>The tray icon's identity: Windows keeps its place in the notification area by it.</summary>
     private static readonly Guid TrayIconId = new("5b0f6c1e-3d2a-4f87-9e4b-7a1c2d3e4f50");
@@ -44,13 +44,13 @@ public partial class App : CompanionApp
 
     private static string Root => Path.Combine(AppContext.BaseDirectory, "conformance");
 
-    private static ProductCatalog Catalog => new([FixtureModel.Supporter], [FixtureSupport.Tip]);
+    private static ProductCatalog Catalog => new(new[] { FixtureModel.Supporter }, new[] { FixtureSupport.Tip });
 
     protected override ICompanionLaunching MakeCompanion()
     {
         Prepare();
         var host = MakeHost();
-        var notifier = new CompanionNotifier("Fixture", [(FixtureModel.SayMore, "Say more"), (FixtureModel.ShhHour, "Shh for an hour")]);
+        var notifier = new CompanionNotifier("Fixture", new[] { (FixtureModel.SayMore, "Say more"), (FixtureModel.ShhHour, "Shh for an hour") });
         host.OnQuit = notifier.Dispose;
 
         var store = new InMemorySettingsStore();
@@ -120,7 +120,8 @@ public partial class App : CompanionApp
                 model.ShowBubble("Fixture line, for the screenshots: long enough to wrap once.");
                 return Task.CompletedTask;
             },
-            [
+            new Shot[]
+            {
                 new Shot.Window(FixtureWindow.Home),
                 new Shot.Window(FixtureWindow.Settings),
                 new Shot.Window(FixtureWindow.Onboarding),
@@ -128,7 +129,7 @@ public partial class App : CompanionApp
                 new Shot.SupporterSequence(FixtureWindow.Support, FixtureModel.Supporter, "support-thanks", "support-supporter"),
                 new Shot.Fitting("panel", () => new PanelView(model)),
                 new Shot.Fitting("desktop", () => DesktopCharacter.Sheet(model)),
-            ]
+            }
         );
         return true;
     }

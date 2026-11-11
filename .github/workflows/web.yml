@@ -79,7 +79,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # setup-dotnet downloads the newest .NET 10 SDK whenever the image is a patch behind; the image's own does when it
+      # setup-dotnet downloads the newest .NET 11 SDK whenever the image is a patch behind; the image's own does when it
       # is in the newest feature band and meets web/global.json, asked in web/ (tools/windows/dotnet-sdk.ps1).
       - name: The image's .NET SDK
         id: sdk

@@ -80,7 +80,7 @@ public sealed class StoreContextBackend : IStoreBackend, IDisposable
     public async Task<PurchaseOutcome> PurchaseAsync(string id)
     {
         if (!products.ContainsKey(id))
-            await LoadProductsAsync([id]);
+            await LoadProductsAsync(new[] { id });
         if (!products.TryGetValue(id, out var product))
             throw new InvalidOperationException($"The Store doesn't list {id}.");
 

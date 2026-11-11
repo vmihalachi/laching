@@ -41,7 +41,7 @@ Partner Center first.
 
 ## 3 to 5. Build, smoke-test, bundle: one command
 
-On a Windows PC with the .NET 10 SDK and the Visual Studio Build Tools C++ workload (x64 and ARM64, for the AOT link),
+On a Windows PC with the .NET 11 SDK and the Visual Studio Build Tools C++ workload (x64 and ARM64, for the AOT link),
 in Windows PowerShell or PowerShell 7, from the app's root:
 
 ```powershell

@@ -496,13 +496,13 @@ while not (state / "killed").exists():
         home = self.root / "home"
         # An earlier run's SDK, which answers only the version checks.
         for tool, body in ((home / ".dotnet" / "dotnet",
-                            'case "$1" in --version) echo 10.0.101 ;; --list-sdks) echo "10.0.101 [/x]" ;; esac\n'),
+                            'case "$1" in --version) echo 11.0.101 ;; --list-sdks) echo "11.0.101 [/x]" ;; esac\n'),
                            (home / ".local" / "bin" / "ktlint", "")):
             tool.parent.mkdir(parents=True)
             tool.write_text("#!/bin/sh\n" + body, "utf8")
             tool.chmod(0o755)
         # Everything already there: no download, no apt-get.
-        self.fake("dotnet", 'echo "10.0.100 [/x]"\n')
+        self.fake("dotnet", 'echo "11.0.100 [/x]"\n')
         self.fake("java", 'echo \'openjdk version "17.0.1"\' >&2\n')
         self.fake("curl", "exit 1\n")
         self.fake("node", "echo v24.0.0\n")
@@ -516,7 +516,7 @@ while not (state / "killed").exists():
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn("Installing", done.stdout)
         # ~/.dotnet comes first on $PATH now: its dotnet answers.
-        self.assertRegex(done.stdout, r"Linux setup done: 10\.0\.101, node v24\.0\.0, java 17\.0\.1")
+        self.assertRegex(done.stdout, r"Linux setup done: 11\.0\.101, node v24\.0\.0, java 17\.0\.1")
         claude = files["CLAUDE_ENV_FILE"].read_text("utf8")
         self.assertIn(f'export DOTNET_ROOT="{home}/.dotnet"', claude)
         self.assertIn(f'export PATH="{home}/.local/bin:$PATH"', claude)
@@ -721,10 +721,10 @@ case "$1" in status) echo "VM $2 exist running" ;; exec) [ "$3" = --current-user
         source = self.root / "windows/Fixture.Core/Sub/A.cs"
         source.parent.mkdir()
         source.write_text("class A { }\n", "utf8")
-        # The host with SDK 10.0.402 installed, and Git Bash's uname: the WinUI app builds here, not in the VM.
+        # The host with SDK 11.0.402 installed, and Git Bash's uname: the WinUI app builds here, not in the VM.
         self.fake("dotnet", DOTNET_HOST)
         self.fake("uname", "echo MINGW64_NT-10.0-26100\n")
-        env = {"LOG": str(self.log), "FAKE_SDK": "10.0.402", "PROCESSOR_ARCHITECTURE": "AMD64"}
+        env = {"LOG": str(self.log), "FAKE_SDK": "11.0.402", "PROCESSOR_ARCHITECTURE": "AMD64"}
         checks = ("dotnet format whitespace", "dotnet test (Fixture.Core.Tests)", "dotnet test (Fixture.App.Tests)",
                   "WinUI app builds (Fixture.App)")
 
@@ -749,14 +749,14 @@ case "$1" in status) echo "VM $2 exist running" ;; exec) [ "$3" = --current-user
         # windows/global.json pins an SDK that isn't installed: every check fails, as in CI, rather than passing on the
         # SDK the root picks.
         pin = windows / "global.json"
-        pin.write_text('{"sdk": {"version": "10.0.999", "rollForward": "disable"}}\n', "utf8")
+        pin.write_text('{"sdk": {"version": "11.0.999", "rollForward": "disable"}}\n', "utf8")
         result = verify()
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         for check in checks:
             self.assertIn(f"FAIL  {check}\n", result.stdout)
         self.assertIn("A compatible .NET SDK was not found", result.stdout)
         # The SDK it pins is installed.
-        pin.write_text('{"sdk": {"version": "10.0.402", "rollForward": "disable"}}\n', "utf8")
+        pin.write_text('{"sdk": {"version": "11.0.402", "rollForward": "disable"}}\n', "utf8")
         result = verify()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         for check in checks:
@@ -849,7 +849,7 @@ class LachingVerifyTests(unittest.TestCase):
         (fakes / "dotnet").write_text("#!/bin/sh\n" + DOTNET_HOST, "utf8")
         (fakes / "dotnet").chmod(0o755)
         env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-        env.update(PATH=os.pathsep.join([str(fakes), env["PATH"]]), LOG=str(log), FAKE_SDK="10.0.402")
+        env.update(PATH=os.pathsep.join([str(fakes), env["PATH"]]), LOG=str(log), FAKE_SDK="11.0.402")
 
         def verify():
             if log.exists():
@@ -867,7 +867,7 @@ class LachingVerifyTests(unittest.TestCase):
         self.assertTrue([call for call in calls if call.startswith(f"{web}: dotnet test Laching.Web.sln -v q --nologo")],
                         calls)
         # web/global.json pins an SDK that isn't installed: refused, as in CI.
-        (web / "global.json").write_text('{"sdk": {"version": "10.0.999", "rollForward": "disable"}}\n', "utf8")
+        (web / "global.json").write_text('{"sdk": {"version": "11.0.999", "rollForward": "disable"}}\n', "utf8")
         result = verify()
         for check in ("dotnet format whitespace (web)", "dotnet format (web)"):
             self.assertIn(f"FAIL  {check}\n", result.stdout, result.stdout + result.stderr)

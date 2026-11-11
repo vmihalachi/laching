@@ -13,8 +13,8 @@ pinned to a tag:
 ```
 
 **.NET** (10), from NuGet.org. `Laching.Windows` and `Laching.Windows.Companion` need **Windows 11**: they target
-`net10.0-windows10.0.22000.0` with `TargetPlatformMinVersion` 10.0.22000.0, so an app targets that or later (the rest
-are `net10.0` and run anywhere):
+`net11.0-windows10.0.22000.0` with `TargetPlatformMinVersion` 10.0.22000.0, so an app targets that or later (the rest
+are `net11.0` and run anywhere):
 
 ```sh
 dotnet add package Laching.Core

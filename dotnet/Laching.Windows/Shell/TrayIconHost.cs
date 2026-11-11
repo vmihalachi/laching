@@ -102,7 +102,7 @@ public sealed class TrayIconHost : IDisposable
     }
 
     /// <summary>The menu's rows, shown from the next time it opens.</summary>
-    public void SetMenu(IEnumerable<TrayMenuItem> items) => menu = [.. items];
+    public void SetMenu(IEnumerable<TrayMenuItem> items) => menu = items.ToArray();
 
     /// <summary>The icon's bounds in screen pixels, for placing a flyout next to it; false while it isn't shown.</summary>
     public bool TryGetIconRect(out RectInt32 rect)

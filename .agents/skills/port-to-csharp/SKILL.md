@@ -36,7 +36,7 @@ both sides. `Sources/LachingCore/Drawing/` has no C# twin: the drawing math is S
   `conformance/README.md` for rounding rules (for example `floor(x + 0.5)`, not banker's rounding).
 - **JSON: source-generated `JsonSerializerContext` only**, never reflection-based `JsonSerializer` overloads.
   Apps publish with Native AOT, and `TreatWarningsAsErrors` turns trim/AOT warnings into build failures.
-- `Laching.Core` stays platform-neutral (`net10.0`, `IsAotCompatible`). Win32 / Windows App SDK code goes in
+- `Laching.Core` stays platform-neutral (`net11.0`, `IsAotCompatible`). Win32 / Windows App SDK code goes in
   `Laching.Windows`.
 - The package ships no strings: anything user-visible is a parameter.
 

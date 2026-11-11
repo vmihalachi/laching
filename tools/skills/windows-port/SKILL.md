@@ -1,6 +1,6 @@
 ---
 name: windows-port
-description: Work on a Laching companion app's Windows port (companion.json `windows.*`; C# .NET 10, WinUI 3). Use before changing or reading anything under the Windows folder, porting Swift behavior to C#, fixing failing `dotnet test` conformance replays, adding a Windows window, view, service or string, or building the WinUI app.
+description: Work on a Laching companion app's Windows port (companion.json `windows.*`; C# .NET 11, WinUI 3). Use before changing or reading anything under the Windows folder, porting Swift behavior to C#, fixing failing `dotnet test` conformance replays, adding a Windows window, view, service or string, or building the WinUI app.
 ---
 
 # Windows port
@@ -15,7 +15,7 @@ folder map are in the app's `.agents/notes/windows-port.md` (or its parity doc).
 
 - Run `dotnet` in `<windows.dir>`, never from the app's root: there the app's `global.json` picks the SDK, as in
   `verify.sh` and CI, and a pin no installed SDK meets fails rather than falling back to the newest.
-- Core and model tests run anywhere with the .NET 10 SDK: `cd <windows.dir> && dotnet test <windows.coreTests>` and
+- Core and model tests run anywhere with the .NET 11 SDK: `cd <windows.dir> && dotnet test <windows.coreTests>` and
   `<windows.appTests>`. The WinUI app's XAML compiler needs Windows. On a Mac with the Parallels Windows VM, build it
   there from your working tree, uncommitted changes included: `laching/tools/windows/vm.sh build` (x64 and ARM64;
   `verify.sh` does it too), `vm.sh screenshots <folder>` to look at the windows you changed (the PNGs land in the Mac
@@ -77,7 +77,7 @@ linked from the Mac's folders.
   package needs: the startup task, a notification click after the app quit). The release itself: `release-windows`.
 - **Lint**: `python3 laching/tools/windows/check-winui.py [files]`; `verify.sh` runs it on the changed app files.
 - **Images**: `python3 laching/tools/windows/assets.py` after the Mac icon changes; never edit `Assets/` by hand.
-- **The model's tests** (`windows.appTests`, `net10.0`): the model, its copy, the window list, the products and the
+- **The model's tests** (`windows.appTests`, `net11.0`): the model, its copy, the window list, the products and the
   notification actions compile into the tests by `<Compile Include="..\App\…" Link="…" />`, so they use no WinUI type
   and no `Loc`; their words come through `IStrings` (`LocStrings.Shared` in the app, `ReswStrings.Load(<en .resw>)` in
   the tests). A file with a WinUI half keeps one file per Mac file and puts that half under `#if WINDOWS`. Port the

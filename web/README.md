@@ -2,7 +2,7 @@
 
 Building blocks for small ASP.NET Core and Blazor sites on Azure Container Apps behind Cloudflare: the parts every
 such site needs and nobody wants to write twice. The web side of [Laching](https://github.com/vmihalachi/laching),
-in its `web/` folder. .NET 10, MIT.
+in its `web/` folder. .NET 11, MIT.
 
 It grew out of Adjudeca, a Blazor site in three languages, which runs on it, and was published as `Webling.*` until it
 moved into Laching. It is `0.x`, so any minor version may change public types.
