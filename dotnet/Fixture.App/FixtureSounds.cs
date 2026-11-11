@@ -27,7 +27,7 @@ public static class FixtureSounds
     }
 
     /// <summary>A mono 16-bit WAV of sine notes (frequency in Hz, length in seconds), each faded in and out.</summary>
-    private static void WriteTones(string folder, string name, IReadOnlyList<(double Hz, double Seconds)> notes)
+    private static void WriteTones(string folder, string name, (double Hz, double Seconds)[] notes)
     {
         var samples = new List<short>();
         foreach (var (hz, seconds) in notes)

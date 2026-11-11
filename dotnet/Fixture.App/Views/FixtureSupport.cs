@@ -18,7 +18,7 @@ public static class FixtureSupport
     public static SupportWindow Make(FixtureModel model) =>
         new(
             model.Purchases,
-            new SupportProducts(FixtureModel.Supporter, [Tip]),
+            new SupportProducts(FixtureModel.Supporter, new[] { Tip }),
             new SupportCopy(
                 Pitch: "The fixture is made by one person. Supporting it keeps it going, and says thanks.",
                 BecomeSupporter: price => price is null ? "Become a supporter" : $"Become a supporter, {price}",

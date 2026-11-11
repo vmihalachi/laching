@@ -56,7 +56,7 @@ public sealed class FixtureModel : CompanionAppModel<FixtureWindow, CompanionSet
             "This is the fixture's long line, so there is time to start a call while it plays. Open the Camera app or "
                 + "join a call now: the line should stop within a second, and the status should say you're on a call. If "
                 + "you can still hear this sentence, the call wasn't noticed."),
-        [Tag.General]);
+        new[] { Tag.General });
 
     private readonly IClock clock;
     private readonly ITimers timers;
