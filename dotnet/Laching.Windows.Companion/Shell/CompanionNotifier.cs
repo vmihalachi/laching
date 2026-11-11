@@ -40,7 +40,7 @@ public sealed class CompanionNotifier : ICompanionNotifying, IDisposable
     {
         this.title = title;
         this.ui = UiThread.Resolve(ui, "notifier");
-        buttons = [.. actions.Select(action => new NotificationButton(action.Title, action.Id))];
+        buttons = actions.Select(action => new NotificationButton(action.Title, action.Id)).ToArray();
         var keys = actions.ToDictionary(action => action.Id, action => action.Id);
         keys[BannerAction] = BannerAction;
         notifier = new AppNotifier<string>(keys, BannerAction, tag, group: tag);

@@ -88,11 +88,11 @@ public sealed class ScreenshotScript<TWindow, TSettings>(
     private async Task Take(Shot shot)
     {
         static IReadOnlyList<(ElementTheme Theme, string Path)> Paths(string name) =>
-            [
-                .. ScreenshotCapture.Appearances.Select(appearance =>
+            ScreenshotCapture
+                .Appearances.Select(appearance =>
                     (appearance.Theme, IOPath.Combine(ScreenshotCapture.OutputDirectory, $"{name}-{appearance.Name}.png"))
-                ),
-            ];
+                )
+                .ToArray();
         switch (shot)
         {
             case Shot.Window(var id):

@@ -9,7 +9,7 @@ namespace Laching.Windows.Companion.Shell;
 /// </summary>
 public static class MenuConversion
 {
-    public static IReadOnlyList<TrayMenuItem> ToTray(IEnumerable<MenuItem> items) => [.. items.Select(ToTray)];
+    public static IReadOnlyList<TrayMenuItem> ToTray(IEnumerable<MenuItem> items) => items.Select(ToTray).ToArray();
 
     public static TrayMenuItem ToTray(MenuItem item) =>
         item switch

@@ -135,7 +135,7 @@ public sealed partial class ActiveHoursEditor : UserControl
     }
 
     /// <summary>The weekdays (1 = Sunday … 7 = Saturday, as the settings store them) from <paramref name="firstWeekday"/> on.</summary>
-    public static IReadOnlyList<int> OrderedWeekdays(int firstWeekday) => [.. Enumerable.Range(0, 7).Select(n => (firstWeekday - 1 + n) % 7 + 1)];
+    public static IReadOnlyList<int> OrderedWeekdays(int firstWeekday) => Enumerable.Range(0, 7).Select(n => (firstWeekday - 1 + n) % 7 + 1).ToArray();
 
     /// <summary>A minute of the day as a time picker's time, and back.</summary>
     public static TimeSpan Time(int minute) => TimeSpan.FromMinutes(Math.Clamp(minute, 0, 24 * 60 - 1));
