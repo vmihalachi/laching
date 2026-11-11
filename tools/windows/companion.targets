@@ -17,7 +17,8 @@
         CompanionVoiceFolder   the voices submodule's Voice folder   → Voice\<language>\<voice>\<id>.m4a, manifest.json
         CompanionSoundsFolder  the WAVs the Mac bundles             → Sounds\<name>.wav (ChimePlayer's default folder)
         CompanionFontsFolder   the display faces and their licence  → Fonts\*.ttf (ms-appx:///Fonts/<file>#<family>)
-    - The Native AOT package without the JIT build's runtimeconfig.json and deps.json, which only an installed .NET reads.
+    - The Native AOT package without the JIT build's runtimeconfig.json and deps.json, which only an installed .NET reads,
+      and with the native binary's symbols, not the JIT build's.
   -->
   <PropertyGroup>
     <Platforms Condition="'$(Platforms)' == ''">x64;ARM64</Platforms>
@@ -73,12 +74,19 @@
     runtimeconfig.json and deps.json, which only a .NET runtime reads (`dotnet publish` leaves them out), so the package
     looks like it needs one installed. Drop them; smoke-package.ps1 -CheckOnly fails on a runtimeconfig.json. Same
     conditions and timing as the tooling's own AOT cleanup, WinAppSdkRemoveLinkedFilesFromPayload.
+
+    The .NET 11 SDK publishes the native binary's <name>.pdb as a publish item, and the tooling still adds the JIT
+    build's <name>.pdb as the project's debug symbols: two files for one path in the package, which fails the publish
+    (APPX1101). Drop the JIT build's; it describes an assembly the package doesn't hold. Neither goes into the .msix:
+    the tooling keeps every .pdb for the symbol package.
   -->
   <Target Name="CompanionRemoveRuntimeFilesFromNativePackage" Condition="'$(PublishAot)' == 'true'"
           AfterTargets="GetPackagingOutputs" BeforeTargets="_ComputeAppxPackagePayload">
     <ItemGroup Condition="'$(IncludePublishItemsOutputGroup)' == 'true'">
       <PackagingOutputs Remove="@(PackagingOutputs)"
                         Condition="'%(PackagingOutputs.TargetPath)' == '$(ProjectRuntimeConfigFileName)' or '%(PackagingOutputs.TargetPath)' == '$(ProjectDepsFileName)'" />
+      <PackagingOutputs Remove="@(PackagingOutputs)"
+                        Condition="'%(PackagingOutputs.OutputGroup)' == 'DebugSymbolsProjectOutputGroup'" />
     </ItemGroup>
   </Target>
 </Project>
