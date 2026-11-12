@@ -6,7 +6,8 @@
     python3 laching/tools/companion.py root                 # the app's root folder
     python3 laching/tools/companion.py validate [FILE…]     # check against companion.schema.json (exit 1 on problems)
     python3 laching/tools/companion.py env                  # names, paths and path patterns as shell assignments
-    python3 laching/tools/companion.py pins                 # the Laching version everywhere it's pinned (exit 1 on a mismatch)
+    python3 laching/tools/companion.py pins [--staged]      # the Laching version everywhere it's pinned (exit 1 on a mismatch;
+                                                            # a link is a warning, and exit 1 with --staged and in CI)
     python3 laching/tools/companion.py bump X.Y.Z           # every pin, the submodule and the landing page to vX.Y.Z
     python3 laching/tools/companion.py link [LACHING]      # build against a Laching checkout (../laching) until unlink
     python3 laching/tools/companion.py unlink               # back to the pinned release, byte for byte
@@ -505,6 +506,9 @@ def _submodule_tag(submodule: Path) -> str:
     return git(submodule, "describe", "--tags", "--exact-match").stdout.strip()
 
 
+_UNPINNED = "(not pinned to a version)"
+
+
 def pin_sites(config: Config) -> list[Pin]:
     """Every place the Laching release is pinned: the submodule's tag, companion.json's `laching.tag`, the `exact:` of
     the core package's Package.swift, the `exactVersion`/`exact` of the XcodeGen spec, every `Laching.*` NuGet
@@ -519,7 +523,7 @@ def pin_sites(config: Config) -> list[Pin]:
     found.append(Pin("companion.json laching.tag", config.get("laching.tag", ""), manifest, match.span(1) if match else None))
     for file in _swift_manifests(config):
         match = _laching_block_match(read_text(file), _PACKAGE_EXACT if file.name == "Package.swift" else _SPEC_EXACT)
-        version = match.group(1) if match else "(not pinned to a version)"
+        version = match.group(1) if match else _UNPINNED
         found.append(Pin(rel(file, config.root), version, file, match.span(1) if match else None))
     windows = config.path("windows.dir")
     if windows and windows.is_dir():
@@ -568,16 +572,22 @@ def _released_package_version(config: Config, pin: Pin, version: str) -> str | N
     return _nuget_version(submodule, f"v{version}") if pin.package and submodule else None
 
 
-def pins(config: Config) -> list[tuple[str, str]]:
+def pins(config: Config, linked: bool = True) -> list[tuple[str, str]]:
     """Where the Laching release is pinned and the version each place names (`pin_sites`), plus, while the app is
-    linked to a Laching checkout, a line that never agrees, so nothing linked gets committed. Every `Laching.*` NuGet
-    reference names the release's NuGet version (LachingVersion in the submodule): when that trails the tag, its line
-    stands for the release and says so; when a reference names another, its line never agrees."""
+    linked to a Laching checkout, a line that never agrees, so nothing linked gets committed (`linked` False leaves it
+    out, and with it the places `link` pointed at the checkout, which name no version until `unlink`: the pins that
+    are left). Every `Laching.*` NuGet reference names the release's NuGet version (LachingVersion in the submodule):
+    when that trails the tag, its line stands for the release and says so; when a reference names another, its line
+    never agrees."""
     submodule = _submodule(config)
     release = (_submodule_tag(submodule) or "(not on a tag)") if submodule else ""
     nuget = _nuget_version(submodule) if submodule else None
     found = []
-    for pin in pin_sites(config):
+    sites = pin_sites(config)
+    switched = [] if linked else _switched_pins(config, sites)
+    for pin in sites:
+        if pin in switched:
+            continue
         wanted = nuget if pin.package and nuget else pin.version
         if pin.version != wanted:
             found.append((f"{pin.label} (the release's NuGet packages are {wanted})", f"{pin.version}, not {wanted}"))
@@ -585,8 +595,8 @@ def pins(config: Config) -> list[tuple[str, str]]:
             found.append((f"{pin.label} {wanted} (NuGet's version in {release})", release))
         else:
             found.append((pin.label, pin.version))
-    if linked := linked_to(config):
-        found.append((f"linked to {linked}: `companion.py unlink` before committing", "(linked)"))
+    if linked and (checkout := linked_to(config)):
+        found.append((f"linked to {checkout}: `companion.py unlink` before committing", "(linked)"))
     return found
 
 
@@ -605,16 +615,30 @@ def landing_pin(config: Config) -> Pin | None:
     return Pin(f"{rel(file, config.root)} {_LANDING_PACKAGE}", match.group(1), file, match.span(1))
 
 
-def print_pins(config: Config) -> int:
-    """`pins` for people: one line per place, the landing package below them; 1 when they disagree."""
-    found = pins(config)
+def in_ci() -> bool:
+    """On a CI runner: GitHub Actions' own variable, or the `CI` every runner sets."""
+    return os.environ.get("GITHUB_ACTIONS") == "true" or os.environ.get("CI", "").lower() not in ("", "0", "false")
+
+
+def print_pins(config: Config, strict: bool = True) -> int:
+    """`pins` for people: one line per place, the landing package below them; 1 when they disagree. A link to a Laching
+    checkout (`link`) is one more line that disagrees when `strict`, which is what a commit and CI get. Otherwise it's a
+    line starting `warning: ` below the pins, which are still compared: the trial of an unreleased Laching builds, tests
+    and stops as usual, and only what would record the link is refused."""
+    found = pins(config, linked=strict)
     agree = pins_agree(found)
+    checkout = None if strict else linked_to(config)
     if not agree:
         print("The Laching version must be the same everywhere it's pinned:")
     for where, version in found:
         print(f"  {version:<24} {where}")
+    if checkout:
+        for pin in _switched_pins(config, pin_sites(config)):
+            print(f"  {'(the checkout)':<24} {pin.label} (linked: not compared)")
     if landing := landing_pin(config):
         print(f"  {landing.version:<24} {landing.label} (ships only when it changes: not compared)")
+    if checkout:
+        print(f"warning: linked to {checkout}: `companion.py unlink` before committing")
     return 0 if agree else 1
 
 
@@ -872,6 +896,16 @@ def _link_dir(config: Config) -> Path:
     return config.root / f".{_LINK_DIR}"
 
 
+def _switched_pins(config: Config, sites: list[Pin]) -> list[Pin]:
+    """The pins `link` switched to the checkout, by the files its state says it edited: `path:` packages that name no
+    version until `unlink`. None when `link` didn't make the link (one left in a committed file)."""
+    state = _link_dir(config) / "state.json"
+    if not state.is_file():
+        return []
+    edited = {entry["path"] for entry in json.loads(state.read_text("utf8"))["files"] if not entry.get("derived")}
+    return [pin for pin in sites if pin.file and pin.version == _UNPINNED and rel(pin.file, config.root) in edited]
+
+
 def linked_to(config: Config) -> str | None:
     """The Laching checkout the app is linked to (`link`), None when it builds against the pinned release."""
     state = _link_dir(config) / "state.json"
@@ -920,7 +954,7 @@ def _link_msbuild(laching: Path, windows: Path) -> str:
     prefix = "" if os.path.isabs(path) else "$(MSBuildThisFileDirectory)"
     return (
         f"  <!-- {LINK_MARKER}: Laching's packages are the projects in {path}, not NuGet's, until\n"
-        "       `companion.py unlink` takes this out. The pin check fails while it's here. -->\n"
+        "       `companion.py unlink` takes this out. A commit's pin check fails while it's here. -->\n"
         "  <PropertyGroup>\n"
         f"    <LachingLinkedDotnet>{prefix}{path}/</LachingLinkedDotnet>\n"
         "  </PropertyGroup>\n"
@@ -947,7 +981,8 @@ def link(config: Config, checkout: Path | None = None) -> int:
     """Switches the app from the pinned release to a Laching checkout (`../laching` next to the app by default): the
     XcodeGen spec's and the core package's Laching become `path:` packages (the project regenerated), the Windows
     projects build Laching's projects instead of its NuGet packages, and the Android build includes the checkout's
-    `kotlin/` (`laching.kotlin.dir` in its git-ignored local.properties). The pins fail until `unlink`."""
+    `kotlin/` (`laching.kotlin.dir` in its git-ignored local.properties). Until `unlink` the pins warn, and fail for a
+    commit (`pins --staged`) and in CI."""
     laching = (checkout or config.root.parent / "laching").expanduser().resolve()
     manifest = laching / "Package.swift"
     if not manifest.is_file() or 'name: "Laching"' not in read_text(manifest):
@@ -1021,7 +1056,7 @@ def link(config: Config, checkout: Path | None = None) -> int:
         print(f"  note     SwiftPM names a local package after its folder, so the products' package \"laching\" needs "
               f"the checkout's folder named laching, not {laching.name}")
     print("Build and test as usual; `companion.py unlink` before committing.")
-    print_pins(config)
+    print_pins(config, strict=False)
     return 0
 
 
@@ -1139,8 +1174,15 @@ def validate(data, schema: dict | None = None, where: str = "") -> list[str]:
     return problems
 
 
+# The Stop hook's own slow checks (hooks/hook.py), which know the commands that run them. A `hooks.slow` entry of
+# another name is the app's, and only its `ran` says what runs it.
+SLOW_CHECKS = ("xcodebuild-test", "conformance", "swift-test", "dotnet-test", "dotnet-app-test", "landing-build",
+               "winui-build", "gradle-core-test", "android-build")
+
+
 def consistency(data: dict) -> list[str]:
-    """Checks the schema can't express: the source and default voice are among the lists that name them."""
+    """Checks the schema can't express: the source and default voice are among the lists that name them, and a slow
+    check of the app's own says which commands run it."""
     problems = []
     languages = data.get("languages", {})
     if languages.get("source") not in languages.get("all", []):
@@ -1151,6 +1193,11 @@ def consistency(data: dict) -> list[str]:
     for lang in (data.get("l10n") or {}).get("pluralCategories", {}):
         if lang not in languages.get("all", []):
             problems.append(f"l10n.pluralCategories names {lang}, which isn't in languages.all")
+    for index, check in enumerate((data.get("hooks") or {}).get("slow", [])):
+        if isinstance(check, dict) and check.get("name") not in SLOW_CHECKS and not check.get("ran"):
+            problems.append(f"hooks.slow[{index}] ({check.get('name')}) needs `ran`, a regular expression over the "
+                            "commands that run it: nothing else counts the app's own slow check as run, so its "
+                            "reminder would never clear")
     return problems
 
 
@@ -1197,8 +1244,9 @@ def main(argv: list[str]) -> int:
 
         for key, value in derived(config).items():
             print(f"{key}={shlex.quote(value)}")
-    elif command == "pins":
-        return print_pins(config)
+    elif command == "pins" and rest in ([], ["--staged"]):
+        # What a commit and CI would record must be the release: a link fails there, and only warns anywhere else.
+        return print_pins(config, strict=bool(rest) or in_ci())
     elif command == "conform":
         import conform
 

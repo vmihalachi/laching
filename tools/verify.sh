@@ -38,10 +38,14 @@
 #   landing/, phrases/settings/catalog vectors   <landing.tool> check and build
 #   store.dir/*.md                         store/check.py (the listing's field limits)
 #   always                                 the Laching pins agree (submodule tag = laching.tag = SwiftPM = XcodeGen; NuGet = each package's version in it);
+#                                          while the app is linked to a Laching checkout (companion.py link) that's a
+#                                          warning, and a failure with --staged and in CI;
 #                                          companion.py conform (Laching's tools, workflows and skills, not copies of them)
 #   verify.checks in companion.json        the app's own checks, each when its paths change (slow ones not with --fast)
 #
 # Prints one line per check and the tail of the log for failures. Exit 1 if anything failed.
+# A slow check that ran and passed is noted in the Git folder (laching-slow-checks.log: when it started, what it ran),
+# which is how the agent Stop hook knows what was run since an edit; a failed or skipped check leaves no note.
 set -uo pipefail
 
 TOOLS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -261,6 +265,30 @@ csharp_format() {
   fi
 }
 
+# The agent Stop hook reminds about the slow checks not run since the last edit, and learns what ran from here, not from
+# the command line (a --help, a grep of this file and a run that failed all name the script too): each slow check that
+# ran and passed leaves a line in the Git folder, <its start, epoch seconds> TAB <the hook's kinds> TAB <its command>.
+# A check that failed or was skipped leaves none, and nothing is noted outside a Git repository.
+ran_log="$(git rev-parse --absolute-git-dir 2>/dev/null)" && ran_log="$ran_log/laching-slow-checks.log" || ran_log=""
+ran_record() { # <started> <kinds> <command>
+  [ -n "$ran_log" ] || return 0
+  { printf '%s\t%s\t%s\n' "$1" "$2" "$(printf '%s' "$3" | tr '\n\t' '  ')" >>"$ran_log"; } 2>/dev/null || return 0
+  if [ $(($(wc -l <"$ran_log"))) -gt 400 ]; then # the hook wants the newest line of each kind: the file stays short
+    tail -n 200 "$ran_log" >"$ran_log.tmp" 2>/dev/null && mv -f "$ran_log.tmp" "$ran_log" 2>/dev/null
+  fi
+  return 0
+}
+# slow <kinds> <label> [locked <name>] <command...>: `check`, noted when it passed. No kind for a check the hook has no
+# name for (the app's own): the hook reads its command.
+slow() {
+  local kinds="$1" before=${#failed[@]} started; shift
+  started="$(date +%s)"
+  check "$@"
+  [ ${#failed[@]} -eq "$before" ] || return 0
+  shift; if [ "${1:-}" = locked ]; then shift 2; fi
+  ran_record "$started" "$kinds" "$*"
+}
+
 # The app's own checks (verify.checks): speed, whether documentation counts, paths, name and command per line.
 app_speed=() app_docs=() app_paths=() app_name=() app_run=()
 while IFS=$'	' read -r speed docs paths name run; do
@@ -273,14 +301,27 @@ app_checks() {
   for i in "${!app_speed[@]}"; do
     [ "${app_speed[$i]}" = "$1" ] || continue
     if { [ "${app_docs[$i]}" = docs ] && touched_any "${app_paths[$i]}"; } || touched "${app_paths[$i]}"; then
-      check "${app_name[$i]}" bash -c "${app_run[$i]}" </dev/null
+      if [ "$1" = slow ]; then slow "" "${app_name[$i]}" bash -c "${app_run[$i]}" </dev/null
+      else check "${app_name[$i]}" bash -c "${app_run[$i]}" </dev/null; fi
     fi
   done
 }
 
 # --- always ------------------------------------------------------------------------------------
 
-check "Laching pins agree" python3 "$TOOLS/companion.py" pins
+# While the app is linked to a Laching checkout (companion.py link: the trial of an unreleased Laching), the pins pass
+# with a warning, shown under the check; with --staged (the pre-commit hook) and in CI the link fails them, so nothing
+# linked is committed or released.
+pins_agree() {
+  local out status=0
+  out="$(python3 "$TOOLS/companion.py" pins ${1:+"$1"} 2>&1)" || status=$?
+  printf '%s\n' "$out"
+  printf '%s\n' "$out" | sed -n 's/^warning: //p' >"$logdir/pins.warning"
+  return "$status"
+}
+if [ "$mode" = staged ]; then check "Laching pins agree" pins_agree --staged
+else check "Laching pins agree" pins_agree; fi
+if [ -s "$logdir/pins.warning" ]; then sed 's/^/warn  /' "$logdir/pins.warning"; fi
 check "Laching's tools, not copies (companion.py conform)" python3 "$TOOLS/companion.py" conform
 
 # --- fast checks -------------------------------------------------------------------------------
@@ -353,28 +394,33 @@ app_checks fast
 
 if [ "$fast" = 0 ]; then
   if [ -n "$MAC_CORE" ] && touched "$RE_COREPKG" "${CONFORMANCE_DIR:+^$CONFORMANCE_DIR/}" "$RE_PIN"; then
-    if has swift; then check "swift test ($MAC_CORE)" swift test --package-path "$MAC_CORE"
+    if has swift; then slow swift-test "swift test ($MAC_CORE)" swift test --package-path "$MAC_CORE"
     else skip "swift test ($MAC_CORE): needs a Swift toolchain"; fi
   fi
   if touched "$RE_PURE"; then
-    if [ "$darwin" = 1 ]; then check "conformance vectors current" conformance_current
+    if [ "$darwin" = 1 ]; then slow conformance "conformance vectors current" conformance_current
     else skip "conformance.sh: needs macOS + Xcode"; fi
   fi
   if touched "$RE_SWIFT" "${CONFORMANCE_DIR:+^$CONFORMANCE_DIR/}"; then
     if [ "$darwin" = 1 ]; then
+      # One kind for the hook: noted when the macOS tests and, with an iOS scheme, the iOS tests both passed.
+      xcode_failed=${#failed[@]} xcode_started="$(date +%s)"
       check "xcodebuild test" locked xcodebuild-macos bash -c "cd \"$MAC_DIR\" && xcodebuild -project \"$MAC_PROJECT\" -scheme \"$MAC_SCHEME\" \
         -destination 'platform=macOS' -derivedDataPath \"$ROOT/$DERIVED\" -quiet $XCODE_CACHE test"
       if [ -n "$MAC_IOS_SCHEME" ]; then check "xcodebuild test (iOS)" locked xcodebuild-ios ios_tests; fi
+      if [ ${#failed[@]} -eq "$xcode_failed" ]; then
+        ran_record "$xcode_started" xcodebuild-test "cd $MAC_DIR && xcodebuild -project $MAC_PROJECT -scheme $MAC_SCHEME${MAC_IOS_SCHEME:+ and $MAC_IOS_SCHEME} test"
+      fi
     else skip "xcodebuild test: needs macOS + Xcode"; fi
   fi
   if touched "$RE_WINDOWS_CORE" && [ -n "$WINDOWS_CORE_TESTS" ]; then
     if has dotnet; then
-      check "dotnet test ($WINDOWS_CORE_TESTS)" windows_dotnet test "$WINDOWS_CORE_TESTS/$WINDOWS_CORE_TESTS.csproj" -v q --nologo
+      slow dotnet-test "dotnet test ($WINDOWS_CORE_TESTS)" windows_dotnet test "$WINDOWS_CORE_TESTS/$WINDOWS_CORE_TESTS.csproj" -v q --nologo
     else skip "dotnet test: needs the .NET SDK"; fi
   fi
   if touched "$RE_WINDOWS_APP_TESTS" && [ -n "$WINDOWS_APP_TESTS" ]; then
     if has dotnet; then
-      check "dotnet test ($WINDOWS_APP_TESTS)" windows_dotnet test "$WINDOWS_APP_TESTS/$WINDOWS_APP_TESTS.csproj" -v q --nologo
+      slow dotnet-app-test "dotnet test ($WINDOWS_APP_TESTS)" windows_dotnet test "$WINDOWS_APP_TESTS/$WINDOWS_APP_TESTS.csproj" -v q --nologo
     else skip "dotnet test ($WINDOWS_APP_TESTS): needs the .NET SDK"; fi
   fi
   if touched "$RE_WINDOWS_BUILD"; then
@@ -382,25 +428,25 @@ if [ "$fast" = 0 ]; then
     if [ "$windows" = 1 ] && has dotnet; then
       # Debug, unpackaged, for this machine's architecture, named for a project without companion.targets.
       case "${PROCESSOR_ARCHITECTURE:-}" in ARM64) platform=ARM64 ;; *) platform=x64 ;; esac
-      check "WinUI app builds ($WINDOWS_APP)" windows_dotnet build "$WINDOWS_APP/$WINDOWS_APP.csproj" \
+      slow winui-build "WinUI app builds ($WINDOWS_APP)" windows_dotnet build "$WINDOWS_APP/$WINDOWS_APP.csproj" \
         -p:Platform=$platform -v q --nologo
     elif [ -z "$novm" ] && vm="$("$TOOLS/windows/vm.sh" status 2>&1)"; then
       # On a Mac with the Parallels Windows VM: this working tree, Debug, x64 and ARM64.
-      check "WinUI app builds in the VM ($WINDOWS_APP, x64 + ARM64)" "$TOOLS/windows/vm.sh" build
+      slow winui-build "WinUI app builds in the VM ($WINDOWS_APP, x64 + ARM64)" "$TOOLS/windows/vm.sh" build
     else skip "WinUI app: builds on Windows or in the Parallels VM (${vm#vm.sh: }); push the branch and run the Windows workflow"; fi
   fi
   if touched "$RE_WINDOWS_ASSETS"; then
-    check "Windows images match the icon (windows/assets.py)" python3 "$TOOLS/windows/assets.py" --check
+    slow "" "Windows images match the icon (windows/assets.py)" python3 "$TOOLS/windows/assets.py" --check
   fi
   if touched "$RE_ANDROID_CORE" && [ -n "$ANDROID_DIR" ]; then
     # The pure Kotlin module replays the vectors; the app module needs the Android SDK, so it builds in kotlin.yml.
     if [ -x "$ANDROID_DIR/gradlew" ] && { has java || [ -n "${JAVA_HOME:-}" ]; }; then
-      check "gradlew :$ANDROID_CORE:test" bash -c "cd \"$ANDROID_DIR\" && ./gradlew :$ANDROID_CORE:test -q --console=plain"
+      slow gradle-core-test "gradlew :$ANDROID_CORE:test" bash -c "cd \"$ANDROID_DIR\" && ./gradlew :$ANDROID_CORE:test -q --console=plain"
     else skip "gradlew :$ANDROID_CORE:test: needs $ANDROID_DIR/gradlew and a JDK 17 (setup-linux.sh)"; fi
   fi
   if touched "$RE_LANDING" && [ -n "$LANDING_DIR" ] && [ -d "$ROOT/$LANDING_DIR" ] && [ -n "$landing_tool" ] &&
     { has "$landing_tool" || [ -x "$landing_tool" ]; }; then
-    check "landing: $LANDING_TOOL build" bash -c "cd \"$LANDING_DIR\" && \"$landing_tool\" build"
+    slow landing-build "landing: $LANDING_TOOL build" bash -c "cd \"$LANDING_DIR\" && \"$landing_tool\" build"
   fi
   app_checks slow
 fi

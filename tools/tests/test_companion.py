@@ -42,8 +42,9 @@ class SchemaTests(unittest.TestCase):
     @unittest.skipUnless(MYBACKHURTS.exists(), "../mybackhurts isn't checked out next to laching")
     def test_mybackhurts_validates(self):
         # Its store.microsoft takes the one shape (shots, publisher) when it moves to 0.18, which `companion.py conform`
-        # reports until then; the rest validates as it is.
-        problems = [p for p in self.check(MYBACKHURTS) if not p.startswith("store.microsoft")]
+        # reports until then, and its own hooks.slow check gets a `ran` (or goes) with the release that asks for one;
+        # the rest validates as it is.
+        problems = [p for p in self.check(MYBACKHURTS) if not p.startswith(("store.microsoft", "hooks.slow["))]
         self.assertEqual(problems, [])
 
     def test_an_app_without_a_core_package(self):
@@ -64,6 +65,21 @@ class SchemaTests(unittest.TestCase):
         joined = "\n".join(problems)
         for needle in ("scheme", "'pixels' is not one of", "unknown key nonsense", "missing l10n", "defaultVoice"):
             self.assertIn(needle, joined)
+
+    def test_a_slow_check_of_the_apps_own_says_which_commands_run_it(self):
+        """The Stop hook counts a slow check as run from verify.sh's note of the checks that passed and from the
+        commands the agent ran: one that isn't built in has only its `ran` to be recognized by."""
+        data = json.loads((FIXTURE_APP / "companion.json").read_text("utf8"))
+        data["hooks"]["slow"] = [
+            {"name": "winui-build", "paths": "^windows/"},  # a built-in check with other paths
+            {"name": "app-build", "paths": "^windows/Fixture\\.App/", "label": "the app builds",
+             "ran": "\\bdotnet\\s+build\\b"},
+        ]
+        self.assertEqual(companion.validate(data) + companion.consistency(data), [])
+        data["hooks"]["slow"].append({"name": "android-test", "paths": "^android/core/", "label": "the core's tests"})
+        problems = companion.validate(data) + companion.consistency(data)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("hooks.slow[2] (android-test) needs `ran`", problems[0])
 
     def test_nullable_sections(self):
         data = json.loads((FIXTURE_APP / "companion.json").read_text("utf8"))

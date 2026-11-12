@@ -14,9 +14,12 @@
   hook.py stop   Stop:        run the app's verify.sh --fast on this session's edits and remind about the slow checks
                                (xcodebuild test, conformance, swift/dotnet test, the Windows app's model tests, the
                                WinUI app build, the Kotlin core tests, the Android app build, the landing build,
-                               hooks.slow) not run since the last edit; remind once about porting Mac UI changes to
-                               Windows and Android (hooks.macUI/windowsUI/androidUI); tell the user once per compaction
-                               cycle when Claude's context is past hooks.longSessionTokens (130k).
+                               hooks.slow) not run since the last edit: run by a command of the session's that reads
+                               as one, or by verify.sh, which notes the slow checks that ran and passed (naming the
+                               script runs nothing); remind once about porting Mac UI changes to Windows and Android
+                               (hooks.macUI/windowsUI/androidUI); say once per session that the app is linked to a
+                               Laching checkout (companion.py link); tell the user once per compaction cycle when
+                               Claude's context is past hooks.longSessionTokens (130k).
   hook.py resume SessionStart (compact|resume): print where this session was, as the agent's context after a
                                compaction: the files it edited, the slow checks it ran, the branch, git status and
                                the recent commits; nothing when the tree is clean and the session has no log.
@@ -63,6 +66,7 @@ WHOLE = re.compile(r"(^|[|;&(]\s*|\s)(cat|less|more|bat|nl|view)\b")  # readers 
 SED_RANGE = re.compile(r"(\d+|/[^/]*/)\s*,\s*(\d+|\$|\+\d+|/[^/]*/)\s*[pP]|\b\d+\s*[pP]\b|/[^/]*/\s*[pP]")
 OUTLINE = "grep -n '^\\(func\\|class\\|struct\\|extension\\|public\\|private\\|internal\\|##\\)'"
 NEVER = "^$a"
+SLOW_LOG = "laching-slow-checks.log"  # in the Git folder: the slow checks verify.sh ran and passed (`verify_ran`)
 
 
 def setup(root=None):
@@ -301,7 +305,7 @@ def state_file(event):
 
 def record(event, kind, value):
     with state_file(event).open("a") as f:
-        f.write(f"{time.time():.0f}\t{kind}\t{value}\n")
+        f.write(f"{time.time()}\t{kind}\t{value}\n")
 
 
 def xcode_project_stale():
@@ -382,50 +386,76 @@ def post_one(event):
             note = regenerate_project()
     elif tool == "Bash":
         command = args.get("command", "")
-        if re.search(r"\bxcodebuild\b.*\btest\b", command) and "-only-testing" not in command:
-            record(event, "ran", "xcodebuild-test")
-        if "conformance.sh" in command:
-            record(event, "ran", "conformance")
-        if re.search(r"\bdotnet\s+test\b", command):
-            record(event, "ran", "dotnet-test")
-            # A solution-wide run includes the app's model tests; a run of another test project doesn't.
-            app_tests = NAMES["WINDOWS_APP_TESTS"]
-            if (app_tests and app_tests in command) or not re.search(r"\.Tests\b", command):
-                record(event, "ran", "dotnet-app-test")
-        if re.search(r"\bswift\s+test\b", command):
-            record(event, "ran", "swift-test")
-        # The WinUI app built: in the Parallels VM (vm.sh's build, and screenshots and smoke, which build it), or by
-        # dotnet on Windows. vm.sh test runs the same test projects as dotnet test.
-        app = NAMES["WINDOWS_APP"]
-        if re.search(r"\bvm\.sh\s+(build|screenshots|smoke)\b", command) or (
-                app and re.search(rf"\bdotnet\s+(build|publish)\b.*{re.escape(app)}", command)):
-            record(event, "ran", "winui-build")
-        if re.search(r"\bvm\.sh\s+test\b", command):
-            record(event, "ran", "dotnet-test")
-            record(event, "ran", "dotnet-app-test")
-        # Gradle: the core module's tests by name, or a whole-build `test`/`check`/`build`; the app's assemble likewise.
-        if re.search(r"\bgradlew?\b", command):
-            core, app = NAMES["ANDROID_CORE"], NAMES["ANDROID_APP"]
-            whole = not re.search(r"\s:\w+:", command)  # no module-qualified task: every module
-            if (core and f":{core}:test" in command) or (whole and re.search(r"\bgradlew?\b.*\b(test|check|build)\b", command)):
-                record(event, "ran", "gradle-core-test")
-            if (app and re.search(rf":{re.escape(app)}:(assemble|build|install)", command)) or (
-                    whole and re.search(r"\bgradlew?\b.*\b(assemble\w*|build)\b", command)):
-                record(event, "ran", "android-build")
-        for kind, pattern in RAN:
-            if re.search(pattern, command):
-                record(event, "ran", kind)
-        if re.search(r"verify\.sh(?!.*--fast)", command):
-            for ran in dict.fromkeys(("xcodebuild-test", "conformance", "swift-test", "dotnet-test", "dotnet-app-test",
-                                      "landing-build", "winui-build", "gradle-core-test",
-                                      *(kind for kind, _, _ in SLOW if kind != "android-build"))):  # verify.sh: no APK
-                record(event, "ran", ran)
-        tool_name = NAMES["LANDING_TOOL"]
-        if tool_name and re.search(rf"\b{re.escape(tool_name)}\s+(run\s+)?build\b", command):
-            record(event, "ran", "landing-build")
+        for kind in ran_kinds(command):
+            record(event, "ran", kind)
         if re.search(r"\.swift\b|project\.yml", command) and re.search(r"\b(rm|mv|git\s+rm|git\s+mv|touch|cp)\b", command):
             note = regenerate_project()
     return note
+
+
+def ran_kinds(command):
+    """The slow checks a shell command runs, as far as its text says: the built-in kinds, and the app's own by their
+    `ran` (hooks.slow). verify.sh isn't one of them: a command that names it may be a --help, a grep of the file or a
+    run that failed, so the script says what it ran itself (`verify_ran`)."""
+    kinds = []
+    if re.search(r"\bxcodebuild\b.*\btest\b", command) and "-only-testing" not in command:
+        kinds.append("xcodebuild-test")
+    if "conformance.sh" in command:
+        kinds.append("conformance")
+    if re.search(r"\bdotnet\s+test\b", command):
+        kinds.append("dotnet-test")
+        # A solution-wide run includes the app's model tests; a run of another test project doesn't.
+        app_tests = NAMES["WINDOWS_APP_TESTS"]
+        if (app_tests and app_tests in command) or not re.search(r"\.Tests\b", command):
+            kinds.append("dotnet-app-test")
+    if re.search(r"\bswift\s+test\b", command):
+        kinds.append("swift-test")
+    # The WinUI app built: in the Parallels VM (vm.sh's build, and screenshots and smoke, which build it), or by
+    # dotnet on Windows. vm.sh test runs the same test projects as dotnet test.
+    app = NAMES["WINDOWS_APP"]
+    if re.search(r"\bvm\.sh\s+(build|screenshots|smoke)\b", command) or (
+            app and re.search(rf"\bdotnet\s+(build|publish)\b.*{re.escape(app)}", command)):
+        kinds.append("winui-build")
+    if re.search(r"\bvm\.sh\s+test\b", command):
+        kinds += ["dotnet-test", "dotnet-app-test"]
+    # Gradle: the core module's tests by name, or a whole-build `test`/`check`/`build`; the app's assemble likewise.
+    if re.search(r"\bgradlew?\b", command):
+        core, app = NAMES["ANDROID_CORE"], NAMES["ANDROID_APP"]
+        whole = not re.search(r"\s:\w+:", command)  # no module-qualified task: every module
+        if (core and f":{core}:test" in command) or (whole and re.search(r"\bgradlew?\b.*\b(test|check|build)\b", command)):
+            kinds.append("gradle-core-test")
+        if (app and re.search(rf":{re.escape(app)}:(assemble|build|install)", command)) or (
+                whole and re.search(r"\bgradlew?\b.*\b(assemble\w*|build)\b", command)):
+            kinds.append("android-build")
+    kinds += [kind for kind, pattern in RAN if re.search(pattern, command)]
+    tool_name = NAMES["LANDING_TOOL"]
+    if tool_name and re.search(rf"\b{re.escape(tool_name)}\s+(run\s+)?build\b", command):
+        kinds.append("landing-build")
+    return list(dict.fromkeys(kinds))
+
+
+def verify_ran():
+    """When verify.sh last ran each slow check in this checkout, as {kind: epoch seconds}. The script leaves a line in
+    the Git folder for every slow check that ran and passed: when it started, the kinds it stands for and its command.
+    One of the app's own checks (verify.checks) names no kind, so its command says which, as an agent's would; `ran`
+    of hooks.slow is matched against every command. A check that failed, was skipped or never started (--help, --fast,
+    --no-vm for the WinUI build) left no line, so its reminder stays. The script's stamps are whole seconds, rounded
+    down: a check counts from the end of its second, since the edit made in that second came before it."""
+    folder = git_lines("rev-parse", "--absolute-git-dir")
+    try:
+        lines = (Path(folder[0]) / SLOW_LOG).read_text("utf8", errors="replace").splitlines() if folder else []
+    except OSError:
+        lines = []
+    last = {}
+    for line in lines:
+        parts = line.split("\t", 2)
+        if len(parts) != 3 or not parts[0].isdigit():
+            continue
+        named, command = parts[1].split(), parts[2]
+        kinds = named + [kind for kind, pattern in RAN if re.search(pattern, command)] if named else ran_kinds(command)
+        for kind in kinds:
+            last[kind] = max(last.get(kind, 0), float(parts[0]) + 1)
+    return last
 
 
 def parity_reminder(event, last_edit, last_ran):
@@ -502,18 +532,42 @@ def long_session(event):
             "for the next task, or /compact at the next milestone.")
 
 
+def link_reminder(event):
+    """Once per session while the app is linked to a Laching checkout (`companion.py link`, the trial of an unreleased
+    Laching): say so. The pins pass with a warning meanwhile, so the link isn't a failed check at every stop; the
+    pre-commit hook and CI still refuse it."""
+    try:
+        linked = companion.linked_to(CONFIG)
+    except (OSError, ValueError, KeyError):
+        return None
+    if not linked:
+        return None
+    marker = "link-reminded"
+    try:
+        if f"\tran\t{marker}" in state_file(event).read_text():
+            return None
+    except OSError:
+        pass
+    record(event, "ran", marker)
+    tools = f"{NAMES['LACHING_PATH'] or 'laching'}/tools"
+    return (f"{ROOT.name} is linked to {linked}, not to Laching's pinned release: "
+            f"`python3 {tools}/companion.py unlink` before committing.")
+
+
 def stop(event):
     if event.get("stop_hook_active"):
         return
-    long = long_session(event)
+    long, link = long_session(event), link_reminder(event)
     problems = stop_problems(event)
     if problems:
-        if long:  # the agent goes on, so the user hears it from the agent
+        if link:  # the agent goes on anyway, so it reads the reminder itself
+            problems.append(link)
+        if long:  # and the user hears this one from the agent
             problems.append(f"Then tell the user in one line: {long}")
         print("\n\n".join(problems), file=sys.stderr)
         sys.exit(2)
-    if long:
-        print(json.dumps({"systemMessage": long}))  # shown to the user; costs the agent nothing
+    if long or link:  # shown to the user; costs the agent nothing and blocks no stop
+        print(json.dumps({"systemMessage": " ".join(filter(None, (long, link)))}))
 
 
 def stop_problems(event):
@@ -547,6 +601,8 @@ def stop_problems(event):
         except (OSError, subprocess.TimeoutExpired):
             pass
 
+    for kind, stamp in verify_ran().items():
+        last_ran[kind] = max(last_ran.get(kind, 0), stamp)
     stale = []
     for kind, pattern, label in SLOW:
         newest = max((t for p, t in last_edit.items() if re.search(pattern, p)), default=None)
@@ -588,7 +644,18 @@ def resume(event):
         bucket = edited if kind == "edit" else ran if kind == "ran" else None
         if bucket is not None and value not in bucket:
             bucket.append(value)
-    ran = [kind for kind in ran if kind != "parity-reminded" and not kind.startswith("long-session-")]  # reminders' markers
+    ran = [kind for kind in ran  # without the reminders' markers
+           if kind not in ("parity-reminded", "link-reminded") and not kind.startswith("long-session-")]
+    # And what verify.sh ran since the session began, which it notes itself.
+    began = None
+    for line in lines:
+        try:
+            began = float(line.split("\t", 1)[0])
+            break
+        except ValueError:
+            continue
+    if began is not None:
+        ran += [kind for kind, stamp in verify_ran().items() if stamp >= began and kind not in ran]
     status = git_lines("status", "--short")
     if not edited and not ran and not status:
         return

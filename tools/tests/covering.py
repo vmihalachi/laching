@@ -57,7 +57,7 @@ COVERS: dict[str, tuple[str, ...]] = {
     "tools/store/*": ("test_store", "test_push_microsoft", "test_push_google"),
     "tools/synth.py": ("test_synth", "test_scripts"),
     "tools/verify-lock.py": ("test_verify",),
-    "tools/verify.sh": ("test_scripts", "test_hook"),
+    "tools/verify.sh": ("test_scripts", "test_hook", "test_pins"),
     "tools/voice.py": ("test_voice",),
     "tools/voice-review.html": ("test_voice",),
     "tools/voice-review-strings.json": ("test_voice",),

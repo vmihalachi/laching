@@ -11,12 +11,13 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
 from unittest import mock
 
-from support import BASH, NO_SHELL, REPO, TOOLS, FixtureAppTestCase, companion, git
+from support import BASH, NO_SHELL, REPO, TOOLS, WINDOWS, FixtureAppTestCase, companion, git, search_path, shell
 
 HOOK = TOOLS / "hooks" / "hook.py"
 VALIDATE = REPO / ".claude" / "hooks" / "validate.py"  # Laching's own Stop hook, beside the apps' hook.py
@@ -329,12 +330,14 @@ class StopAndParity(HookTestCase):
         self.assertFalse(reminded_after(core, "cd android && ./gradlew :core:test", "Kotlin core tests"))
         self.assertFalse(reminded_after(core, "cd android && ./gradlew test", "Kotlin core tests"), "every module")
         self.assertTrue(reminded_after(core, "cd android && ./gradlew :app:test", "Kotlin core tests"), "another module")
-        self.assertFalse(reminded_after(core, "laching/tools/verify.sh", "Kotlin core tests"), "the full verify")
+        # Only verify.sh knows what it ran (its note in the Git folder): a command that names it runs nothing.
+        for naming in ("laching/tools/verify.sh", "laching/tools/verify.sh --help", "grep -n slow laching/tools/verify.sh"):
+            self.assertTrue(reminded_after(core, naming, "Kotlin core tests"), naming)
         self.assertTrue(reminded_after(app, None, "Android app build"))
         self.assertFalse(reminded_after(app, "cd android && ./gradlew :app:assembleDebug", "Android app build"))
         self.assertFalse(reminded_after(app, "cd android && ./gradlew build", "Android app build"))
         self.assertTrue(reminded_after(app, "cd android && ./gradlew :core:test", "Android app build"))
-        self.assertTrue(reminded_after(app, "laching/tools/verify.sh", "Android app build"), "verify.sh builds no APK")
+        self.assertTrue(reminded_after(app, "laching/tools/verify.sh", "Android app build"), "naming it builds no APK")
 
     @unittest.skipIf(os.name == "nt", "the fake ktlint is a shell script")
     def test_kotlin_files_are_formatted_with_ktlint_when_it_is_installed(self):
@@ -465,8 +468,52 @@ class StopAndParity(HookTestCase):
         self.assertIn("Not run since your last edit: conformance vectors", done.stderr)
         # Laching's own (the fixture has no scripts/ wrapper), wherever this checkout of it is.
         self.assertIn("tools/verify.sh -- macos/FixtureCore/", done.stderr)
+        # A command that names verify.sh (a --help, a cat, a run that failed) isn't a slow check that ran.
         self.run_hook("post", {"session_id": "stop", "tool_name": "Bash", "tool_input": {"command": "scripts/verify.sh"}})
-        self.assertEqual(self.run_hook("stop", {"session_id": "stop"}).returncode, 0)
+        again = self.run_hook("stop", {"session_id": "stop"})
+        self.assertEqual(again.returncode, 2, again.stderr)
+        self.assertIn("Not run since your last edit: conformance vectors", again.stderr)
+
+    def test_a_slow_check_counts_once_verify_noted_that_it_passed(self):
+        """verify.sh notes each slow check that passed in the Git folder (`SLOW_LOG`): when it started, the hook's kinds,
+        its command. The hook reads that at every stop."""
+        git(self.root, "init", "-q")
+        log = self.root / ".git" / self.hook.SLOW_LOG
+        session = {"session_id": "noted"}
+        conformance = "macos/FixtureCore/Tests/FixtureCoreTests/Conformance/A.swift"
+        self.run_hook("post", {**session, "tool_name": "Edit", "tool_input": {"file_path": str(self.root / conformance)}})
+        now = int(time.time())
+
+        def stop_after(line):
+            with log.open("a", encoding="utf8", newline="\n") as f:
+                f.write(line + "\n")
+            return self.run_hook("stop", session)
+
+        done = stop_after(f"{now - 3600}\tconformance swift-test\tan hour before the edit")
+        self.assertIn("conformance vectors", done.stderr)
+        self.assertIn("core package tests", done.stderr)
+        done = stop_after(f"soon\tconformance swift-test\tno time\nnot a line\n{now}\tconformance")
+        self.assertIn("conformance vectors", done.stderr, "a line that isn't one is passed over")
+        done = stop_after(f"{now}\tconformance\tlaching/tools/conformance.sh --check")
+        self.assertEqual(done.returncode, 2)
+        self.assertNotIn("conformance vectors", done.stderr)
+        self.assertIn("Not run since your last edit: core package tests", done.stderr, "only the kinds it names")
+        # A check the hook has no name for (the app's own) is known by its command, as one the agent ran is.
+        done = stop_after(f"{now}\t\tbash -c swift test --package-path macos/FixtureCore")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(set(self.hook.verify_ran()), {"conformance", "swift-test"})
+        # Another edit, and they are stale again.
+        time.sleep(1.1)  # the note's stamps are whole seconds
+        self.run_hook("post", {**session, "tool_name": "Edit", "tool_input": {"file_path": str(self.root / conformance)}})
+        self.assertIn("conformance vectors", self.run_hook("stop", session).stderr)
+
+    def test_every_built_in_slow_check_is_one_companion_knows(self):
+        """`companion.py consistency` asks for `ran` on a hooks.slow entry that isn't one of these: the two lists agree."""
+        self.enable_android()
+        self.assertLessEqual({kind for kind, _, _ in self.hook.SLOW}, set(companion.SLOW_CHECKS))
+        source = HOOK.read_text("utf8")
+        for kind in companion.SLOW_CHECKS:
+            self.assertIn(f'("{kind}", ', source, "a slow check of hook.py's setup")
 
     @unittest.skipIf(BASH is None, NO_SHELL)
     def test_stop_reports_what_the_fast_checks_reject(self):
@@ -565,6 +612,165 @@ class LongSession(HookTestCase):
         done = self.run_hook("stop", self.transcript(150_000))
         self.assertEqual(done.returncode, 2)
         self.assertIn("Then tell the user in one line: This session's context is 150k", done.stderr)
+
+
+class LinkReminder(HookTestCase):
+    """`hook.py stop` while the app is linked to a Laching checkout: said once per session, and no failed check."""
+
+    def setUp(self):
+        super().setUp()
+        targets = self.root / "windows" / "Directory.Build.targets"  # a link, as `companion.py link` marks it
+        targets.write_text(f"<Project>\n  <!-- {companion.LINK_MARKER}: a trial -->\n</Project>\n", "utf8")
+
+    def test_the_user_is_told_once_and_the_stop_goes_through(self):
+        event = {"session_id": "linked"}
+        done = self.run_hook("stop", event)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        note = json.loads(done.stdout)["systemMessage"]
+        self.assertIn("is linked to a Laching checkout (Directory.Build.targets), not to Laching's pinned release", note)
+        self.assertIn("laching/tools/companion.py unlink` before committing.", note)
+        again = self.run_hook("stop", event)
+        self.assertEqual((again.returncode, again.stdout.strip()), (0, ""), "once a session")
+        self.assertIn("is linked to", json.loads(self.run_hook("stop", {"session_id": "another"}).stdout)["systemMessage"])
+
+    @unittest.skipIf(BASH is None, NO_SHELL)
+    def test_the_link_alone_fails_no_fast_check(self):
+        """While linked the pins pass with a warning (not in CI: the tests clear its variables), so an edit that needs
+        no slow check stops; one that needs one is blocked for that, and the agent reads the reminder there."""
+        env = mock.patch.dict(os.environ, {"CI": "", "GITHUB_ACTIONS": ""})
+        env.start()
+        self.addCleanup(env.stop)
+        edit = {"session_id": "fast", "tool_name": "Edit", "tool_input": {"file_path": str(self.root / "notes.md")}}
+        self.run_hook("post", edit)
+        done = self.run_hook("stop", {"session_id": "fast"})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("is linked to", json.loads(done.stdout)["systemMessage"])
+        source = "macos/FixtureCore/Tests/FixtureCoreTests/Conformance/A.swift"  # the vectors cover it, no fast check
+        self.run_hook("post", {"session_id": "slow", "tool_name": "Edit",
+                               "tool_input": {"file_path": str(self.root / source)}})
+        done = self.run_hook("stop", {"session_id": "slow"})
+        self.assertEqual(done.returncode, 2)
+        self.assertNotIn("Fast checks on the files you edited failed", done.stderr)
+        self.assertIn("Not run since your last edit:", done.stderr)
+        self.assertIn("companion.py unlink` before committing.", done.stderr)
+        again = self.run_hook("stop", {"session_id": "slow"})
+        self.assertNotIn("is linked to", again.stderr, "once a session")
+
+
+@unittest.skipIf(BASH is None, NO_SHELL)
+@unittest.skipIf(WINDOWS, "the fakes are sh scripts")
+class VerifyNotesWhatRan(HookTestCase):
+    """The real verify.sh and the Stop hook over the fixture app as a repository, with an Android port whose Gradle
+    wrapper is a stand-in: a slow check stops being named when it ran and passed, and for no other reason."""
+
+    CORE = "android/core/src/main/kotlin/laching/A.kt"
+    APP = "android/app/src/main/kotlin/app/fixture/A.kt"
+
+    def setUp(self):
+        super().setUp()
+        config = self.root / "companion.json"
+        data = json.loads(config.read_text("utf8"))
+        data["android"] = {"dir": "android", "core": "core", "app": "app"}
+        # The APK is the app's own check (verify.sh builds none): the hook knows it by its command.
+        data["verify"] = {"checks": [{"name": "the APK builds", "paths": "^android/app/", "slow": True,
+                                      "run": "cd android && ./gradlew -q :app:assembleDebug"}]}
+        config.write_text(json.dumps(data), "utf8")
+        self.bin = self.root / "fake-bin"
+        self.bin.mkdir()
+        self.calls = self.root / "calls.log"
+        self.fake(self.bin / "java", "exit 0\n")
+        self.fake(self.bin / "dotnet", f'echo "dotnet $*" >> "{self.calls}"\n')
+        (self.root / "android").mkdir()
+        self.fake(self.root / "android" / "gradlew", f'echo "gradlew $*" >> "{self.calls}"\n'
+                  'case " $* " in *" $GRADLE_FAILS "*) echo "$GRADLE_FAILS failed"; exit 1 ;; esac\n')
+        git(self.root, "init", "-q")
+        self.log = self.root / ".git" / "laching-slow-checks.log"
+        self.hook = load_hook()
+        self.hook.setup(self.root)
+
+    @staticmethod
+    def fake(path, body):
+        with path.open("w", encoding="utf8", newline="\n") as f:
+            f.write("#!/bin/sh\n" + body)
+        path.chmod(0o755)
+
+    def verify(self, *args, **env):
+        """tools/verify.sh in the app, with the fakes first on $PATH and without the variables of a git running the
+        tests (a hook's GIT_DIR would put the note in Laching's own Git folder)."""
+        clean = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        return subprocess.run([*shell(TOOLS / "verify.sh"), *args], cwd=self.root, capture_output=True, encoding="utf8",
+                              env={**clean, "PATH": search_path(self.bin), "HOME": str(self.root), **env}, timeout=120)
+
+    def edit(self, session, *paths):
+        for path in paths:
+            self.run_hook("post", {"session_id": session, "tool_name": "Edit",
+                                   "tool_input": {"file_path": str(self.root / path)}})
+
+    def named(self, session):
+        """The slow checks the Stop hook says weren't run, as it words them."""
+        said = self.run_hook("stop", {"session_id": session}).stderr
+        return [label for label in ("Kotlin core tests", "Android app build", "Windows app model tests", "WinUI app build")
+                if label in said]
+
+    def noted(self):
+        """The kinds column of each line verify.sh left, in order."""
+        if not self.log.exists():
+            return []
+        return [line.split("\t")[1] for line in self.log.read_text("utf8").splitlines()]
+
+    def test_only_a_check_that_ran_and_passed_is_noted(self):
+        self.edit("android", self.CORE, self.APP)
+        both = ["Kotlin core tests", "Android app build"]
+        self.assertEqual(self.named("android"), both)
+
+        usage = self.verify("--help")
+        self.assertEqual(usage.returncode, 0, usage.stderr)
+        fast = self.verify("--fast", "--", self.CORE, self.APP)
+        self.assertEqual(fast.returncode, 0, fast.stdout + fast.stderr)
+        self.assertEqual(self.noted(), [], "--help and --fast run no slow check")
+        self.assertFalse(self.calls.exists(), "nor Gradle")
+        for command in ("laching/tools/verify.sh --help", "cat laching/tools/verify.sh", "laching/tools/verify.sh"):
+            self.run_hook("post", {"session_id": "android", "tool_name": "Bash", "tool_input": {"command": command}})
+        self.assertEqual(self.named("android"), both, "naming verify.sh runs nothing")
+
+        failed = self.verify("--", self.CORE, self.APP, GRADLE_FAILS=":core:test")
+        self.assertEqual(failed.returncode, 1, failed.stdout + failed.stderr)
+        self.assertIn("FAIL  gradlew :core:test", failed.stdout)
+        self.assertIn("ok    the APK builds", failed.stdout)
+        self.assertEqual(self.noted(), [""], "the check that passed beside the one that failed")
+        self.assertEqual(self.named("android"), ["Kotlin core tests"], "a failed run leaves its check unrun")
+
+        self.log.unlink()
+        failed = self.verify("--", self.CORE, self.APP, GRADLE_FAILS=":app:assembleDebug")
+        self.assertEqual(failed.returncode, 1, failed.stdout + failed.stderr)
+        self.assertEqual(self.noted(), ["gradle-core-test"])
+        self.assertEqual(self.named("android"), ["Android app build"])
+
+    def test_a_full_passing_run_notes_the_checks_that_ran_and_no_others(self):
+        self.edit("android", self.CORE, self.APP)
+        done = self.verify("--", self.CORE, self.APP)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("ok    gradlew :core:test", done.stdout)
+        self.assertIn("ok    the APK builds", done.stdout)
+        self.assertEqual(self.noted(), ["gradle-core-test", ""])
+        stamp, _, command = self.log.read_text("utf8").splitlines()[1].split("\t")
+        self.assertTrue(stamp.isdigit())
+        self.assertEqual(command, "bash -c cd android && ./gradlew -q :app:assembleDebug")
+        self.assertEqual(set(self.hook.verify_ran()), {"gradle-core-test", "android-build"}, "the Android build included")
+        self.assertEqual(self.named("android"), [])
+        self.assertEqual(self.run_hook("stop", {"session_id": "android"}).returncode, 0)
+        resumed = self.run_hook("resume", {"session_id": "android"})
+        self.assertIn("Slow checks this session ran: gradle-core-test, android-build", resumed.stdout)
+
+    def test_no_vm_leaves_the_winui_build_unrun(self):
+        view = "windows/Fixture.App/Views/HomeView.xaml"
+        self.edit("windows", view)
+        self.assertEqual(self.named("windows"), ["Windows app model tests", "WinUI app build"])
+        done = self.verify("--no-vm", "--", view)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("skip  WinUI app: builds on Windows or in the Parallels VM (left alone: --no-vm)", done.stdout)
+        self.assertEqual(self.noted(), ["dotnet-app-test"], "a skipped check isn't one that ran")
+        self.assertEqual(self.named("windows"), ["WinUI app build"])
 
 
 class Resume(HookTestCase):
