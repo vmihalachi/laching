@@ -123,7 +123,11 @@ python3 laching/tools/companion.py bump --no-wait 0.9.1   # without asking NuGet
   - Nothing is asked when no NuGet pin moves: an app without `Laching.*` packages, or one whose pins already name the
     release's `LachingVersion`.
   - Offline, or when NuGet.org can't be asked, `bump` stops at once with nothing written and names the way on:
-    **`--no-wait`** pins unasked and says so. Once NuGet.org has answered, a failed request is asked again.
+    **`--no-wait`** pins unasked and says so. An error status (a 503, a 429) is NuGet.org's answer, not offline, so
+    it's asked again, as is a failed request once NuGet.org has answered; a wait that never got a list of versions
+    says it couldn't reach NuGet.org, not that the packages are missing.
+  - `bump --wait-only X.Y.Z APP…` is that wait alone, once, for every package the named apps' bumps would pin; it
+    moves nothing (it fetches the tag into each submodule, as `bump` does). `bump-apps.sh` runs it first.
   - The release run makes the same check as its last step (`companion.py nuget-listed X.Y.Z ID…`, which needs no
     `companion.json`), so a `bump` after a green run usually asks once and goes on.
 - `@laching/landing` ships only when `tools/landing` changed, so the landing page gets npm's newest version at or below
@@ -229,8 +233,10 @@ releases.
 ## `bump-apps.sh`
 
 `companion.py bump` in every app checked out next to this Laching checkout (or the ones named), then each one's
-`verify.sh --fast`; commits nothing. `--no-wait`, before the version, is passed on to each `bump`: no app waits for
-NuGet.org to list the packages. `--report` prints `companion.py apps`: each app's pin against the releases, and
+`verify.sh --fast`; commits nothing. Before any app moves it waits once for NuGet.org to list every package their
+bumps pin (`companion.py bump --wait-only`), so 15 minutes is the longest a release NuGet.org never lists holds it up,
+not 15 per app, and when that wait gives up no app has moved. `--no-wait`, anywhere among the arguments, skips that
+wait and is passed on to each `bump`. `--report` prints `companion.py apps`: each app's pin against the releases, and
 whether it conforms. `bump-apps.sh` runs the Laching checkout's `companion.py`, so it moves an app whose submodule
 predates `bump` (the example: [*Moving to a release, or trying one first*](#moving-to-a-release-or-trying-one-first)).
 

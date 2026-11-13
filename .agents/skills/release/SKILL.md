@@ -90,8 +90,9 @@ tools/bump-apps.sh X.Y.Z   # companion.py bump in every app next to this checkou
 
 There is no waiting for NuGet by hand: the green run has seen NuGet.org list the packages, and `companion.py bump`
 asks it again before it writes anything, for the packages the app pins. While one is missing it says what it is waiting
-for; after 15 minutes, or at once when NuGet.org can't be asked (offline), it stops with the app untouched. Run it
-again later, or with `--no-wait` (`tools/bump-apps.sh --no-wait X.Y.Z`) to pin unasked. NuGet's http-cache needs
+for; after 15 minutes, or at once when NuGet.org can't be asked (offline), it stops with the app untouched.
+`bump-apps.sh` makes that wait once, for every app, before any moves. Run it again later, or with `--no-wait`
+(`tools/bump-apps.sh --no-wait X.Y.Z`) to pin unasked. NuGet's http-cache needs
 clearing (`dotnet nuget locals http-cache --clear`, on the machine that restored) only where a restore failed before
 NuGet.org listed the version: after `--no-wait`, or after a `bump` run from an app's own submodule while that still
 holds a release older than this check (`bump-apps.sh` runs this checkout's `companion.py`, so it always asks).
