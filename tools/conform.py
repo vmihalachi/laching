@@ -372,8 +372,9 @@ def app_folders(laching: Path) -> list[Path]:
 
 
 def apps(folders: list[Path], laching: Path = TOOLS.parent) -> int:
-    """One line per app: the release it pins, how far behind the newest that is, and whether it conforms; 1 when the
-    apps pin different releases or one is behind."""
+    """One line per app: the release it pins, how far behind the newest that is, the Laching checkout it is linked to
+    (`companion.py link`), whether the pins that are left agree and whether it conforms; 1 when the apps pin different
+    releases, or one is behind, linked or pinned to more than one release."""
     tags = _tags(laching)
     latest = tags[0] if tags else None
     if latest:
@@ -389,15 +390,20 @@ def apps(folders: list[Path], laching: Path = TOOLS.parent) -> int:
             continue
         tag = config.get("laching.tag") or "?"
         pins[folder.name] = tag
-        disagree = not companion.pins_agree(companion.pins(config))
+        # A linked app isn't on a release, which is drift of its own: the link is named, and only the pins `link` left
+        # alone are compared, as `companion.py pins` compares them there.
+        linked = companion.linked_to(config)
+        disagree = not companion.pins_agree(companion.pins(config, linked=False))
         behind = tags.index(tag) if tag in tags else None
         conform = problems(config)
         notes = [f"{behind} release(s) behind" if behind else "newest" if behind == 0 else "not a release tag"]
+        if linked:
+            notes.append(f"linked to {linked} (companion.py unlink)")
         if disagree:
             notes.append("its pins disagree (companion.py pins)")
         notes.append(f"{len(conform)} conform problem(s)" if conform else "conforms")
         print(f"  {folder.name}: {tag} ({', '.join(notes)})")
-        drift |= bool(behind) or behind is None or disagree
+        drift |= bool(behind) or behind is None or disagree or bool(linked)
     if len(set(pins.values())) > 1:
         print("The apps pin different releases: tools/bump-apps.sh X.Y.Z moves them together.")
         drift = True

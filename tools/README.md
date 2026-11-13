@@ -209,8 +209,9 @@ fail when the app drifts from the tools (each rule: `conform.py`'s docstring):
 - **`store.microsoft`** is the schema's shape: `shots` and `publisher`, and `storeId` for the submission API.
 
 `companion.py apps` (or `bump-apps.sh --report`), in the Laching checkout, lists the apps next to it:
-the release each pins, how far behind the newest, and its conform problems; it exits 1 while they pin different
-releases.
+the release each pins, how far behind the newest, the checkout it is linked to (`linked to <checkout> (companion.py
+unlink)`), whether the pins `link` left alone disagree, and its conform problems; it exits 1 while they pin different
+releases, or one is behind, linked or pinned to more than one release.
 
 ## `bump-apps.sh`
 

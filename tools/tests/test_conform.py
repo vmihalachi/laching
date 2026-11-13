@@ -1,6 +1,6 @@
 """tools/conform.py over the fixture app: `companion.py conform` (wrappers, not copies, of Laching's tools; the reusable
 Windows workflows at the pinned release; skills linked into laching/tools/skills; store.microsoft as the schema wants
-it) and `companion.py apps` (the apps' pins against the releases)."""
+it) and `companion.py apps` (the apps' pins against the releases, and a link to a checkout)."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 from support import TOOLS, FixtureAppTestCase, git, quiet
 
@@ -380,3 +381,30 @@ class AppsTests(FixtureAppTestCase):
         self.assertIn("other: v0.5.0 (newest, conforms)", out)
         self.assertNotIn("different releases", out)
         self.assertEqual(done, 0, out)
+
+    def test_a_linked_app_is_named_and_only_the_pins_link_left_are_compared(self):
+        git(self.laching, "tag", "-d", "v0.6.0")
+        (self.laching / "Package.swift").write_text('let package = Package(name: "Laching")\n', "utf8")
+        project = self.laching / "dotnet" / "Laching.Core" / "Laching.Core.csproj"
+        project.parent.mkdir(parents=True)
+        project.write_text("<Project><PropertyGroup><IsPackable>true</IsPackable></PropertyGroup></Project>\n", "utf8")
+        git(self.root, "init", "-q")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "app")
+        with mock.patch.object(companion, "regenerate_project", return_value=""):
+            linked, out = quiet(companion.link, companion.load(self.root), self.laching)
+        self.assertEqual(linked, 0, out)
+        self.assertNotIn("exactVersion", (self.root / "macos/project.yml").read_text("utf8"), "a pin that names no version")
+        link = f"linked to {self.laching.resolve()} (companion.py unlink)"
+
+        done, out = quiet(conform.apps, [self.root, self.other], self.laching)
+        self.assertIn(f"{self.root.name}: v0.5.0 (newest, {link}, conforms)", out)
+        self.assertNotIn("pins disagree", out, "the pins `link` pointed at the checkout aren't a disagreement")
+        self.assertIn("other: v0.5.0 (newest, conforms)", out)
+        self.assertEqual(done, 1, "a link is drift: " + out)
+
+        core = self.root / "windows/Fixture.Core/Fixture.Core.csproj"
+        core.write_text(core.read_text("utf8").replace('Version="0.5.0"', 'Version="0.4.0"'), "utf8")
+        done, out = quiet(conform.apps, [self.root, self.other], self.laching)
+        self.assertIn(f"{self.root.name}: v0.5.0 (newest, {link}, its pins disagree (companion.py pins), conforms)", out)
+        self.assertEqual(done, 1)
