@@ -54,6 +54,7 @@ Team Keys, access App Manager). Put the downloaded AuthKey_<KEY_ID>.p8 in
 import argparse
 import base64
 import hashlib
+import http.client
 import json
 import os
 import subprocess
@@ -203,9 +204,11 @@ class ApiError(Exception):
     pass
 
 
-# A network failure (timeout, reset, DNS) rather than an answer from the server; HTTPError is a URLError too, so it is
+# A network failure (timeout, reset, DNS, an answer cut short) rather than an answer from the server: every OSError,
+# since urlopen leaves a read that times out unwrapped and before Python 3.10 its socket.timeout is no TimeoutError, and
+# http.client's own errors (IncompleteRead, BadStatusLine), which aren't OSErrors. HTTPError is an OSError too, so it is
 # caught first. Seconds before a request that gets no answer fails.
-NETWORK_ERRORS = (urllib.error.URLError, TimeoutError, ConnectionError)
+NETWORK_ERRORS = (OSError, http.client.HTTPException)
 TIMEOUT = 120
 
 
@@ -413,7 +416,7 @@ class Sync:
                     if problem:
                         self.log(f"  build {number} is VALID")
                     return builds[0]
-                if deadline is not None and state in BUILD_ENDED:
+                if state in BUILD_ENDED:  # no wait helps, with --wait-build or without
                     self.problems.append(f"build {number} is {state}: App Store Connect won't process it further, "
                                          "upload a new build number")
                     return None

@@ -84,12 +84,13 @@ where the app's rules allow.
    kept; a language whose folder lacks the rest stops the run before any capture, to be rendered whole.
 3. **Push** right after the upload, without waiting for the email:
    `python3 <store.dir>/apple/push.py --version <v> --create --build <n> --wait-build --only text,iap,screenshots,review`
-   waits until App Store Connect has processed the build (it asks every 30 seconds, for 30 minutes; `--wait-build=45`
-   for longer) and prints the plan (drop `screenshots` when step 2 was skipped, `iap` when the in-app purchases' text
-   didn't change); read it, then rerun with `--apply`. A build that ends `FAILED` or `INVALID` stops the wait at
-   once: fix it and upload a new build number. When the time is up the rest is planned without the build: run the
-   same command again. In a universal app always pass `--only` with the Mac parts: the default also
-   pushes the iOS page, under the Mac's version number. It creates the version with the release type of
+   waits until App Store Connect has processed the build (it asks every 30 seconds, for up to 30 minutes;
+   `--wait-build=45` for longer), so run it in the background, and prints the plan (drop `screenshots` when step 2
+   was skipped, `iap` when the in-app purchases' text didn't change); read it, then rerun with `--apply`. A build
+   that ends `FAILED` or `INVALID` stops the wait at once: fix it and upload a new build number. When the time is up
+   the rest is planned without the build: run the same command again. In a universal app always pass `--only` with
+   the Mac parts: the default also pushes the iOS page, under the Mac's version number. It creates the version with
+   the release type of
    `store.apple.releaseType` (an existing editable version is set to it too), attaches the build, and syncs every
    language's text, the in-app purchases' text and the screenshots. `--status --version <v>` reads what App Store
    Connect has and still needs. Without an API key (`ASC_KEY_ID`, `ASC_ISSUER_ID`, the `.p8`), the owner pastes by

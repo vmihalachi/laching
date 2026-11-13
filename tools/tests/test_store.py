@@ -6,10 +6,12 @@ from __future__ import annotations
 import base64
 import contextlib
 import csv
+import http.client
 import importlib.util
 import io
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -508,7 +510,9 @@ class StoreTests(FixtureAppTestCase):
         build["attributes"]["processingState"] = "INVALID"
         sync.version("1.0.2", False, "4")
         self.assertEqual(sync.problems, ["build 4 isn't in App Store Connect yet (still uploading?)",
-                                         "build 4 is PROCESSING, not VALID yet", "build 4 is INVALID, not VALID yet"])
+                                         "build 4 is PROCESSING, not VALID yet",
+                                         "build 4 is INVALID: App Store Connect won't process it further, "
+                                         "upload a new build number"], "a build that ended isn't one to wait for")
         self.assertFalse(self.attached(api, version))
 
     def test_wait_build_asks_again_until_the_build_is_valid(self):
@@ -599,6 +603,45 @@ class StoreTests(FixtureAppTestCase):
         with self.assertRaises(push.ApiError):
             sync.version("1.0.2", False, "4")
         self.assertEqual(slept, [])
+
+    def test_an_answer_cut_off_during_the_wait_is_tried_again(self):
+        """Through the real Client: a read that times out once the answer has begun (urlopen doesn't wrap it, and before
+        Python 3.10 socket.timeout is no TimeoutError) and an answer cut short (IncompleteRead, no OSError at all) are
+        retried, then end the look as an ApiError, which the wait logs before it looks again."""
+        class OldSocketTimeout(OSError):
+            """socket.timeout as Python 3.9 has it: an OSError, not a TimeoutError."""
+
+        for error in (socket.timeout("timed out"), OldSocketTimeout("timed out"), http.client.IncompleteRead(b'{"da', 40)):
+            with self.subTest(error=type(error).__name__):
+                api, version = self.setup_app()
+                build = self.add_build(api, "PROCESSING")
+                client = push.Client.__new__(push.Client)
+                client.token, client.minted = "token", push.time.time()
+                fake_get_all, broken = api.get_all, []
+
+                def urlopen(req, timeout=None):
+                    answer = mock.MagicMock()
+                    if broken:
+                        answer.__enter__.return_value.read.side_effect = broken[0]
+                    else:
+                        data = fake_get_all(req.full_url[len(push.API):])
+                        answer.__enter__.return_value.read.return_value = json.dumps({"data": data}).encode()
+                    return answer
+
+                api.get_all = lambda path: (client.get_all if path.startswith("/v1/builds") else fake_get_all)(path)
+                sync, slept, lines = self.waiting(api, 30, [
+                    lambda: broken.append(error),
+                    lambda: (broken.clear(), build["attributes"].update(processingState="VALID"))])
+                with mock.patch.object(push.urllib.request, "urlopen", urlopen), \
+                        mock.patch.object(push.time, "sleep") as retried:
+                    sync.version("1.0.2", False, "4")
+                self.assertEqual(sync.problems, [])
+                self.assertEqual(retried.call_count, 4, "the client tries a GET five times")
+                self.assertEqual([line for line in lines if line.startswith("    ! ")],
+                                 [f"    ! GET /v1/builds?filter[app]={self.listing.app_id}&filter[version]=4"
+                                  f"&filter[preReleaseVersion.platform]=MAC_OS&limit=200: {error}"])
+                self.assertEqual(slept, [30, 30])
+                self.assertTrue(self.attached(api, version))
 
     def test_the_command_line_waits_only_when_asked_and_for_a_named_build(self):
         api, version = self.setup_app()
