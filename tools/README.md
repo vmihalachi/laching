@@ -720,7 +720,8 @@ workflows run it in CI.
 Installs a built `.msix` the way a customer gets it and checks it opens its window within `-Seconds` and is still up
 `-Hold` seconds later (`-Keep` leaves it for the hand checks, `-SideBySide` next to a Store copy); `-Screenshots
 <folder> [-Language] [-ScreenshotNames]` runs the screenshot run in the installed package instead (a Release publish
-with `-p:ScreenshotMode=true`); `-CheckOnly` only checks the package is native.
+with `-p:ScreenshotMode=true`); `-CheckOnly` only checks the package is native (its executable, no
+`runtimeconfig.json`, no .NET runtime beside it).
 
 ### `windows/check-winui.py`
 
