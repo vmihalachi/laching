@@ -14,7 +14,9 @@ What it syncs, per language (companion.json's `store.apple` names the app, its l
                manual on a version it creates without it)
   iap          each in-app purchase's display name, description, review note and review screenshot (each left alone
                when its config has none); one that doesn't exist yet is created with its price and availability
-               (`store.apple.iaps`)
+               (`store.apple.iaps`). The name and description live in a version of the purchase: a changed text
+               starts a new version when the last one was reviewed, which then needs App Review (submit it with the
+               app), and is refused while one is with App Review
   screenshots  `store.apple.screenshots`/<lang>/*.png, in order; a set whose files all match is left alone
   review       the App Review notes, from the block under "App Review Information → Notes" in `store.apple.review.notes`
                (the contact details are left to App Store Connect; without the file, the notes are left alone)
@@ -255,13 +257,13 @@ class Client:
             url = page.get("links", {}).get("next")
         return items
 
-    def create(self, kind, attributes, relationships):
+    def create(self, kind, attributes, relationships, api="v1"):
         rel = {name: {"data": {"type": t, "id": i}} for name, (t, i) in relationships.items()}
-        body = {"data": {"type": kind, "attributes": attributes, "relationships": rel}}
-        return self.request("POST", f"/v1/{kind}", body)["data"]
+        body = {"data": {"type": kind, **({"attributes": attributes} if attributes else {}), "relationships": rel}}
+        return self.request("POST", f"/{api}/{kind}", body)["data"]
 
-    def update(self, kind, id, attributes):
-        self.request("PATCH", f"/v1/{kind}/{id}", {"data": {"type": kind, "id": id, "attributes": attributes}})
+    def update(self, kind, id, attributes, api="v1"):
+        self.request("PATCH", f"/{api}/{kind}/{id}", {"data": {"type": kind, "id": id, "attributes": attributes}})
 
     def delete(self, kind, id):
         self.request("DELETE", f"/v1/{kind}/{id}")
@@ -293,6 +295,25 @@ def log(message=""):
     """Prints a line led by the minutes and seconds since the run started, so a slow step shows in the log."""
     body = message.lstrip("\n")
     print(message[:len(message) - len(body)] + f"[{elapsed()}] {body}" if body else message)
+
+
+# An in-app purchase's name and description are held by its versions (App Store Connect API 4.4.1). The newest one is
+# open for edits as a draft, can't be changed while it is with App Review, and in any other state (approved, rejected,
+# replaced) is followed by a new draft.
+IAP_VERSION_DRAFT = "PREPARE_FOR_SUBMISSION"
+IAP_VERSION_WITH_REVIEW = {"READY_FOR_REVIEW", "WAITING_FOR_REVIEW", "IN_REVIEW"}
+IAP_VERSION_REVIEWED = {"APPROVED", "ACCEPTED"}
+
+
+def iap_version(api, product):
+    """An in-app purchase's newest version (None when it has none) and, when that one's text has still to be
+    submitted to App Review (a draft, or one rejected or withdrawn), a few words saying so."""
+    versions = api.get_all(f"/v2/inAppPurchases/{product['id']}/versions")
+    version = max(versions, key=lambda v: v["attributes"].get("version") or 0, default=None)
+    state = version and version["attributes"].get("state")
+    waiting = version and state not in IAP_VERSION_WITH_REVIEW | IAP_VERSION_REVIEWED
+    return version, (f"version {version['attributes'].get('version')} of its text is "
+                     f"{(state or 'unknown').lower()}: submit it with the app" if waiting else None)
 
 
 # --- sync -------------------------------------------------------------------------------------------
@@ -384,15 +405,15 @@ class Sync:
     def localizations(self, kind, parent_path):
         return {x["attributes"]["locale"]: x for x in self.api.get_all(parent_path)} if parent_path else {}
 
-    def sync_locale(self, kind, existing, locale, want, parent):
+    def sync_locale(self, kind, existing, locale, want, parent, api="v1"):
         """Creates or patches one localization; returns it (None in a dry run of a new one)."""
         have = existing.get(locale)
         if have is None:
             return self.step(f"{locale}: add the language ({kind})",
-                             lambda: self.api.create(kind, {"locale": locale, **want}, parent))
+                             lambda: self.api.create(kind, {"locale": locale, **want}, parent, api=api))
         diff = changed(want, have["attributes"])
         if diff:
-            self.step(f"{locale}: update {', '.join(diff)}", lambda: self.api.update(kind, have["id"], diff))
+            self.step(f"{locale}: update {', '.join(diff)}", lambda: self.api.update(kind, have["id"], diff, api=api))
         return have
 
     def text(self, langs, version, extra, write, page=None):
@@ -482,16 +503,50 @@ class Sync:
                 self.step("  set the review note", lambda product=product: self.api.request(
                     "PATCH", f"/v2/inAppPurchases/{product['id']}", {"data": {
                         "type": "inAppPurchases", "id": product["id"], "attributes": {"reviewNote": spec["reviewNote"]}}}))
-            existing = self.localizations("inAppPurchaseLocalizations",
-                                          f"/v2/inAppPurchases/{product['id']}/inAppPurchaseLocalizations")
             if spec.get("reviewShot"):
                 self.iap_review_screenshot(product, spec["screenshot"])
-            for lang in langs:
-                fields = self.listing.fields(lang)
-                want = {"name": fields[spec["name"]], "description": fields[spec["description"]]}
-                for locale in [self.listing.locale[lang]] + [x for x in self.listing.extra_locales.get(lang, []) if extra or x in existing]:
-                    self.sync_locale("inAppPurchaseLocalizations", existing, locale, want,
-                                     {"inAppPurchaseV2": ("inAppPurchases", product["id"])})
+            self.iap_text(product, spec, langs, extra)
+
+    def iap_text(self, product, spec, langs, extra):
+        """Syncs one in-app purchase's display name and description. They belong to a version of the purchase, which
+        App Review reads as a whole: an open draft is edited, a reviewed one is followed by a new draft only when
+        the text differs, and one that is with App Review is left alone."""
+        kind = "inAppPurchaseLocalizations"
+        version, waiting = iap_version(self.api, product)
+        state = version and version["attributes"].get("state")
+        if waiting:
+            self.log(f"  {waiting}")
+        existing = self.localizations(kind, version and f"/v1/inAppPurchaseVersions/{version['id']}/localizations")
+        wanted = {}
+        for lang in langs:
+            fields = self.listing.fields(lang)
+            want = {"name": fields[spec["name"]], "description": fields[spec["description"]]}
+            for locale in [self.listing.locale[lang]] + [x for x in self.listing.extra_locales.get(lang, []) if extra or x in existing]:
+                wanted[locale] = want
+        if not any(locale not in existing or changed(want, existing[locale]["attributes"])
+                   for locale, want in wanted.items()):
+            return
+        if state in IAP_VERSION_WITH_REVIEW:
+            self.problems.append(f"{product['attributes']['productId']}: its text is with App Review "
+                                 f"({state.lower()}), so it was not changed; push it again after the review")
+            return
+        if state != IAP_VERSION_DRAFT:
+            created = self.step("  start a new version for its text (it needs App Review: submit it with the app)",
+                                lambda: self.api.create("inAppPurchaseVersions", {},
+                                                        {"inAppPurchase": ("inAppPurchases", product["id"])}))
+            if created is None and self.apply:
+                return
+            if created:
+                # App Store Connect starts the draft from the text it has; a language it left out is carried over, so
+                # a push of some languages doesn't drop the others.
+                version, earlier = created, existing
+                existing = self.localizations(kind, f"/v1/inAppPurchaseVersions/{version['id']}/localizations")
+                for locale, have in earlier.items():
+                    if locale not in existing and locale not in wanted:
+                        wanted[locale] = {k: have["attributes"].get(k) for k in ("name", "description")}
+        parent = {"version": ("inAppPurchaseVersions", version and version["id"])}
+        for locale, want in wanted.items():
+            self.sync_locale(kind, existing, locale, want, parent, api="v2")
 
     def iap_review_screenshot(self, product, capture):
         """Uploads the App Review screenshot for one in-app purchase unless the same file is already there and
@@ -764,8 +819,11 @@ def status(listing: Listing, api, version_string):
         delivery = ((shot or {}).get("attributes", {}).get("assetDeliveryState") or {})
         shot_state = delivery.get("state", "none") if shot else "none"
         errors = ", ".join(e.get("code", "") for e in delivery.get("errors") or [])
+        _, waiting = iap_version(api, product)
         print(f"  {product_id}: {product['attributes'].get('state')}, review screenshot {shot_state}"
-              + (f" ({errors})" if errors else ""))
+              + (f" ({errors})" if errors else "") + (f", {waiting}" if waiting else ""))
+        if waiting:
+            missing.append(f"{product_id} text in App Review")
         if not shot or stale(shot):
             missing.append(f"{product_id} review screenshot")
     print("\nStill needed: " + ("; ".join(missing) if missing else "nothing found missing"))
