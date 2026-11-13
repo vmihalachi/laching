@@ -445,8 +445,13 @@ The hook reads the guards, the slow-check table and the parity patterns (`hooks.
 fails open when the file is missing or invalid. It guards what Laching's generators write without being told, each
 refusal naming the command that rewrites the file: `character.py`'s character vectors, `<Skin>Art.swift` files and,
 for raster skins, its asset folders (from `characters`); `synth.py`'s `.wav` files (from `sounds`); and
-`dev-icon.swift`'s `AppIcon-Dev.appiconset` PNGs under `mac.dir`. A file only the app's own script makes (its
-`AppIcon.appiconset` from its icon renderer) is a `hooks.guards` entry. The hook also refuses to load any text file
+`dev-icon.swift`'s `AppIcon-Dev.appiconset` PNGs under `mac.dir`. Every app also has, from the folders its
+`companion.json` names, four guards it can turn off by name in `hooks.unguarded`: `screenshots` (what the screenshot
+runs write to `screenshots.out` and `windows.screenshots`, never read or edited, a `README.md` there aside), `appIcon`
+(the `AppIcon.appiconset` PNGs under `mac.dir`, which the app's icon renderer writes), `windowsAssets` (the images
+`windows/assets.py` writes to `windows.assets.out`) and `gradleWrapper` (`gradlew` and `gradlew.bat` in `android.dir`).
+An app's own `hooks.guards` entry on the same file gives its own reason. Any other file only the app's own script makes
+is a `hooks.guards` entry. The hook also refuses to load any text file
 over `hooks.bigFileLines` lines (600) whole: a `Read` without `offset`/`limit`, `cat`, or `sed` without a range; the
 refusal names the outline command (`grep -n '^\(func\|class\|...\)'`) to run first. It refuses a foreground shell
 command that only waits: nothing but a `sleep` of `hooks.foregroundSleepSeconds` (30; 0 disables) or longer, with or

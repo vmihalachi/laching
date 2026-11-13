@@ -124,6 +124,10 @@ def setup(root=None):
         GUARDED.append((guard["pattern"], guard["why"], bool(guard.get("reads")), True))
     for pattern in CONFIG.get("hooks.guardedExtra", []):
         GUARDED.append((pattern, "guarded by companion.json (hooks.guardedExtra): don't edit it by hand.", False, True))
+    # Last, so the app's own guard on the same file is the reason shown.
+    unguarded = CONFIG.get("hooks.unguarded", [])
+    for name, guards in baseline(tools).items():
+        GUARDED += [] if name in unguarded else guards
     I18N = re.compile(rf"^{ere(NAMES['LANDING_I18N'])}/[^/]+\.json$") if NAMES["LANDING_I18N"] else None
     landing = NAMES["LANDING_TOOL"] or "the landing tool"
     # How the reminder names each built-in check. Their paths are companion.SLOW_CHECKS's patterns, which verify.sh
@@ -185,6 +189,37 @@ def generators(tools, conformance):
                        f"the Debug build's icon, generated from AppIcon by `swift {tools}/dev-icon.swift "
                        "<the Assets.xcassets>`: change AppIcon, then rerun it.", False, True))
     return guards
+
+
+def baseline(tools):
+    """The guards every app has without a line in its companion.json, by the name `hooks.unguarded` turns one off
+    with: the folders the screenshot runs fill, the app icon's sizes, the Windows images assets.py renders from it and
+    the Gradle wrapper's scripts. Every folder comes from companion.json, so an app without the key has no such guard,
+    and what the app keeps beside them (a README.md, an icon set's Contents.json, a picture of its own) stays its to
+    edit."""
+    ere = companion.ere
+    windows_shots = CONFIG.path("windows.screenshots")
+    runs = [(NAMES["SCREENSHOTS_OUT"], f"{tools}/screenshots.sh", f"{tools}/screenshots.sh <folder>"),
+            (rel(windows_shots) if windows_shots else "", f"{tools}/windows/screenshots.ps1",
+             f"{tools}/windows/vm.sh screenshots <folder>")]
+    mac, assets, android = NAMES["MAC_DIR"], NAMES["WINDOWS_ASSETS"], NAMES["ANDROID_DIR"]
+    logos = "Square44x44Logo|Square150x150Logo|Wide310x150Logo|StoreLogo|SplashScreen"  # assets.py's `images`
+    return {
+        "screenshots": [
+            (rf"^{ere(folder)}/(?!README\.md$)",
+             f"the committed screenshots, written by `{writer}`: never read or edit one. To look at the app, capture "
+             f"into a scratch folder (`{scratch}`).", True, True)
+            for folder, writer, scratch in runs if folder],
+        "appIcon": [(rf"^{ere(mac)}/(.+/)?AppIcon\.appiconset/[^/]+\.png$",
+                     "the app icon's sizes, rendered by the app's own icon script: change the drawing and rerun it.",
+                     False, True)] if mac else [],
+        "windowsAssets": [(rf"^{ere(assets)}/(({logos})\.[^/]+\.png|(Dev/)?AppIcon\.ico)$",
+                           f"generated from the app icon by `python3 {tools}/windows/assets.py`: change the icon, then "
+                           "rerun it.", False, True)] if assets else [],
+        "gradleWrapper": [(rf"^{ere(android)}/gradlew(\.bat)?$",
+                           "the Gradle wrapper's script: `./gradlew wrapper --gradle-version <version>` rewrites it; "
+                           "never edit it by hand.", False, True)] if android else [],
+    }
 
 
 def rel(path):

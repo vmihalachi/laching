@@ -210,7 +210,6 @@ class PreToolUse(HookTestCase):
             "macos/FixtureCore/Sources/FixtureCore/Art/Pose.swift",  # hand-written code next to the art
             "macos/scripts/sounds.py",
             "macos/Fixture/Resources/Sounds/README.md",
-            "macos/Fixture/Resources/Assets.xcassets/AppIcon.appiconset/icon_16x16.png",  # the app's own renderer
             "macos/Fixture/Resources/Assets.xcassets/AppIcon-Dev.appiconset/Contents.json",
         ):
             self.assertEqual(self.refusal(allowed), "", allowed)
@@ -243,6 +242,127 @@ class PreToolUse(HookTestCase):
         (self.root / "companion.json").write_text("{}", "utf8")
         event = {"session_id": "t", "tool_name": "Edit", "tool_input": {"file_path": str(self.root / "conformance/phrases.json")}}
         self.assertEqual(self.run_hook("pre", event).returncode, 0)
+
+
+class BaselineGuards(HookTestCase):
+    """The guards an app has without a line for them in its companion.json, which only names the folders."""
+
+    SHOT = "screenshots/macos/home-light.png"
+    ICON = "macos/Fixture/Resources/Assets.xcassets/AppIcon.appiconset/icon_16x16.png"
+    ASSETS = "windows/Fixture.App/Assets"
+
+    def app(self, change=None):
+        """The fixture app, set up after `change` to its companion.json."""
+        path = self.root / "companion.json"
+        data = json.loads(path.read_text("utf8"))
+        if change:
+            change(data)
+            path.write_text(json.dumps(data), "utf8")
+        self.hook = load_hook()
+        self.hook.setup(self.root)
+        return data
+
+    def edit(self, path):
+        """Why an edit of `path` is refused, None when it isn't."""
+        return self.hook.guarded(self.root / path, for_edit=True)
+
+    def read(self, path):
+        return self.hook.guarded(self.root / path, for_edit=False)
+
+    def test_the_screenshot_folders_are_never_read_or_edited(self):
+        self.app()
+        self.assertIn("written by `laching/tools/screenshots.sh`", self.edit(self.SHOT))
+        self.assertIn("(`laching/tools/screenshots.sh <folder>`)", self.read(self.SHOT), "a read too, with where to look")
+        windows = self.read("screenshots/windows/fr/home-dark.png")
+        self.assertIn("written by `laching/tools/windows/screenshots.ps1`", windows)
+        self.assertIn("(`laching/tools/windows/vm.sh screenshots <folder>`)", windows)
+        self.assertTrue(self.edit("screenshots/macos/problems.txt"), "whatever a run writes there")
+        for own in ("screenshots/README.md", "screenshots/macos/README.md", "screenshots/ios/home.png",
+                    "docs/screenshots/macos/home.png", "macos/scripts/screenshots.sh"):
+            self.assertIsNone(self.edit(own), own)
+            self.assertIsNone(self.read(own), own)
+        # The hook as an agent runs it.
+        shot = str(self.root / self.SHOT)
+        self.assertTrue(self.blocked("Read", file_path=shot))
+        self.assertTrue(self.blocked("Write", file_path=str(self.root / "screenshots/windows/home-light.png")))
+        self.assertTrue(self.blocked("Bash", command=f"git diff {self.SHOT}"))
+        self.assertFalse(self.blocked("Bash", command=f"git add {self.SHOT} && git status"))
+        self.assertFalse(self.blocked("Bash", command="laching/tools/screenshots.sh --only home /tmp/shots"))
+        self.assertFalse(self.blocked("Edit", file_path=str(self.root / "screenshots/README.md")))
+        # The folders are companion.json's: another name moves the guard, no key leaves none.
+        self.app(lambda data: (data["screenshots"].update(out="docs/shots"), data["windows"].pop("screenshots")))
+        self.assertTrue(self.read("docs/shots/home-light.png"))
+        self.assertIsNone(self.read(self.SHOT))
+        self.assertIsNone(self.edit("screenshots/windows/home-light.png"))
+
+    def test_the_app_icon_s_sizes_are_the_icon_script_s(self):
+        self.app()
+        self.assertIn("rendered by the app's own icon script", self.edit(self.ICON))
+        self.assertIsNone(self.read(self.ICON), "edits only")
+        self.assertTrue(self.blocked("Write", file_path=str(self.root / self.ICON)))
+        self.assertFalse(self.blocked("Read", file_path=str(self.root / self.ICON)))
+        catalog = self.ICON.rsplit("/", 2)[0]
+        self.assertIn("dev-icon.swift", self.edit(f"{catalog}/AppIcon-Dev.appiconset/icon_16x16.png"), "its own guard")
+        for own in (f"{catalog}/AppIcon.appiconset/Contents.json", f"{catalog}/Mark.imageset/mark.png",
+                    "design/icon/AppIcon.appiconset/icon_16x16.png", "macos/Fixture/Resources/AppIcon.png"):
+            self.assertIsNone(self.edit(own), own)
+
+    def test_the_windows_images_are_exactly_what_assets_py_writes(self):
+        self.app()
+        assets = load(TOOLS / "windows" / "assets.py")
+        with mock.patch.multiple(assets, read_png=mock.DEFAULT, trim=mock.DEFAULT, place=mock.DEFAULT,
+                                 png_bytes=mock.DEFAULT, ico=mock.DEFAULT):
+            written = [*assets.images(Path("icon.png")), "Dev/AppIcon.ico"]  # the Dev icon is `main`'s
+        self.assertEqual(len(written), 22)
+        for name in written:
+            self.assertIn("`python3 laching/tools/windows/assets.py`", self.edit(f"{self.ASSETS}/{name}") or "", name)
+            self.assertIsNone(self.read(f"{self.ASSETS}/{name}"), "edits only")
+        # What else the app keeps in the folder is its own.
+        for own in ("Hero.png", "Models/README.md", "Models/labels.txt", "Dev/Square44x44Logo.scale-100.png",
+                    "Characters/big-cat-body.scale-200.png", "AppIcon.icon", "Square44x44Logo.svg"):
+            self.assertIsNone(self.edit(f"{self.ASSETS}/{own}"), own)
+        self.assertIsNone(self.edit("windows/Other.App/Assets/AppIcon.ico"), "another folder")
+        self.app(lambda data: data["windows"].pop("assets"))
+        self.assertIsNone(self.edit(f"{self.ASSETS}/AppIcon.ico"), "an app that doesn't run assets.py")
+
+    def test_the_gradle_wrapper_s_scripts_where_the_app_has_an_android_folder(self):
+        self.app()
+        self.assertIsNone(self.edit("android/gradlew"), "no android section")
+        self.app(lambda data: data.update(android={"dir": "android"}))
+        self.assertIn("`./gradlew wrapper --gradle-version <version>` rewrites it", self.edit("android/gradlew"))
+        self.assertTrue(self.edit("android/gradlew.bat"))
+        self.assertIsNone(self.read("android/gradlew"), "edits only")
+        for own in ("android/gradle/wrapper/gradle-wrapper.properties", "android/gradlew.md", "android/app/build.gradle.kts",
+                    "android/settings.gradle.kts", "gradlew", "kotlin/gradlew"):
+            self.assertIsNone(self.edit(own), own)
+
+    def test_an_app_turns_a_baseline_guard_off_by_name(self):
+        data = self.app(lambda data: data["hooks"].update(unguarded=["screenshots", "appIcon"]))
+        for path in (self.SHOT, "screenshots/windows/home-light.png", self.ICON):
+            self.assertIsNone(self.edit(path), path)
+            self.assertIsNone(self.read(path), path)
+        self.assertFalse(self.blocked("Read", file_path=str(self.root / self.SHOT)))
+        self.assertTrue(self.edit(f"{self.ASSETS}/AppIcon.ico"), "the others stay on")
+        # The schema knows the names, each of them and no other.
+        self.assertEqual(companion.validate(data), [])
+        schema = json.loads((TOOLS / "companion.schema.json").read_text("utf8"))
+        names = schema["properties"]["hooks"]["properties"]["unguarded"]["items"]["enum"]
+        self.assertEqual(names, list(self.hook.baseline("laching/tools")))
+        data["hooks"]["unguarded"] = ["everything"]
+        self.assertIn("hooks.unguarded", "\n".join(companion.validate(data)))
+        data = self.app(lambda data: data["hooks"].update(unguarded=names))
+        self.assertEqual(self.hook.baseline("laching/tools").keys() & {"screenshots"}, {"screenshots"})
+        guards = [guard for guards in self.hook.baseline("laching/tools").values() for guard in guards]
+        self.assertFalse([guard for guard in guards if guard in self.hook.GUARDED], "every one off")
+        self.assertTrue(self.edit("conformance/phrases.json"), "the generators' guards aren't the baseline's to turn off")
+
+    def test_the_app_s_own_guard_on_the_same_file_gives_its_reason(self):
+        self.app(lambda data: data["hooks"].update(guards=[
+            {"pattern": r"AppIcon\.appiconset/[^/]+\.png$", "why": "rendered by macos/scripts/icon.swift."},
+            {"pattern": "^screenshots/", "why": "the store's pictures."}]))
+        self.assertEqual(self.edit(self.ICON), f"{self.ICON}: rendered by macos/scripts/icon.swift.")
+        self.assertEqual(self.edit(self.SHOT), f"{self.SHOT}: the store's pictures.")
+        self.assertIn("never read or edit one", self.read(self.SHOT), "the app's guard is on edits; the baseline's on reads too")
 
 
 class StopAndParity(HookTestCase):
