@@ -1191,8 +1191,9 @@ class WhatACommandRan(HookTestCase):
 
 class ForegroundWaits(HookTestCase):
     """`hook.py pre` refuses a foreground shell command that only waits (`foreground_wait`): nothing but a long `sleep`,
-    or a `while`/`until` loop around a `sleep`. The agent sits in such a call and learns nothing until it ends. In the
-    background the same command is a watcher, and a `sleep` the command only names is no wait at all."""
+    or a loop around a `sleep` that waits for something (`while`/`until`, a `for` that `break`s). The agent sits in
+    such a call and learns nothing until it ends. In the background the same command is a watcher, and a `sleep` the
+    command only names is no wait at all."""
 
     POLL = "while ! gh run view 7 --json status -q .status | grep -q completed; do sleep 30; done"
 
@@ -1227,7 +1228,7 @@ class ForegroundWaits(HookTestCase):
             self.assertEqual(self.refusal(command, run_in_background=False), message, "said to be in the foreground")
         self.assertIn("a foreground `sleep` for 300 seconds", self.refusal("sleep 300"))
         self.assertIn("A pause under 30 seconds between two steps is fine", self.refusal("sleep 300"))
-        self.assertIn("a foreground `while`/`until` loop around `sleep`", self.refusal(self.POLL))
+        self.assertIn("a foreground loop around `sleep` that waits for something", self.refusal(self.POLL))
 
     def test_the_same_commands_in_the_background_pass(self):
         for command in ("sleep 300", self.POLL):
@@ -1280,6 +1281,12 @@ class ForegroundWaits(HookTestCase):
             # The loop around the `sleep` need not be the nearest one.
             "until [ -f done ]; do for step in 1 2; do sleep 1; done; done",
             "for run in 7 8; do while gh run view $run | grep -q in_progress; do sleep 20; done; done",
+            # A `for` that leaves once it saw what it waits for is a poll too, when its rounds sleep long enough.
+            "for i in $(seq 60); do gh run view 1 --json status -q .status | grep -q completed && break; sleep 30; done",
+            "for i in {1..40}; do curl -sf localhost:3000 && break; sleep 3; done",
+            "for i in `seq 10`; do if curl -sf localhost; then break; fi; sleep 5; done",
+            "for attempt in 1 2 3; do curl -sf localhost && break; sleep 20; done",
+            "for ((i = 0; i < 40; i++)); do curl -sf localhost && exit 0; sleep 3; done",
         )
 
     def test_a_pause_between_two_steps_passes(self):
@@ -1294,7 +1301,11 @@ class ForegroundWaits(HookTestCase):
             "./server & sleep 45; curl -s localhost:3000",  # not only a sleep: the command does its own work after it
             "sleep $DELAY",  # no number to judge
             # Bounded loops and loops over lines are not polls.
-            "for attempt in 1 2 3; do curl -sf localhost && break; sleep 20; done",
+            "for attempt in 1 2 3; do curl -sf localhost && break; sleep 5; done",  # 15 seconds at most
+            "for i in {1..3}; do curl -sf localhost && break; sleep 2; done",
+            "for f in a b c; do curl -s localhost/$f; sleep 20; done",  # it waits for nothing
+            "for i in $(seq 60); do curl -sf localhost && break; sleep $DELAY; done",  # no number to judge
+            "while read -r url; do curl -sf $url && break; sleep 1; done < list.txt",
             "while read -r line; do echo $line; sleep 1; done < list.txt",
             "cat list.txt | while IFS= read -r url; do curl -s $url; sleep 1; done",
             "echo start; while read x; do sleep 1; done",

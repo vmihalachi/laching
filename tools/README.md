@@ -455,12 +455,13 @@ is a `hooks.guards` entry. The hook also refuses to load any text file
 over `hooks.bigFileLines` lines (600) whole: a `Read` without `offset`/`limit`, `cat`, or `sed` without a range; the
 refusal names the outline command (`grep -n '^\(func\|class\|...\)'`) to run first. It refuses a foreground shell
 command that only waits: nothing but a `sleep` of `hooks.foregroundSleepSeconds` (30; 0 disables) or longer, with or
-without an `echo` beside it, or a `while`/`until` loop around a `sleep`. The refusal names what to do instead: run the
-long command itself in the background (Claude Code's `run_in_background`), where the harness reports its exit, and
-watch a CI run with one background `gh run watch <id> --exit-status`. The same commands in the background pass (the
-tool call's `run_in_background`, or an `&` behind the `sleep` or the loop), and so do a shorter pause between two steps
-(`sleep 5`), a `for` loop, a `while read` over lines, and a `sleep` the command only names: in a heredoc, a quoted
-string, a script it writes.
+without an `echo` beside it, or a loop around a `sleep` that waits for something: a `while`/`until`, or a `for` that
+leaves on a `break` and would sleep that long in all its rounds (`$(seq 60)` rounds count as many). The refusal names
+what to do instead: run the long command itself in the background (Claude Code's `run_in_background`), where the
+harness reports its exit, and watch a CI run with one background `gh run watch <id> --exit-status`. The same commands
+in the background pass (the tool call's `run_in_background`, or an `&` behind the `sleep` or the loop), and so do a
+shorter pause between two steps (`sleep 5`), a few short retries, a `for` loop that waits for nothing, a `while read`
+over lines, and a `sleep` the command only names: in a heredoc, a quoted string, a script it writes.
 
 On `Stop` it tells the user, once per compaction cycle, when Claude's context is past `hooks.longSessionTokens`
 (130000; 0 disables), so the next task goes to a fresh session. On `SessionStart` after a compaction or a resume

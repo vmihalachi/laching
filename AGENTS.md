@@ -132,7 +132,8 @@ The short form; the full rules with their examples are in `docs/conventions.md`.
   releasing in the `release` skill.
 - **Nothing waits in the foreground:** a long command (a build, a test run, a VM job) runs in the background and
   reports when it exits; a CI run is watched by one background `gh run watch <id> --exit-status`; no foreground `sleep`
-  and no `while`/`until` loop around one to poll. In the apps `tools/hooks/hook.py` refuses both.
+  and no loop around one to poll (`while`/`until`, or a `for` that `break`s). In the apps `tools/hooks/hook.py` refuses
+  both.
 - Formatting is enforced in CI: `.swift-format` (4 spaces, 140 columns), `dotnet/.editorconfig`, `web/.editorconfig`
   and `kotlin/.editorconfig` (ktlint).
 

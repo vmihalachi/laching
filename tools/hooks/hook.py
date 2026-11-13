@@ -9,7 +9,8 @@
                                hooks.guardedExtra), and to read any file over hooks.bigFileLines lines (600) whole:
                                Read without offset/limit, `cat`, `sed -n` without a range. Refuse a foreground shell
                                command that only waits: nothing but a `sleep` of hooks.foregroundSleepSeconds (30) or
-                               longer, or a `while`/`until` loop around `sleep`; the same in the background passes.
+                               longer, or a loop around `sleep` that waits for something (`while`/`until`, a `for`
+                               that `break`s); the same in the background passes.
   hook.py post   PostToolUse: remember what this session edited and ran; format the Swift, C# or Kotlin file just
                                edited (ktlint -F, when ktlint is on PATH); regenerate the Xcode project when Swift files
                                come or go or the XcodeGen spec changes.
@@ -762,33 +763,41 @@ def sleep_seconds(words):
 
 def foreground_wait(command):
     """Why a foreground shell command is refused as a wait, None when it isn't one. A wait is a command that is nothing
-    but `sleep` for hooks.foregroundSleepSeconds or longer (an `echo` beside it changes nothing), or a `while`/`until`
-    loop around a `sleep`: the agent sits in it and learns nothing until it ends. A `sleep` counts where the command
-    runs it (`shell_parts`): not in a heredoc, a quoted string or a script being written, and not behind an `&`. A
-    pause between two steps (`start-server & sleep 5; curl ...`), a `for` loop and a `while read` over lines pass."""
+    but `sleep` for hooks.foregroundSleepSeconds or longer (an `echo` beside it changes nothing), or a loop around a
+    `sleep` that waits for something: a `while`/`until`, or a `for`/`select` that leaves on a `break` (or `exit`) once
+    it saw it and would sleep that long or longer in all its rounds (`$(seq 60)` rounds: no telling, so long). The agent
+    sits in it and learns nothing until it ends. A `sleep` counts where the command runs it (`shell_parts`): not in a
+    heredoc, a quoted string or a script being written, and not behind an `&`. A pause between two steps
+    (`start-server & sleep 5; curl ...`), a few short retries, a `for` loop that waits for nothing and a `while read`
+    over lines pass."""
     if not WAIT_SECONDS or "sleep" not in str(command):
         return None
-    loops, slept, only = [], 0.0, True  # loops: [it polls, a sleep runs in it] for each loop open here
+    # For each loop open here: [its keyword, it polls, a sleep runs in it, the seconds one round sleeps, its rounds].
+    loops, slept, only = [], 0.0, True
     for part in shell_parts(command):
         words = run_words(part.words)
         name = program(words)
         for keyword in part.keywords:
             if keyword in ("while", "until"):
-                loops.append([name != "read", False])
+                loops.append([keyword, name != "read", False, 0.0, float("inf")])
             elif keyword == "done" and loops:
-                polls, sleeps = loops.pop()
-                if polls and sleeps:
-                    return ("a foreground `while`/`until` loop around `sleep` only waits. " + WAIT_INSTEAD
-                            + " A wait with no command of its own (a server coming up) is this loop, run in the "
-                            "background.")
+                keyword, polls, sleeps, seconds, rounds = loops.pop()
+                if polls and sleeps and (keyword in ("while", "until") or seconds * rounds >= WAIT_SECONDS):
+                    return ("a foreground loop around `sleep` that waits for something (`while`/`until`, or a `for` "
+                            "that `break`s) only waits. " + WAIT_INSTEAD + " A wait with no command of its own (a "
+                            "server coming up) is this loop, run in the background.")
         if name in ("for", "select"):
-            loops.append([False, False])
+            loops.append([name, False, False, 0.0, loop_rounds(words) if name == "for" else float("inf")])
         if part.background or not words:
             continue
         if name == "sleep":
-            slept += sleep_seconds(words[1:])
+            seconds = sleep_seconds(words[1:])
+            slept += seconds
             for loop in loops:
-                loop[1] = True
+                loop[2], loop[3] = True, loop[3] + seconds
+        elif name in ("break", "exit") and loops:
+            if loops[-1][0] in ("for", "select"):  # a `while read` that leaves early still reads only its lines
+                loops[-1][1] = True
         elif name not in FILLERS:
             only = False
     if only and slept >= WAIT_SECONDS:
@@ -796,6 +805,23 @@ def foreground_wait(command):
         return (f"a foreground `sleep` {how_long} only waits. {WAIT_INSTEAD} A pause under {WAIT_SECONDS} seconds between "
                 "two steps is fine (hooks.foregroundSleepSeconds).")
     return None
+
+
+def loop_rounds(words):
+    """How many rounds `for <words>` runs: one for each word after `in`, a `{1..40}` range's numbers; infinity when
+    the words are no list to count (`$(seq 60)`, a glob, `for ((...))`)."""
+    if words[2:3] != ["in"]:
+        return float("inf")
+    rounds = 0
+    for word in words[3:]:
+        if found := re.fullmatch(r"\{(-?\d+)\.\.(-?\d+)(?:\.\.(-?\d+))?\}", word):
+            first, last, step = int(found.group(1)), int(found.group(2)), abs(int(found.group(3) or 1)) or 1
+            rounds += abs(last - first) // step + 1
+        elif re.search(r"[$*?\[{`]", word):
+            return float("inf")
+        else:
+            rounds += 1
+    return rounds
 
 
 def state_file(event):
