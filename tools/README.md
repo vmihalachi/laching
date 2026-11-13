@@ -448,11 +448,19 @@ for raster skins, its asset folders (from `characters`); `synth.py`'s `.wav` fil
 `dev-icon.swift`'s `AppIcon-Dev.appiconset` PNGs under `mac.dir`. A file only the app's own script makes (its
 `AppIcon.appiconset` from its icon renderer) is a `hooks.guards` entry. The hook also refuses to load any text file
 over `hooks.bigFileLines` lines (600) whole: a `Read` without `offset`/`limit`, `cat`, or `sed` without a range; the
-refusal names the outline command (`grep -n '^\(func\|class\|...\)'`) to run first. On `Stop` it tells the user, once
-per compaction cycle, when Claude's context is past `hooks.longSessionTokens` (130000; 0 disables), so the next task
-goes to a fresh session. On `SessionStart` after a compaction or a resume (`hook.py resume`) it prints where the session
-was, as the agent's context: the files it edited, the slow checks it ran, the branch, git status and the recent
-commits (nothing when the tree is clean and the session has no log).
+refusal names the outline command (`grep -n '^\(func\|class\|...\)'`) to run first. It refuses a foreground shell
+command that only waits: nothing but a `sleep` of `hooks.foregroundSleepSeconds` (30; 0 disables) or longer, with or
+without an `echo` beside it, or a `while`/`until` loop around a `sleep`. The refusal names what to do instead: run the
+long command itself in the background (Claude Code's `run_in_background`), where the harness reports its exit, and
+watch a CI run with one background `gh run watch <id> --exit-status`. The same commands in the background pass (the
+tool call's `run_in_background`, or an `&` behind the `sleep` or the loop), and so do a shorter pause between two steps
+(`sleep 5`), a `for` loop, a `while read` over lines, and a `sleep` the command only names: in a heredoc, a quoted
+string, a script it writes.
+
+On `Stop` it tells the user, once per compaction cycle, when Claude's context is past `hooks.longSessionTokens`
+(130000; 0 disables), so the next task goes to a fresh session. On `SessionStart` after a compaction or a resume
+(`hook.py resume`) it prints where the session was, as the agent's context: the files it edited, the slow checks it
+ran, the branch, git status and the recent commits (nothing when the tree is clean and the session has no log).
 
 On `Stop` it also runs `verify.sh --fast` on the session's edits and names the slow checks (`hooks.slow`, and the
 built-in ones for the sides the app has) whose paths changed since they last ran. A slow check counts as run when

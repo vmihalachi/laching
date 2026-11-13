@@ -510,6 +510,7 @@
         "guardedExtra": { "type": "array", "items": { "type": "string" }, "description": "More paths (regular expressions) agents must not edit by hand." },
         "bigFileLines": { "type": "integer", "description": "A text file over this many lines may only be read by range (Read with offset/limit, sed -n 'A,Bp'), never whole; the hook says to read the outline first. Default 600; 0 disables." },
         "longSessionTokens": { "type": "integer", "description": "The Stop hook tells the user once per compaction cycle when Claude's context is past this many tokens, so the next task goes to a fresh session. Default 130000; 0 disables." },
+        "foregroundSleepSeconds": { "type": "integer", "description": "The hook refuses a foreground shell command that only waits: nothing but a `sleep` of this many seconds or longer, or a `while`/`until` loop around `sleep`, and names what to do instead (run the long command in the background; watch a CI run with one background `gh run watch <id> --exit-status`). The same commands in the background pass, and so does a shorter pause between two steps. Default 30; 0 disables both refusals." },
         "guards": {
           "type": "array",
           "description": "More guarded paths, each with the reason the agent is shown: never edited by hand, and with `reads`, never loaded either.",

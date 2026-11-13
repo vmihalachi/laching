@@ -731,6 +731,165 @@ class WhatACommandRan(HookTestCase):
         self.assert_ran(None)
 
 
+class ForegroundWaits(HookTestCase):
+    """`hook.py pre` refuses a foreground shell command that only waits (`foreground_wait`): nothing but a long `sleep`,
+    or a `while`/`until` loop around a `sleep`. The agent sits in such a call and learns nothing until it ends. In the
+    background the same command is a watcher, and a `sleep` the command only names is no wait at all."""
+
+    POLL = "while ! gh run view 7 --json status -q .status | grep -q completed; do sleep 30; done"
+
+    def setUp(self):
+        super().setUp()
+        self.hook = load_hook()
+        self.hook.setup(self.root)
+
+    def refusal(self, command, **tool_input):
+        """What `hook.py pre` says to a Bash call: empty when the call passes."""
+        event = {"session_id": "t", "tool_name": "Bash", "tool_input": {"command": command, **tool_input}}
+        done = self.run_hook("pre", event)
+        self.assertEqual(done.returncode, 2 if done.stderr else 0, done.stderr)
+        return done.stderr
+
+    def assert_waits(self, *commands):
+        for command in commands:
+            self.assertTrue(self.hook.foreground_wait(command), command)
+
+    def assert_passes(self, *commands):
+        for command in commands:
+            self.assertIsNone(self.hook.foreground_wait(command), command)
+
+    def test_a_long_sleep_and_a_poll_loop_are_refused_with_what_to_do_instead(self):
+        for command in ("sleep 300", self.POLL):
+            message = self.refusal(command)
+            self.assertIn("only waits", message, command)
+            self.assertIn("in the background", message, command)
+            self.assertIn("`run_in_background`", message, command)
+            self.assertIn("the harness tells you when it exits", message, command)
+            self.assertIn("`gh run watch <id> --exit-status`", message, command)
+            self.assertEqual(self.refusal(command, run_in_background=False), message, "said to be in the foreground")
+        self.assertIn("a foreground `sleep` for 300 seconds", self.refusal("sleep 300"))
+        self.assertIn("A pause under 30 seconds between two steps is fine", self.refusal("sleep 300"))
+        self.assertIn("a foreground `while`/`until` loop around `sleep`", self.refusal(self.POLL))
+
+    def test_the_same_commands_in_the_background_pass(self):
+        for command in ("sleep 300", self.POLL):
+            self.assertEqual(self.refusal(command, run_in_background=True), "", command)
+        self.assertEqual(self.refusal("sleep 300 &"), "")
+        self.assertEqual(self.refusal(f"{self.POLL} &"), "")
+        self.assertEqual(self.refusal("gh run watch 7 --exit-status", run_in_background=True), "", "the watcher itself")
+        self.assert_passes(
+            "nohup sleep 300 &",
+            "(sleep 300; echo late) &",
+            "{ until curl -sf localhost:8080/health; do sleep 1; done; } &",
+            "( while true; do sleep 5; done ) &",
+            "while true; do sleep 5; done > poll.log 2>&1 &",
+            "sleep 300 & echo started",
+        )
+
+    def test_the_other_agents_shapes_are_read_too(self):
+        self.assertTrue(self.refusal(["bash", "-lc", "sleep 300"]), "Codex: argv around the script")
+        self.assertTrue(self.refusal(["sleep", "300"]))
+        self.assertEqual(self.refusal(["sleep", "2"]), "")
+        self.assertEqual(self.refusal(["git", "commit", "-m", "while true; do sleep 300; done"]), "")
+        copilot = {"session_id": "t", "tool_name": "Bash", "tool_input": json.dumps({"command": self.POLL})}
+        self.assertEqual(self.run_hook("pre", copilot).returncode, 2, "Copilot: tool_input as a JSON string")
+
+    def test_what_only_waits(self):
+        self.assert_waits(
+            "sleep 30",
+            "sleep 5m",
+            "sleep 1m 30s",
+            "sleep 0.5h",
+            "sleep infinity",
+            "/bin/sleep 45",
+            "time sleep 60",
+            "sleep 120; echo done",
+            "echo waiting && sleep 90",
+            "sleep 20; sleep 20",  # two pauses that add up
+            "sleep 300 # for the build",
+            "(sleep 300)",
+            "bash -c 'sleep 300'",
+            "if true; then sleep 300; fi",
+            'echo "$(sleep 300)"',
+            "until curl -sf localhost:8080/health; do sleep 1; done",
+            "while true; do gh run view 7; sleep 45; done",
+            "while sleep 5; do gh pr checks; done",
+            "while [ ! -f out.log ]; do\n  sleep 2\ndone\ncat out.log",
+            "while kill -0 $pid 2>/dev/null; do sleep 0.2; done",
+            "while :; do sleep 1; done | tee poll.log",
+            "bash -lc 'while true; do sleep 5; done'",
+            "cd build && until [ -f done ]; do sleep 3; done && ls",
+            # The loop around the `sleep` need not be the nearest one.
+            "until [ -f done ]; do for step in 1 2; do sleep 1; done; done",
+            "for run in 7 8; do while gh run view $run | grep -q in_progress; do sleep 20; done; done",
+        )
+
+    def test_a_pause_between_two_steps_passes(self):
+        self.assert_passes(
+            "sleep 5",
+            "sleep 29",
+            "sleep 0.5",
+            "sleep 2; echo ok",
+            "sleep 3 && git status",
+            "open -a Simulator && sleep 10 && xcrun simctl list",
+            "npm start & sleep 5; curl -s localhost:3000",
+            "./server & sleep 45; curl -s localhost:3000",  # not only a sleep: the command does its own work after it
+            "sleep $DELAY",  # no number to judge
+            # Bounded loops and loops over lines are not polls.
+            "for attempt in 1 2 3; do curl -sf localhost && break; sleep 20; done",
+            "while read -r line; do echo $line; sleep 1; done < list.txt",
+            "cat list.txt | while IFS= read -r url; do curl -s $url; sleep 1; done",
+            "echo start; while read x; do sleep 1; done",
+            # No `sleep` at all, and words that only start like it.
+            "gh run watch 7 --exit-status",
+            "caffeinate -i swift test",
+            "sleepwatcher --help",
+            "man sleep",
+            "which sleep",
+        )
+
+    def test_a_sleep_the_command_only_names_is_no_wait(self):
+        self.assert_passes(
+            # A script being written: a heredoc, with and without quotes around its end word, a printf, an echo.
+            "cat > poll.sh <<'EOF'\nwhile true; do sleep 30; done\nEOF",
+            "cat > wait.sh << EOF\nsleep 300\nEOF\nchmod +x wait.sh",
+            "cat <<-EOF > wait.sh\n\tsleep 300\n\tEOF",
+            "printf 'while true; do sleep 1; done\\n' > poll.sh",
+            'echo "sleep 300" >> wait.sh',
+            "tee wait.sh <<< 'sleep 300'",
+            # Quoted strings: a commit message, a pattern, another machine's or another program's command.
+            "git commit -m 'no more sleep 300 in the foreground'",
+            'git commit -m "$(cat <<\'EOF\'\nwhile true; do sleep 300; done\nEOF\n)"',
+            "grep -rn 'sleep 300' scripts/",
+            "grep -n 'while true; do sleep 5; done' poll.sh",
+            "ssh build-host 'sleep 300'",
+            "python3 -c 'import time; time.sleep(300)'",
+            "echo sleep 300",
+            # Comments, and text that is no complete loop.
+            "# sleep 300\nls",
+            "ls  # while true; do sleep 1; done",
+            "while true; do sleep 5",
+            "echo while true; echo do sleep 300; echo done",
+        )
+        for odd in ("sleep", "sleep '", "sleep $(", "done; sleep 1; done", "while; done; sleep", "sleep " * 4000, 7, None):
+            self.assertIsNone(self.hook.foreground_wait(odd), str(odd)[:20])
+
+    def test_the_threshold_is_the_apps(self):
+        self.configure(foregroundSleepSeconds=120)
+        self.hook.setup(self.root)
+        self.assert_passes("sleep 60", "sleep 119")
+        self.assert_waits("sleep 120", "sleep 2m", self.POLL)
+        self.assertIn("A pause under 120 seconds", self.hook.foreground_wait("sleep 300"))
+        self.configure(foregroundSleepSeconds=0)
+        self.assertEqual(self.refusal("sleep 300"), "", "0 turns the guard off")
+        self.assertEqual(self.refusal(self.POLL), "")
+
+    def test_a_command_that_passes_still_meets_the_other_guards(self):
+        xcstrings = "macos/Fixture/Resources/Localizable.xcstrings"
+        self.assertIn("String Catalog", self.refusal(f"sleep 2; cat {xcstrings}"))
+        self.assertIn("String Catalog", self.refusal(f"sleep 300; cat {xcstrings}", run_in_background=True))
+
+
 class ShellScripts(unittest.TestCase):
     """How the Stop hooks start verify.sh: itself on macOS and Linux; on Windows, which starts no shell script itself,
     through Git for Windows' bash, never WSL's."""

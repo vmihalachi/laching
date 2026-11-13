@@ -7,7 +7,9 @@
                                .resw, the Android strings, project.pbxproj, the voice manifest and clips, the vectors,
                                character.py's art, synth.py's sounds, the Dev icon, hooks.guards and
                                hooks.guardedExtra), and to read any file over hooks.bigFileLines lines (600) whole:
-                               Read without offset/limit, `cat`, `sed -n` without a range.
+                               Read without offset/limit, `cat`, `sed -n` without a range. Refuse a foreground shell
+                               command that only waits: nothing but a `sleep` of hooks.foregroundSleepSeconds (30) or
+                               longer, or a `while`/`until` loop around `sleep`; the same in the background passes.
   hook.py post   PostToolUse: remember what this session edited and ran; format the Swift, C# or Kotlin file just
                                edited (ktlint -F, when ktlint is on PATH); regenerate the Xcode project when Swift files
                                come or go or the XcodeGen spec changes.
@@ -61,6 +63,7 @@ WINDOWS_UI = None
 ANDROID_UI = None
 BIG_LINES = 600  # hooks.bigFileLines; 0 disables
 LONG_TOKENS = 130_000  # hooks.longSessionTokens; 0 disables
+WAIT_SECONDS = 30  # hooks.foregroundSleepSeconds; 0 disables
 
 READERS = re.compile(r"(^|[|;&(]\s*|\s)(cat|less|more|head|tail|bat|nl|xxd|od|strings|jq|view|awk|sed|python3?\s+-c)\b")
 CONTEXT = re.compile(r"\s-(?:[ABC]\s*\d+|[a-zA-Z]*[ABC]\d*)\b|--(?:after|before)?-?context\b")
@@ -75,6 +78,7 @@ UNJUDGED = "unjudged:"  # in the session log, before the kind of a slow check th
 def setup(root=None):
     """Reads companion.json at `root` ($CLAUDE_PROJECT_DIR, else found from the current directory)."""
     global ROOT, CONFIG, NAMES, L10N, GUARDED, I18N, SLOW, RAN, MAC_UI, WINDOWS_UI, ANDROID_UI, BIG_LINES, LONG_TOKENS
+    global WAIT_SECONDS
     root = Path(root or os.environ.get("CLAUDE_PROJECT_DIR") or companion.find_root())
     CONFIG = companion.load(root)
     ROOT = CONFIG.root
@@ -148,6 +152,7 @@ def setup(root=None):
     ANDROID_UI = re.compile(CONFIG.get("hooks.androidUI")) if CONFIG.get("hooks.androidUI") else None
     BIG_LINES = int(CONFIG.get("hooks.bigFileLines", BIG_LINES) or 0)
     LONG_TOKENS = int(CONFIG.get("hooks.longSessionTokens", LONG_TOKENS) or 0)
+    WAIT_SECONDS = int(CONFIG.get("hooks.foregroundSleepSeconds", WAIT_SECONDS) or 0)
 
 
 def generators(tools, conformance):
@@ -569,6 +574,8 @@ def pre_one(event):
             deny(f"no context lines on generated files: {L10N}.")
     elif tool == "Bash":
         command = args.get("command", "")
+        if not args.get("run_in_background") and (reason := foreground_wait(command)):
+            deny(reason)
         # Heredoc bodies are text being written, not files being read.
         command = re.sub(r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n.*?^\s*\1\s*$", "", command, flags=re.S | re.M)
         # Judge each simple command on its own: `git status -- x.xcstrings | head` is fine.
@@ -585,6 +592,63 @@ def pre_one(event):
                     deny(reason)
                 if whole and (lines := big(word)):
                     deny(whole_read(word, lines))
+
+
+FILLERS = frozenset(("echo", "printf", "true", ":", "date"))  # beside a `sleep`, they leave the command a wait
+SLEEP_UNITS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
+WAIT_INSTEAD = ("Run the long command itself in the background (Claude Code: the Bash tool's `run_in_background`) and "
+                "go on with other work: the harness tells you when it exits. Watch a CI run with one background "
+                "`gh run watch <id> --exit-status`.")
+
+
+def sleep_seconds(words):
+    """How long `sleep <words>` sleeps, in seconds: its numbers added up, as GNU sleep does (`1m 30s`). `infinity` is
+    forever; a word that is no number (`$DELAY`) counts for nothing."""
+    total = 0.0
+    for word in words:
+        if word.lower() in ("infinity", "inf"):
+            return float("inf")
+        if found := re.fullmatch(r"(\d+(?:\.\d*)?|\.\d+)([smhd]?)", word):
+            total += float(found.group(1)) * SLEEP_UNITS[found.group(2)]
+    return total
+
+
+def foreground_wait(command):
+    """Why a foreground shell command is refused as a wait, None when it isn't one. A wait is a command that is nothing
+    but `sleep` for hooks.foregroundSleepSeconds or longer (an `echo` beside it changes nothing), or a `while`/`until`
+    loop around a `sleep`: the agent sits in it and learns nothing until it ends. A `sleep` counts where the command
+    runs it (`shell_parts`): not in a heredoc, a quoted string or a script being written, and not behind an `&`. A
+    pause between two steps (`start-server & sleep 5; curl ...`), a `for` loop and a `while read` over lines pass."""
+    if not WAIT_SECONDS or "sleep" not in str(command):
+        return None
+    loops, slept, only = [], 0.0, True  # loops: [it polls, a sleep runs in it] for each loop open here
+    for part in shell_parts(command):
+        words = run_words(part.words)
+        name = program(words)
+        for keyword in part.keywords:
+            if keyword in ("while", "until"):
+                loops.append([name != "read", False])
+            elif keyword == "done" and loops:
+                polls, sleeps = loops.pop()
+                if polls and sleeps:
+                    return ("a foreground `while`/`until` loop around `sleep` only waits. " + WAIT_INSTEAD
+                            + " A wait with no command of its own (a server coming up) is this loop, run in the "
+                            "background.")
+        if name in ("for", "select"):
+            loops.append([False, False])
+        if part.background or not words:
+            continue
+        if name == "sleep":
+            slept += sleep_seconds(words[1:])
+            for loop in loops:
+                loop[1] = True
+        elif name not in FILLERS:
+            only = False
+    if only and slept >= WAIT_SECONDS:
+        how_long = "forever" if slept == float("inf") else f"for {slept:g} seconds"
+        return (f"a foreground `sleep` {how_long} only waits. {WAIT_INSTEAD} A pause under {WAIT_SECONDS} seconds between "
+                "two steps is fine (hooks.foregroundSleepSeconds).")
+    return None
 
 
 def state_file(event):
