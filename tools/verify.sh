@@ -10,13 +10,19 @@
 #   scripts/verify.sh --fast ...         # only the checks that take seconds (no xcodebuild, swift/dotnet test, landing build)
 #   scripts/verify.sh --all              # every check, regardless of what changed
 #   scripts/verify.sh --no-vm ...        # no WinUI build in the Parallels VM (or LACHING_NO_VM=1) while a session holds it
+#   scripts/verify.sh --both-platforms   # the WinUI build in the VM for x64 and ARM64, not the VM's own platform alone
+#   scripts/verify.sh --shutdown-simulator   # shut the iOS tests' simulator down around their run, not leave it booted
+#   scripts/verify.sh --serial ...       # the slow checks one after another, each printed as it ends (or
+#                                        # LACHING_VERIFY_SERIAL=1): to debug a check that fails beside another
 #
 # Path → checks:
 #   documentation (*.md, *.rst, ...)     only the store listing's and the app's own checks marked `docs` (--all: all)
 #   the app's Swift (mac.app, mac.tests, mac.format outside mac.core), mac.projectSpec
 #                                          xcodegen (fails if project.pbxproj was stale; --staged generates from the
 #                                          index), swift-format lint, xcodebuild test, and the iOS tests (mac.iosScheme)
-#                                          on a simulator of their own
+#                                          on a simulator of their own, left booted for the next run. With an iOS
+#                                          scheme, a path under <mac.dir>/macOS asks for the macOS tests alone and one
+#                                          under <mac.dir>/iOS for the iOS tests alone; every other path for both
 #   mac.core, conformance/, the pin        swift test on the core package
 #   mac.core sources and Conformance/      laching/tools/conformance.sh (fails if the vectors were stale)
 #   strings (app Swift, .xcstrings, landing i18n, companion.json, the pin)   l10n.py check, the .resw and Android
@@ -28,7 +34,9 @@
 #   windows.core, windows.coreTests, conformance/, the shared settings (windows/Directory.{Build,Packages}.props,
 #   global.json: a bump moves the Laching.* versions there)    dotnet test (windows.coreTests)
 #   windows.app, windows.appTests          check-winui.py; dotnet test (windows.appTests, any OS); the app builds on
-#                                          Windows, or on a Mac in the Parallels VM (windows/vm.sh build); the tests
+#                                          Windows, or on a Mac in the Parallels VM (windows/vm.sh build: the VM's own
+#                                          platform, the app's Windows workflow builds both; skipped, not waited for,
+#                                          while another run holds the VM); the tests
 #                                          and the build also for the shared settings; dotnet runs in windows.dir,
 #                                          so its global.json picks the SDK, as in CI, and a pin that isn't met fails
 #   windows.assets (the icon, Assets/)     windows/assets.py --check (the MSIX images match the icon)
@@ -44,6 +52,10 @@
 #   verify.checks in companion.json        the app's own checks, each when its paths change (slow ones not with --fast)
 #
 # Prints one line per check and the tail of the log for failures. Exit 1 if anything failed.
+# The slow checks that share no build folder or device run side by side: the macOS tests, the iOS tests, dotnet, the VM
+# build, the Windows images, Gradle with the app's own slow checks, the landing build; those of one group in sequence.
+# Each one's lines are held back and printed in the order above, so the output and the exit status are a serial run's.
+# The core package's tests and the vectors' regeneration run first and alone: every other check reads the vectors.
 # A slow check that ran and passed is noted in the Git folder (laching-slow-checks.log: when it started, what it ran),
 # which is how the agent Stop hook knows what was run since an edit; a failed or skipped check leaves no note.
 set -uo pipefail
@@ -53,13 +65,16 @@ env_file="$(python3 "$TOOLS/companion.py" env)" || exit 2
 eval "$env_file"
 cd "$ROOT"
 
-fast=0 all=0 mode=worktree base="" paths=()
+fast=0 all=0 mode=worktree base="" paths=() both_platforms=0 shutdown_simulator=0
 novm=""; case "${LACHING_NO_VM:-0}" in '' | 0) ;; *) novm="LACHING_NO_VM=$LACHING_NO_VM" ;; esac
 while [ $# -gt 0 ]; do
   case "$1" in
     --fast) fast=1 ;;
     --all) all=1 ;;
     --no-vm) novm=--no-vm ;;
+    --both-platforms) both_platforms=1 ;;
+    --shutdown-simulator) shutdown_simulator=1 ;;
+    --serial) LACHING_VERIFY_SERIAL=1 ;;
     --staged) mode=staged ;;
     --base) [ $# -ge 2 ] || { echo "--base needs a Git ref" >&2; exit 2; }; mode=base; base="$2"; shift ;;
     --) shift; mode=paths; paths=("$@"); break ;;
@@ -146,18 +161,49 @@ xcodegen_staged_in_sync() {
 }
 
 # The iOS tests on a simulator of their own (ios-destination.py --own), not the iPhone the Simulator panel and the
-# screenshot runs share: a test host one of those left running jams the next run. Shut down after each run, and
-# before it in case one was stopped.
+# screenshot runs share: a test host one of those left running jams the next run. It stays booted, so the next run
+# starts sooner; --shutdown-simulator shuts it down after the run, and before it in case one was stopped.
 ios_tests() {
   local dest status
   dest="$(python3 "$TOOLS/ios-destination.py" --own "$NAME verify")" || return 1
-  xcrun simctl shutdown "${dest##*id=}" 2>/dev/null
+  [ "$shutdown_simulator" = 0 ] || xcrun simctl shutdown "${dest##*id=}" 2>/dev/null
   # shellcheck disable=SC2086
   (cd "$MAC_DIR" && xcodebuild -project "$MAC_PROJECT" -scheme "$MAC_IOS_SCHEME" -destination "$dest" \
     -derivedDataPath "$ROOT/${DERIVED%.noindex}-ios.noindex" -quiet $XCODE_CACHE test)
   status=$?
-  xcrun simctl shutdown "${dest##*id=}" 2>/dev/null
+  [ "$shutdown_simulator" = 0 ] || xcrun simctl shutdown "${dest##*id=}" 2>/dev/null
   return $status
+}
+
+# Which Xcode tests a change asks for, into xcode_mac and xcode_ios. With an iOS scheme, a path under <mac.dir>/macOS
+# is the Mac app's alone and one under <mac.dir>/iOS the iOS app's (the layout `swift-format --all` assumes too), so
+# it asks for its own platform's tests; every other path (shared sources, the tests, the core, the project spec, the
+# vectors) asks for both, and so does --all.
+xcode_asks() { # <paths>: they ask for the Xcode tests, by the app's Swift paths or by its hooks.slow
+  local list="${1%$'\n'}"
+  [ -n "$list" ] || return 1
+  matches "$(printf '%s\n' "$list" | grep -Eiv '\.(md|markdown|rst|adoc)$' || true)" "$RE_SWIFT" "${CONFORMANCE_DIR:+^$CONFORMANCE_DIR/}" && return 0
+  case " $(printf '%s\n' "$list" | python3 "$TOOLS/companion.py" slow) " in *" xcodebuild-test "*) return 0 ;; esac
+  return 1
+}
+xcode_split() {
+  local path mac="" ios="" rest="" prefix="$MAC_DIR/"
+  [ -n "$MAC_DIR" ] && [ "$MAC_DIR" != . ] || prefix=""
+  xcode_mac=1 xcode_ios=0
+  [ -n "$MAC_IOS_SCHEME" ] || return 0
+  xcode_ios=1
+  [ "$all" = 0 ] || return 0
+  while IFS= read -r path; do
+    case "$path" in
+      "$prefix"macOS/*) mac="$mac$path"$'\n' ;;
+      "$prefix"iOS/*) ios="$ios$path"$'\n' ;;
+      *) rest="$rest$path"$'\n' ;;
+    esac
+  done <<< "$changed"
+  xcode_asks "$rest" && return 0
+  xcode_asks "$mac" || xcode_mac=0
+  xcode_asks "$ios" || xcode_ios=0
+  [ "$xcode_mac$xcode_ios" != 00 ] || xcode_mac=1 xcode_ios=1 # something asked for them: never neither
 }
 
 conformance_current() {
@@ -278,19 +324,41 @@ ran_record() { # <started> <kinds> <command>
   fi
   return 0
 }
-# slow <kinds> <label> [locked <name>] <command...>: `check`, noted when it passed. No kind for a check the hook has no
-# name for (the app's own): the hook reads its command.
+# slow <kinds> <group> <label> [locked <name>] <command...>: a check queued for run_queued (verify-lib.sh), which runs
+# the groups side by side and the checks of one group in sequence; slow_note notes it when it passed. No kind for a
+# check the hook has no name for (the app's own): the hook reads its command.
+slow_kinds=() slow_command=() xcode_checks=() xcode_command=""
 slow() {
-  local kinds="$1" before=${#failed[@]} started; shift
-  started="$(date +%s)"
-  check "$@"
-  [ ${#failed[@]} -eq "$before" ] && [ "$verify_skipped" = 0 ] || return 0
-  shift; if [ "${1:-}" = locked ]; then shift 2; fi
-  ran_record "$started" "$kinds" "$*"
+  local kinds="$1" i=${#queue_group[@]}; shift
+  queue "$@"
+  shift 2; if [ "${1:-}" = locked ]; then shift 2; fi
+  slow_kinds[$i]="$kinds" slow_command[$i]="$*"
 }
+# slow_note <index>: run_queued calls it as each check is reported, in the order queued, so the notes are a serial
+# run's. A check is noted with its own start. The Xcode test runs (xcode_checks) are one kind for the hook: noted when
+# the last of them is reported and each passed, from the start of the first.
+slow_note() {
+  local i="$1" j last started=""
+  if [ -n "${slow_command[$i]-}" ]; then
+    [ "${queue_result[$i]}" != ok ] || ran_record "${queue_started[$i]}" "${slow_kinds[$i]-}" "${slow_command[$i]}"
+    return 0
+  fi
+  [ ${#xcode_checks[@]} -gt 0 ] || return 0
+  last="${xcode_checks[$((${#xcode_checks[@]} - 1))]}"
+  [ "$i" = "$last" ] || return 0
+  for j in "${xcode_checks[@]}"; do
+    [ "${queue_result[$j]}" = ok ] || return 0
+    case "${queue_started[$j]}" in '' | *[!0-9]*) return 0 ;; esac
+    if [ -z "$started" ] || [ "${queue_started[$j]}" -lt "$started" ]; then started="${queue_started[$j]}"; fi
+  done
+  ran_record "$started" xcodebuild-test "$xcode_command"
+}
+queue_after=slow_note
 
 # The app's own checks (verify.checks): speed, whether documentation counts, paths, name and command per line. One that
 # can't run here (a missing toolchain) exits 77: it's listed under `skip` with the last line it printed, and not noted.
+# The slow ones run in sequence in Gradle's group, after the core module's tests and beside the other groups: one that
+# builds in a folder another group's check uses must not be an app check yet.
 app_speed=() app_docs=() app_paths=() app_name=() app_run=()
 while IFS=$'	' read -r speed docs paths name run; do
   [ -n "$speed" ] || continue
@@ -303,7 +371,7 @@ app_checks() {
     [ "${app_speed[$i]}" = "$1" ] || continue
     if { [ "${app_docs[$i]}" = docs ] && touched_any "${app_paths[$i]}"; } || touched "${app_paths[$i]}"; then
       verify_skip_status=77
-      if [ "$1" = slow ]; then slow "" "${app_name[$i]}" bash -c "${app_run[$i]}" </dev/null
+      if [ "$1" = slow ]; then slow "" gradle "${app_name[$i]}" bash -c "${app_run[$i]}"
       else check "${app_name[$i]}" bash -c "${app_run[$i]}" </dev/null; fi
       verify_skip_status=""
     fi
@@ -403,61 +471,84 @@ asked() { case " $slow_asked " in *" $1 "*) return 0 ;; esac; return 1; }
 if [ "$fast" = 0 ]; then
   slow_asked="$(printf '%s\n' "$changed" | python3 "$TOOLS/companion.py" slow)" || exit 2
   if [ -n "$MAC_CORE" ] && { touched "$RE_COREPKG" "${CONFORMANCE_DIR:+^$CONFORMANCE_DIR/}" "$RE_PIN" || asked swift-test; }; then
-    if has swift; then slow swift-test "swift test ($MAC_CORE)" swift test --package-path "$MAC_CORE"
+    if has swift; then slow swift-test core "swift test ($MAC_CORE)" swift test --package-path "$MAC_CORE"
     else skip "swift test ($MAC_CORE): needs a Swift toolchain"; fi
   fi
   if touched "$RE_PURE" || asked conformance; then
-    if [ "$darwin" = 1 ]; then slow conformance "conformance vectors current" conformance_current
+    if [ "$darwin" = 1 ]; then
+      slow conformance core "conformance vectors current" conformance_current
+      # The regeneration empties the vectors' folders and writes each file again, and every check below reads them
+      # (the Xcode, dotnet and Gradle tests, the landing build, the copy into the VM): it ends before they start.
+      run_queued
     else skip "conformance.sh: needs macOS + Xcode"; fi
   fi
   if touched "$RE_SWIFT" "${CONFORMANCE_DIR:+^$CONFORMANCE_DIR/}" || asked xcodebuild-test; then
     if [ "$darwin" = 1 ]; then
-      # One kind for the hook: noted when the macOS tests and, with an iOS scheme, the iOS tests both passed.
-      xcode_failed=${#failed[@]} xcode_started="$(date +%s)"
-      check "xcodebuild test" locked xcodebuild-macos bash -c "cd \"$MAC_DIR\" && xcodebuild -project \"$MAC_PROJECT\" -scheme \"$MAC_SCHEME\" \
-        -destination 'platform=macOS' -derivedDataPath \"$ROOT/$DERIVED\" -quiet $XCODE_CACHE test"
-      if [ -n "$MAC_IOS_SCHEME" ]; then check "xcodebuild test (iOS)" locked xcodebuild-ios ios_tests; fi
-      if [ ${#failed[@]} -eq "$xcode_failed" ]; then
-        ran_record "$xcode_started" xcodebuild-test "cd $MAC_DIR && xcodebuild -project $MAC_PROJECT -scheme $MAC_SCHEME${MAC_IOS_SCHEME:+ and $MAC_IOS_SCHEME} test"
+      # One kind for the hook (slow_note): noted when each of the test runs these paths ask for passed. Their build
+      # folders and devices are their own (the Mac's DerivedData; the iOS one and its simulator), so they run side by side.
+      xcode_split
+      xcode_schemes=""
+      if [ "$xcode_mac" = 1 ]; then
+        xcode_checks+=("${#queue_group[@]}") xcode_schemes="$MAC_SCHEME"
+        queue xcode-macos "xcodebuild test" locked xcodebuild-macos bash -c "cd \"$MAC_DIR\" && xcodebuild -project \"$MAC_PROJECT\" -scheme \"$MAC_SCHEME\" \
+          -destination 'platform=macOS' -derivedDataPath \"$ROOT/$DERIVED\" -quiet $XCODE_CACHE test"
       fi
+      if [ "$xcode_ios" = 1 ]; then
+        xcode_checks+=("${#queue_group[@]}") xcode_schemes="${xcode_schemes:+$xcode_schemes and }$MAC_IOS_SCHEME"
+        queue xcode-ios "xcodebuild test (iOS)" locked xcodebuild-ios ios_tests
+      fi
+      xcode_command="cd $MAC_DIR && xcodebuild -project $MAC_PROJECT -scheme $xcode_schemes test"
     else skip "xcodebuild test: needs macOS + Xcode"; fi
   fi
   if { touched "$RE_WINDOWS_CORE" || asked dotnet-test; } && [ -n "$WINDOWS_CORE_TESTS" ]; then
     if has dotnet; then
-      slow dotnet-test "dotnet test ($WINDOWS_CORE_TESTS)" windows_dotnet test "$WINDOWS_CORE_TESTS/$WINDOWS_CORE_TESTS.csproj" -v q --nologo
+      slow dotnet-test dotnet "dotnet test ($WINDOWS_CORE_TESTS)" windows_dotnet test "$WINDOWS_CORE_TESTS/$WINDOWS_CORE_TESTS.csproj" -v q --nologo
     else skip "dotnet test: needs the .NET SDK"; fi
   fi
   if { touched "$RE_WINDOWS_APP_TESTS" || asked dotnet-app-test; } && [ -n "$WINDOWS_APP_TESTS" ]; then
     if has dotnet; then
-      slow dotnet-app-test "dotnet test ($WINDOWS_APP_TESTS)" windows_dotnet test "$WINDOWS_APP_TESTS/$WINDOWS_APP_TESTS.csproj" -v q --nologo
+      slow dotnet-app-test dotnet "dotnet test ($WINDOWS_APP_TESTS)" windows_dotnet test "$WINDOWS_APP_TESTS/$WINDOWS_APP_TESTS.csproj" -v q --nologo
     else skip "dotnet test ($WINDOWS_APP_TESTS): needs the .NET SDK"; fi
   fi
   if touched "$RE_WINDOWS_BUILD" || asked winui-build; then
-    vm="left alone: $novm"
     if [ "$windows" = 1 ] && has dotnet; then
       # Debug, unpackaged, for this machine's architecture, named for a project without companion.targets.
       case "${PROCESSOR_ARCHITECTURE:-}" in ARM64) platform=ARM64 ;; *) platform=x64 ;; esac
-      slow winui-build "WinUI app builds ($WINDOWS_APP)" windows_dotnet build "$WINDOWS_APP/$WINDOWS_APP.csproj" \
+      slow winui-build dotnet "WinUI app builds ($WINDOWS_APP)" windows_dotnet build "$WINDOWS_APP/$WINDOWS_APP.csproj" \
         -p:Platform=$platform -v q --nologo
-    elif [ -z "$novm" ] && vm="$("$TOOLS/windows/vm.sh" status 2>&1)"; then
-      # On a Mac with the Parallels Windows VM: this working tree, Debug, x64 and ARM64.
-      slow winui-build "WinUI app builds in the VM ($WINDOWS_APP, x64 + ARM64)" "$TOOLS/windows/vm.sh" build
-    else skip "WinUI app: builds on Windows or in the Parallels VM (${vm#vm.sh: }); push the branch and run the Windows workflow"; fi
+    elif [ -n "$novm" ]; then
+      skip "WinUI app: builds on Windows or in the Parallels VM (left alone: $novm); push the branch and run the Windows workflow"
+    else
+      # On a Mac with the Parallels Windows VM: this working tree, Debug, for the VM's own platform (a compile error
+      # shows on either, and the app's Windows workflow builds both); --both-platforms builds x64 and ARM64. The copy
+      # in the VM is its own, so it builds beside dotnet on the Mac. A VM another run holds is skipped, not waited for.
+      vm="$("$TOOLS/windows/vm.sh" status 2>&1)"
+      case $? in
+        0)
+          if [ "$both_platforms" = 1 ]; then
+            slow winui-build vm "WinUI app builds in the VM ($WINDOWS_APP, x64 + ARM64)" "$TOOLS/windows/vm.sh" build x64 ARM64
+          else slow winui-build vm "WinUI app builds in the VM ($WINDOWS_APP)" "$TOOLS/windows/vm.sh" build; fi ;;
+        4) vm="${vm#vm.sh: }"
+          skip "WinUI app build skipped: the VM is busy (${vm#*is busy with }); run this again when it's free, or push the branch and run the Windows workflow" ;;
+        *) skip "WinUI app: builds on Windows or in the Parallels VM (${vm#vm.sh: }); push the branch and run the Windows workflow" ;;
+      esac
+    fi
   fi
   if touched "$RE_WINDOWS_ASSETS"; then
-    slow "" "Windows images match the icon (windows/assets.py)" python3 "$TOOLS/windows/assets.py" --check
+    slow "" assets "Windows images match the icon (windows/assets.py)" python3 "$TOOLS/windows/assets.py" --check
   fi
   if { touched "$RE_ANDROID_CORE" || asked gradle-core-test; } && [ -n "$ANDROID_DIR" ]; then
     # The pure Kotlin module replays the vectors; the app module needs the Android SDK, so it builds in kotlin.yml.
     if [ -x "$ANDROID_DIR/gradlew" ] && { has java || [ -n "${JAVA_HOME:-}" ]; }; then
-      slow gradle-core-test "gradlew :$ANDROID_CORE:test" bash -c "cd \"$ANDROID_DIR\" && ./gradlew :$ANDROID_CORE:test -q --console=plain"
+      slow gradle-core-test gradle "gradlew :$ANDROID_CORE:test" bash -c "cd \"$ANDROID_DIR\" && ./gradlew :$ANDROID_CORE:test -q --console=plain"
     else skip "gradlew :$ANDROID_CORE:test: needs $ANDROID_DIR/gradlew and a JDK 17 (setup-linux.sh)"; fi
   fi
   if { touched "$RE_LANDING" || asked landing-build; } && [ -n "$LANDING_DIR" ] && [ -d "$ROOT/$LANDING_DIR" ] && [ -n "$landing_tool" ] &&
     { has "$landing_tool" || [ -x "$landing_tool" ]; }; then
-    slow landing-build "landing: $LANDING_TOOL build" bash -c "cd \"$LANDING_DIR\" && \"$landing_tool\" build"
+    slow landing-build landing "landing: $LANDING_TOOL build" bash -c "cd \"$LANDING_DIR\" && \"$landing_tool\" build"
   fi
   app_checks slow
+  run_queued
 fi
 
 summary

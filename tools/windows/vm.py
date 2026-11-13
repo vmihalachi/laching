@@ -6,7 +6,8 @@ in the app's Windows workflow. `vm.sh` runs this file.
     laching/tools/windows/vm.sh status                         # can the VM run commands? One line; exit 0 when it can,
                                                                 # 4 while another run uses it
     laching/tools/windows/vm.sh sync                           # mirror the working tree (and a linked Laching)
-    laching/tools/windows/vm.sh build [x64|ARM64…] [-- ARGS]   # the WinUI app (windows.app), Debug; both platforms
+    laching/tools/windows/vm.sh build [x64|ARM64…] [-- ARGS]   # the WinUI app (windows.app), Debug; the VM's own
+                                                                # platform unless some are named
     laching/tools/windows/vm.sh test [-- ARGS]                 # windows.coreTests and windows.appTests
     laching/tools/windows/vm.sh screenshots DIR [-- ARGS]      # the screenshot script; the PNGs land in DIR on the Mac
                                                                 # (DIR/<LANG> for -Language it,de)
@@ -100,9 +101,10 @@ Mirrors the working tree (and a linked Laching checkout) into the VM's copy and 
 first; this one takes no words.""",
     "build": """vm.sh build [x64|ARM64…] [-- ARGS]
 
-Builds the WinUI app (windows.app in companion.json), Debug, for the platforms named (both by default), from
-<windows.dir>, so its global.json picks the SDK. ARGS go to `dotnet build` as they are (`-- -p:Foo=bar`); a relative
-path in them (`-bl`, `-o`) is from <windows.dir>.""",
+Builds the WinUI app (windows.app in companion.json), Debug, for the platforms named, from <windows.dir>, so its
+global.json picks the SDK. With none named it builds one, the VM's own: a compile error shows on either, and the app's
+Windows workflow builds both. `vm.sh build x64 ARM64` builds both here. ARGS go to `dotnet build` as they are
+(`-- -p:Foo=bar`); a relative path in them (`-bl`, `-o`) is from <windows.dir>.""",
     "test": """vm.sh test [-- ARGS]
 
 Runs windows.coreTests and windows.appTests with `dotnet test` from <windows.dir>, so its global.json picks the SDK;
@@ -585,14 +587,20 @@ def in_windows(folder: str, command: str) -> str:
 
 
 def build_body(ctx: Context, platforms: list[str], extra: str) -> str:
+    """One `dotnet build` step for each platform named; with none, one step for the VM's own platform, as smoke's."""
     project = ctx.windows_project("windows.app")
     if not project:
         raise Usage("companion.json has no windows.app to build")
     folder = ctx.windows_dir()
-    lines = [step(f"dotnet build {folder}/{project} ({platform}, Debug)",
-                  in_windows(folder, f"dotnet build {ps(windows_rel(project))} -p:Platform={platform} -v q -nologo "
-                                     f"'-clp:NoSummary' {extra}".rstrip()))
-             for platform in platforms]
+
+    def build(platform: str) -> str:
+        return in_windows(folder, f"dotnet build {ps(windows_rel(project))} -p:Platform={platform} -v q -nologo "
+                                  f"'-clp:NoSummary' {extra}".rstrip())
+
+    if not platforms:
+        label = f"({ps(f'dotnet build {folder}/{project} (')} + $platform + ', Debug)')"
+        return "\n".join(("$platform = Get-GuestPlatform", f"Invoke-Step {label} {{ {build('$platform')} }}", "Exit-Steps"))
+    lines = [step(f"dotnet build {folder}/{project} ({platform}, Debug)", build(platform)) for platform in platforms]
     return "\n".join([*lines, "Exit-Steps"])
 
 
@@ -678,7 +686,7 @@ def command_body(ctx: Context, command: str, words: list[str], extra: str) -> st
     if command == "sync":
         return None
     if command == "build":
-        return build_body(ctx, parse_platforms(words) or list(PLATFORMS), extra)
+        return build_body(ctx, parse_platforms(words), extra)
     if command == "test":
         return test_body(ctx, extra)
     if command == "screenshots":

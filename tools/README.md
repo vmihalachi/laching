@@ -337,20 +337,38 @@ Runs the checks that apply to changed paths, plus the pin check.
 What `verify.sh` runs for a path (`--help` lists them): documentation (`.md`, `.markdown`, `.rst`, `.adoc`) leaves the
 app checks alone, so only the store listing's check and the app's own checks marked `docs` see it, unless `--all`. The app's Swift is
 `mac.app`, `mac.tests` and `mac.format`'s folders outside the core package; with `mac.iosScheme`, `xcodebuild test`
-runs the iOS tests too, on `ios-destination.py --own "<name> verify"`. `--staged`, the pre-commit hook's mode,
-generates the Xcode project from the index in a scratch copy, so another session's untracked sources don't count.
+runs the iOS tests too, on `ios-destination.py --own "<name> verify"`. Which of the two a path asks for goes by its
+folder: one under `<mac.dir>/macOS` asks for the macOS tests alone, one under `<mac.dir>/iOS` for the iOS tests alone,
+and every other path (shared sources, the tests, the core, the project's spec, the vectors) and `--all` for both, so
+a Mac-only edit boots no simulator. The simulator stays booted for the next run; `--shutdown-simulator` shuts it down
+after the tests, and before them in case a run was stopped and left its test host there. `--staged`, the pre-commit
+hook's mode, generates the Xcode project from the index in a scratch copy, so another session's untracked sources
+don't count.
 The WinUI app builds when the app, the Windows core it references, `Directory.Build.props`,
-`Directory.Packages.props` or `global.json` changes; `--no-vm` (or `LACHING_NO_VM=1`) leaves the Parallels VM to a
-session that holds it. Its `dotnet` checks (the C# format, the Windows tests, the WinUI build) run in `windows.dir`, as
+`Directory.Packages.props` or `global.json` changes: on a Mac in the Parallels VM, for the VM's own platform (a
+compile error shows on either, and the app's Windows workflow builds both); `--both-platforms` builds x64 and ARM64
+there. `--no-vm` (or `LACHING_NO_VM=1`) leaves the VM to a session that holds it, and while another run holds it the
+build is skipped, not waited for: the `skip` line says the VM is busy and names that run. Its `dotnet` checks (the C#
+format, the Windows tests, the WinUI build) run in `windows.dir`, as
 CI's do, so a `global.json` pin there that no installed SDK meets fails them ([*Windows apps*](#windows-apps)). On a
 Mac, Gradle gets Homebrew's openjdk@17 and Android Studio's SDK unless `JAVA_HOME` and `ANDROID_HOME` are set.
 `verify.sh` runs `character.py --check` and `synth.py --check` when their inputs, their outputs or the `laching/` pin
 change.
 
+The slow checks that share no build folder and no device run side by side, so a run takes about as long as its
+slowest group: the macOS tests, the iOS tests (each `xcodebuild` has its own DerivedData), `dotnet` on this machine,
+the build in the VM, the Windows images, Gradle with the app's own slow checks, and the landing build. The checks of
+one group run in sequence. The core package's tests and the vectors' regeneration run before the others and alone,
+because every other check reads the vectors. Each check's lines are held back and printed in the order a serial run
+prints them, a failure with its own log, and the exit status is the same. `--serial` (or `LACHING_VERIFY_SERIAL=1`)
+runs them one after another, each printed as it ends, to debug a check that fails only beside another; that is also
+what Git Bash on Windows does unless `LACHING_VERIFY_SERIAL=0`.
+
 Each slow check that ran and passed leaves a line in the repository's git folder (`laching-slow-checks.log`, one per
 worktree: when it started, the Stop hook's names for it, its command), which is how [the hook](#hookshookpy) knows
-what ran since an edit. `--help`, `--fast`, a check that failed and one that was skipped (`--no-vm`, a missing
-toolchain) leave none.
+what ran since an edit. The lines are written in the checks' order, whichever ended first. The Xcode tests leave one
+line, naming the schemes that ran, when every run the paths asked for passed. `--help`, `--fast`, a check that failed
+and one that was skipped (`--no-vm`, a busy VM, a missing toolchain) leave none.
 
 The app's own checks, which a copied `verify.sh` used to hold, are `verify.checks` in `companion.json`: each a `name`, the
 `paths` that trigger it (an extended regular expression), the command to `run` (bash, from the root), `slow` for one
@@ -379,6 +397,17 @@ and its descendants before releasing the lock, including on timeout or interrupt
 holder crashes. The persistent
 lock files are diagnostic and can contain an old PID; stale contents never prevent acquisition. Keep these files in
 place while builds are running, so every process locks the same file.
+
+`queue <group> "name" [locked <build-name>] <command...>` holds a check for `run_queued`, which runs the groups side
+by side and the checks of one group in sequence, then prints every check as `check` would, in the order queued: a
+check's lines never mix with another's, a failure keeps its own log, and `finish` exits as after a serial run. Put
+checks that share a build folder, a device or a Gradle project in one group. A queued check reads `/dev/null`, not the
+terminal, and has the same progress lines, timeout and lock as `check`. Set `queue_after` to a function's name to hear
+of each check as it is printed: it gets the check's index (0 for the first one queued), with `${queue_result[index]}`
+`ok`, `fail` or `skip` and `${queue_started[index]}` the epoch second it began. Interrupting the verifier stops every
+running group, and a check whose verifier was killed outright stops by itself within seconds.
+`LACHING_VERIFY_SERIAL=1` makes `run_queued` run the checks one at a time in the order queued, the default on Git Bash
+for Windows; `0` forces side by side.
 
 ## `ios-destination.py`
 
@@ -746,15 +775,17 @@ installs the SDK it pins.
 ### `windows/vm.sh`
 
 On a Mac, the WinUI app built and checked in a Parallels Windows VM from the working tree as it is (uncommitted changes
-too): `build` (x64 and ARM64), `test`, `screenshots <folder>` (the PNGs back on the Mac), `check-layout [lang…]`
-(`check-layout.ps1`, the shots back in `<windows.dir>/build/layout-check`), `smoke`, `run -- <command>`, `status`.
+too): `build` (the VM's own platform, or those named), `test`, `screenshots <folder>` (the PNGs back on the Mac),
+`check-layout [lang…]` (`check-layout.ps1`, the shots back in `<windows.dir>/build/layout-check`), `smoke`,
+`run -- <command>`, `status`.
 Without prlctl or the VM it says so in one line and exits 3. One run at a time on the VM, from any app or worktree:
 another waits, naming the run it waits for (its command and checkout); `status` names it and exits 4, so a caller can
 skip instead.
 
 `laching/tools/windows/vm.sh build` mirrors the working tree (what git sees, uncommitted changes and submodules
-included) into a Windows VM in Parallels Desktop and builds the app there, Debug, for x64 and ARM64, so a Mac change is
-ported and built in the same session. `screenshots <folder>` runs the screenshot script there and copies the PNGs into
+included) into a Windows VM in Parallels Desktop and builds the app there, Debug, for the VM's own platform
+(`vm.sh build x64 ARM64` for both, which the app's Windows workflow builds anyway), so a Mac change is ported and built
+in the same session. `screenshots <folder>` runs the screenshot script there and copies the PNGs into
 the Mac folder, `check-layout [lang…]` runs `check-layout.ps1` there (one build, the languages side by side, all of them
 unless named) and copies each language's shots and `problems.txt` back into `<windows.dir>/build/layout-check/<lang>`,
 `smoke` publishes the Native AOT package for the VM's platform and runs `smoke-package.ps1` on it (`-- -SideBySide`
