@@ -10,8 +10,9 @@ DIR for DIR/<language>), named <n>-<shot>-<appearance>.png in upload order: uplo
 default the source language; `all` for every language of the captions) picks the languages. The captures: the folder
 given (one language's), else for the Mac the committed captures in screenshots.out for the source language (run
 screenshots.sh first if the windows changed) and, for any other language, the windows its captions need, captured in
-that language first (`screenshots.sh --only … --front` into build/store-captures/apple/<language>); for an Android
-canvas, screenshots.out. Needs Pillow (pip3 install pillow).
+that language first (`screenshots.sh --only … --front --no-build` into build/store-captures/apple/<language>, from one
+build of the app made before the first of them, however many languages follow); for an Android canvas,
+screenshots.out. Needs Pillow (pip3 install pillow).
 
 --only SHOT[,SHOT] re-renders just those images, in every language asked for, and keeps the folder's others: a shot
 is a capture's name (`session-webcam-light`) or a window's, in both appearances (`session-webcam`). Only those windows
@@ -610,15 +611,23 @@ def play_problem(image):
     return None
 
 
-def capture(config: companion.Config, language: str, captions: list[dict]) -> Path:
-    """The Mac windows `captions` show (those --only picks), captured in `language` (screenshots.sh) into
-    build/store-captures/apple."""
-    folder = config.root / "build" / "store-captures" / "apple" / language
-    shots = ",".join(dict.fromkeys(caption["shot"] for caption in captions))
+def capture_build() -> list[str]:
+    """Builds the Mac app for the captures (`screenshots.sh --build-only`) and returns screenshots.sh's command: a run
+    builds once, and each language's capture then runs that build."""
     command = companion.shell_command(TOOLS / "screenshots.sh")
     if command is None:
         sys.exit("store-screenshots: capturing needs bash (Git for Windows); pass a captures folder")
-    if subprocess.run([*command, "--only", shots, "--front", str(folder), language]).returncode:
+    if subprocess.run([*command, "--build-only"]).returncode:
+        sys.exit("store-screenshots: building the app for the captures failed, so no windows were captured")
+    return command
+
+
+def capture(config: companion.Config, command: list[str], language: str, captions: list[dict]) -> Path:
+    """The Mac windows `captions` show (those --only picks), captured in `language` into build/store-captures/apple
+    from the build capture_build made (`command`: screenshots.sh, run with --no-build)."""
+    folder = config.root / "build" / "store-captures" / "apple" / language
+    shots = ",".join(dict.fromkeys(caption["shot"] for caption in captions))
+    if subprocess.run([*command, "--only", shots, "--front", "--no-build", str(folder), language]).returncode:
         sys.exit(f"store-screenshots: capturing the {language} windows failed")
     return folder
 
@@ -734,13 +743,16 @@ def main(argv: list[str]) -> int:
         check_kept({language: out / language for language in languages},
                    {language: settings[language].names(captions[language]) for language in languages}, only, config.root,
                    whole=args.canvas in IOS_CANVASES)
+    built = None  # screenshots.sh once it has built the app: every language captured in this run shows that build
     for language in languages:
         picked = only[language]
         if args.captures:
             captures = args.captures
         elif args.canvas == "mac" and language != config.source_language:
             shown = for_platform(captions[language], args.canvas)
-            captures = capture(config, language, [caption for i, caption in enumerate(shown) if picked is None or i in picked])
+            built = built or capture_build()
+            captures = capture(config, built, language,
+                               [caption for i, caption in enumerate(shown) if picked is None or i in picked])
         elif args.canvas in IOS_CANVASES:
             captures = config.root / "build" / "store-captures" / "ios" / args.canvas / language
         else:

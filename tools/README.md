@@ -255,8 +255,9 @@ once and is shot as soon as it has drawn, in light and then in dark).
 
 ## `store-screenshots.py`
 
-- App Store images (`--lang LANG|all`: another language's windows are captured in it first; `--only shot,…` re-renders
-  those images alone and keeps the folder's others, refusing a folder that lacks them).
+- App Store images (`--lang LANG|all`: another language's windows are captured in it first, every language from one
+  build of the app; `--only shot,…` re-renders those images alone and keeps the folder's others, refusing a folder
+  that lacks them).
 - The App Store's iPhone, iPad and iPhone Duo images (`--canvas iphone|ipad|duo`: the caption above the simulator's
   screen, from build/store-captures/ios/<device>/<lang>, into push.py's folders).
 - Google Play's from the Android captures (`--canvas android-phone` 1080 × 1920 with the caption above the screen,
