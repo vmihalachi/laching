@@ -972,6 +972,7 @@ class WhatACommandRan(HookTestCase):
             "which swift test xcodebuild",
             "man xcodebuild test",
             "swift build && echo swift test",
+            "cat <<EOF\nfoo \\\nEOF\nswift test\nEOF",  # an unquoted one's lines join first: the second EOF ends it
         ):
             self.assert_ran(command)
 
@@ -995,6 +996,17 @@ class WhatACommandRan(HookTestCase):
             "(swift test) | tail",  # a subshell
             "(swift test; true)",
             "bash -c 'swift test | tail'",
+            "swift test || exit 0",
+            "swift test || { echo failed; exit; }; echo done",  # `exit` with echo's status
+            "for s in A B; do swift test || exit 1; done | tee log",  # the loop's exit ends a pipe's subshell
+            "{ swift test; } | tail",
+            "{ swift test; }; echo done",
+            "set -e; swift test && echo ok; echo done",  # `set -e` skips all of an `&&` list but its last
+            "set -e; (swift test; echo ok) || true",
+            "set -e; set +e; swift test; echo done",
+            "set -e; while swift test; do sleep 1; done; echo done",
+            "if true; then swift test; fi",  # an `if`'s body: left out, its rules aren't worth the parsing
+            "echo 'a \\\n'; swift test; echo done",
         ):
             self.assert_ran(command)
         for command in (
@@ -1010,8 +1022,28 @@ class WhatACommandRan(HookTestCase):
             "set -o pipefail; swift test 2>&1 | tail -20",
             "set -euo pipefail\nswift test | xcbeautify",
             "swift test # | tail",
+            # A failure that ends the shell is its exit status, whatever follows.
+            "swift test || exit 1",
+            "swift test || exit $?",
+            "swift test || { echo failed; exit 1; }; echo done",
+            "{ swift test; } 2>&1",
+            "{ swift test; } > log.txt 2>&1",
+            "set -e; swift test; echo done",
+            "set -eu\nswift test\necho done",
+            "set -o errexit; swift test; echo done",
+            "set -e; { swift test; echo done; }",
+            "set -e; if true; then swift test; fi; echo done",
+            "set -e; (swift test; echo ok); echo done",
+            "set -e; true && swift test; echo done",
+            "cat > notes.sh <<'EOF'\nfoo \\\nEOF\nswift test",  # a quoted heredoc's body joins no lines
+            "# a comment \\\nswift test",  # a comment ends at the newline
         ):
             self.assert_ran(command, "swift-test")
+        for command in (
+            "for s in A B; do xcodebuild -scheme $s test || exit 1; done",
+            "set -e\nfor s in A B; do xcodebuild -scheme $s test; done\necho done",
+        ):
+            self.assert_ran(command, "xcodebuild-test")
 
     def test_a_check_counts_where_the_command_runs_it(self):
         self.enable_android()
@@ -1031,7 +1063,24 @@ class WhatACommandRan(HookTestCase):
         self.assert_ran("bash laching/tools/conformance.sh --check", "conformance")
         xcodebuild = "xcodebuild -project Fixture.xcodeproj -scheme Fixture -destination 'platform=macOS' test"
         self.assert_ran(f"cd macos && {xcodebuild}", "xcodebuild-test")
-        self.assert_ran(f"{xcodebuild} -only-testing:FixtureTests/A")
+        # Some of the tests ran: the check ran, but it doesn't count (`UNJUDGED`); a listing ran none.
+        unjudged = self.hook.UNJUDGED
+        self.assert_ran(f"{xcodebuild} -only-testing:FixtureTests/A", unjudged + "xcodebuild-test")
+        self.assert_ran(f"{xcodebuild} -skip-testing:FixtureTests/A", unjudged + "xcodebuild-test")
+        self.assert_ran("swift test --filter PhraseTests", unjudged + "swift-test")
+        self.assert_ran("swift test --package-path macos/FixtureCore --skip SlowTests", unjudged + "swift-test")
+        self.assert_ran("swift test --skip-build", "swift-test")
+        self.assert_ran("swift test list")
+        self.assert_ran("swift test --list-tests")
+        self.assert_ran("dotnet test --filter Name~Phrase", unjudged + "dotnet-test", unjudged + "dotnet-app-test")
+        self.assert_ran("dotnet test --list-tests")
+        self.assert_ran("./gradlew :core:test --tests '*PhraseTest'", unjudged + "gradle-core-test")
+        self.assert_ran("./gradlew build -x test", "android-build")
+        # A test project runs its own tests only.
+        self.assert_ran("dotnet test windows/Fixture.App.Tests", "dotnet-app-test")
+        self.assert_ran("cd windows && dotnet test Fixture.Core.Tests/Fixture.Core.Tests.csproj", "dotnet-test")
+        self.assert_ran("cd windows/Fixture.App.Tests && dotnet test", "dotnet-app-test")
+        self.assert_ran("dotnet test windows/Fixture.Other.Tests")
         self.assert_ran("xcodebuild -scheme Fixture build-for-testing")
         self.assert_ran("laching/tools/windows/vm.sh build && laching/tools/windows/vm.sh test",
                         "winui-build", "dotnet-test", "dotnet-app-test")
@@ -1080,8 +1129,8 @@ class WhatACommandRan(HookTestCase):
         self.assertNotIn("it ran", self.reminder)
         self.assertTrue(reminded_after("swift test --package-path macos/FixtureCore 2>&1 | tail -5"))
         # The agent saw the tests pass and is told why that run isn't one: the reminder names the lost exit status.
-        self.assertIn("core package tests (swift test --package-path macos/FixtureCore) [it ran, but where its failure "
-                      "doesn't fail the command (behind `|`", self.reminder)
+        self.assertIn("core package tests (swift test --package-path macos/FixtureCore) [it ran, but that run doesn't "
+                      "count: in the background, only some of its tests", self.reminder)
         self.assertNotIn("conformance.sh) [it ran", self.reminder, "only the check that ran")
         self.assertNotIn("swift-test", self.resumed, "and it isn't among the checks the session ran")
         self.assertNotIn("unjudged", self.resumed)
@@ -1090,6 +1139,27 @@ class WhatACommandRan(HookTestCase):
         # Codex's argv: the words of a message are one argument, and `bash -lc` carries the command.
         self.assertTrue(reminded_after(["git", "commit", "-m", "swift test passes"]))
         self.assertFalse(reminded_after(["bash", "-lc", "cd macos && swift test --package-path FixtureCore"]))
+
+    def test_a_check_sent_to_the_background_has_not_run_yet(self):
+        sessions = iter(range(100))
+
+        def reminder_after(tool_input, response):
+            session = f"later{next(sessions)}"
+            self.run_hook("post", {"session_id": session, "tool_name": "Edit", "tool_input": {
+                "file_path": str(self.root / "macos/FixtureCore/Sources/FixtureCore/Phrases.swift")}})
+            self.run_hook("post", {"session_id": session, "tool_name": "Bash", "tool_input": tool_input,
+                                   "tool_response": response})
+            return self.run_hook("stop", {"session_id": session}).stderr
+
+        command = "swift test --package-path macos/FixtureCore"
+        self.assertNotIn("core package tests", reminder_after({"command": command}, {"stdout": "", "interrupted": False}))
+        # Started in the background, or moved there when it ran too long: the hook heard it start, not how it ended.
+        for tool_input, response in (({"command": command, "run_in_background": True}, {"backgroundTaskId": "b1"}),
+                                     ({"command": command}, {"backgroundTaskId": "b2"}),
+                                     ({"command": command}, {"timedOutAfterMs": 120000}),
+                                     ({"command": command}, {"backgroundedToDeliverMessage": True})):
+            self.assertIn("core package tests (swift test --package-path macos/FixtureCore) [it ran, but that run "
+                          "doesn't count: in the background", reminder_after(tool_input, response), response)
 
     def test_a_command_is_split_where_the_shell_splits_it(self):
         parts = self.hook.shell_parts('cd a && X=1 time make -j4 2>&1 | tee "my log"; echo "$(date +%s)" > out.txt &')

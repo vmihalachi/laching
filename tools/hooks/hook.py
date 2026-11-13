@@ -275,7 +275,8 @@ words       its words with the quotes removed and without redirections: the prog
             variable assignments and wrappers (`run_words` drops those).
 keywords    the shell keywords in front of it (`if`, `then`, `while`, `do`, `!`, `{` ...); `done`, `fi` and `}` are
             parts with keywords and no words.
-kept        its failure is the whole command's: nothing after it replaces its exit status.
+kept        its failure is the whole command's: nothing after it replaces its exit status, or it ends the shell
+            (`|| exit 1`, `set -e`).
 captured    it runs inside `$(...)`, backquotes or `<(...)`.
 background  it runs behind an `&`: its own, its subshell's, or that of the loop, `if` or `{ }` it is in.
 """
@@ -296,7 +297,7 @@ class ShellText:
     in. Not a shell: what it can't read (a `case` pattern, a function body) comes out as parts nobody recognizes."""
 
     def __init__(self, text):
-        self.text, self.pos, self.heredocs = text.replace("\\\n", ""), 0, []
+        self.text, self.pos, self.heredocs = text, 0, []  # heredocs: (end word, quoted) of those the line opened
 
     def commands(self, closer=""):
         """The commands up to `closer` (`)` or a backquote; without one, the end of the text), each a dict: its `words`,
@@ -316,6 +317,8 @@ class ShellText:
             c, two = text[self.pos], text[self.pos:self.pos + 2]
             if c in " \t\r":
                 self.pos += 1
+            elif two == "\\\n":  # a line continuation: the command goes on
+                self.pos += 2
             elif c == closer:
                 self.pos += 1
                 break
@@ -336,9 +339,10 @@ class ShellText:
                 self.pos = redirection.end()
                 while text[self.pos:self.pos + 1] in (" ", "\t"):
                     self.pos += 1
+                start = self.pos
                 target = self.word(None, closer)  # what it reads or writes is no word of the command
                 if redirection.group() in ("<<", "<<-") and target is not None:
-                    self.heredocs.append(target)
+                    self.heredocs.append((target, text[start:self.pos] != target))
             elif c in "|;&":
                 self.pos += 1
                 close(c)
@@ -365,7 +369,8 @@ class ShellText:
                 break
             self.pos += 1
             if c == "\\":
-                value.append(text[self.pos:self.pos + 1])
+                if text[self.pos:self.pos + 1] != "\n":  # a line continuation joins the word's two halves
+                    value.append(text[self.pos:self.pos + 1])
                 self.pos += 1
             elif c == "'":
                 end = text.find("'", self.pos)
@@ -399,7 +404,8 @@ class ShellText:
             if c == '"':
                 return
             if c == "\\":
-                value.append(text[self.pos:self.pos + 1])
+                if text[self.pos:self.pos + 1] != "\n":
+                    value.append(text[self.pos:self.pos + 1])
                 self.pos += 1
             elif c == "`":
                 subs.append(self.commands("`"))
@@ -440,26 +446,35 @@ class ShellText:
                 return
 
     def skip_heredocs(self):
-        """Past the bodies of the heredocs opened on the line that just ended: text being written, nothing that runs."""
+        """Past the bodies of the heredocs opened on the line that just ended: text being written, nothing that runs.
+        In the body of one whose end word is unquoted a line continuation joins two lines before the shell looks for
+        that word, so `\\` at the end of a line hides the next one's end word; a quoted one's body is taken as it is."""
         text = self.text
-        for delimiter in self.heredocs:
+        for delimiter, quoted in self.heredocs:
+            line = ""
             while self.pos < len(text):
                 end = text.find("\n", self.pos)
                 end = len(text) if end < 0 else end
-                line, self.pos = text[self.pos:end], min(end + 1, len(text))
+                line, self.pos = line + text[self.pos:end], min(end + 1, len(text))
+                if not quoted and (len(line) - len(line.rstrip("\\"))) % 2:
+                    line = line[:-1]
+                    continue
                 if line.strip() == delimiter:
                     break
+                line = ""
         self.heredocs = []
 
 
 def shell_parts(command):
     """`command` as the simple commands it runs, in the order written (a substitution's before the command it sits
     in): a list of `Part`. `;`, `&&`, `||`, `|`, `&` and newlines separate them; heredoc bodies, quoted strings,
-    comments and redirections are left out; a line continuation joins; a subshell's commands and the script of
-    `bash -c '...'` are parts too. `part.kept` says whether a failure of that command fails the whole line: not when
-    `|`, `||` or `&` follows it, or `;` or a newline with another command after, or a keyword (`if`, `!`, `do`) stands
-    in front; `&&` keeps it, and so does a pipe under `set -o pipefail`. Use `run_words(part.words)` to see the
-    program a part runs."""
+    comments and redirections are left out; a line continuation joins, but not in single quotes, a comment or a quoted
+    heredoc's body; a subshell's commands and the script of `bash -c '...'` are parts too. `part.kept` says whether a
+    failure of that command fails the whole line: not when `|`, `||` or `&` follows it, or `;` or a newline with
+    another command after (the `}` that closes its group is none), or it is a condition (`if`, `while`, `!`) or in a
+    loop's or an `if`'s body; `&&` keeps it, and so does a pipe under `set -o pipefail`. A failure that ends the shell
+    keeps it whatever follows, in a loop too: `|| exit 1` (or `|| { ...; exit 1; }`) after it, or `set -e` before it.
+    Use `run_words(part.words)` to see the program a part runs."""
     parts = []
     try:
         flatten(ShellText(str(command)).commands(), parts)
@@ -474,29 +489,122 @@ def shell_parts(command):
             elif opened and opened[-1][0] == word:
                 start = opened.pop()[1]
                 if part.background:
-                    parts[start:index] = [earlier._replace(background=True) for earlier in parts[start:index]]
+                    parts[start:index] = [earlier._replace(background=True, kept=False)
+                                          for earlier in parts[start:index]]
     return parts
 
 
-def flatten(commands, parts, kept=True, captured=False, background=False, pipefail=False):
-    """Appends the `Part`s of `commands` (`ShellText.commands`) to `parts`."""
+CLOSERS = frozenset(COMPOUNDS.values())
+
+
+def split_keywords(command):
+    """A command of `ShellText.commands` as the shell keywords in front of it and its own words."""
+    words = command["words"]
+    count = next((i for i, word in enumerate(words) if word not in KEYWORDS), len(words))
+    return words[:count], words[count:]
+
+
+def set_options(words, options):
+    """What `set <words>` turns on or off of the options that decide whether a failure is kept, into `options`:
+    `errexit` (`-e`, `-o errexit`) and `pipefail` (`-o pipefail`)."""
+    if words[:1] != ["set"]:
+        return
+    rest = iter(words[1:])
+    for word in rest:
+        if not re.fullmatch(r"[-+][A-Za-z]+", word):
+            break
+        if "e" in word[1:]:
+            options["errexit"] = word[0] == "-"
+        if word.endswith("o"):
+            name = next(rest, "")
+            if name in ("errexit", "pipefail"):
+                options[name] = word[0] == "-"
+
+
+def flatten(commands, parts, kept=True, captured=False, background=False, options=None):
+    """Appends the `Part`s of `commands` (`ShellText.commands`) to `parts`. `options`: those of `set_options` in force
+    where they run."""
+    options, last = dict(options or {}), len(commands) - 1
+    # The compound commands each command is in, innermost last: for each, whether the command is in its condition (a
+    # loop's header, all of a `case`), and the compound as [its keyword, its closing word, whether a condition is being
+    # read, the command that opens it, the command that closes it].
+    stack, around = [], []
+    for index, command in enumerate(commands):
+        keywords, words = split_keywords(command)
+        for word in keywords + words[:1]:
+            if word in COMPOUNDS:
+                stack.append([word, COMPOUNDS[word], word != "{", index, None])
+            elif word in ("then", "do", "else") and stack:
+                stack[-1][2] = False
+            elif word == "elif" and stack:
+                stack[-1][2] = True
+            elif stack and word == stack[-1][1]:
+                stack.pop()[4] = index
+        around.append([(entry, entry[2]) for entry in stack])
+
+    def closes(index):
+        """Whether the command at `index` only closes compounds (`}`, `done`, `fi`): it is no later command."""
+        words = commands[index]["words"]
+        return bool(words) and all(word in CLOSERS for word in words) and not commands[index]["subs"]
+
+    def exits(index):
+        """Whether the command at `index`, run after one that failed, ends the shell with a failure: `exit 1`, or
+        `exit` and `exit $?` straight after it, or a `{ ...; }` group that ends in `exit 1`."""
+        if index > last:
+            return False
+        keywords, words = split_keywords(commands[index])
+        straight = True
+        if keywords[:1] == ["{"]:
+            closer = next((entry[4] for entry, _ in around[index] if entry[3] == index), None)
+            if closer is None or closer == index:
+                return False
+            if closer - 1 != index:  # `{ echo failed; exit; }` exits with echo's status
+                keywords, words = split_keywords(commands[closer - 1])
+                straight = False
+        if words[:1] != ["exit"] or (keywords and keywords != ["{"]):
+            return False
+        if len(words) == 1 or words[1] == "$?":
+            return straight
+        return words[1].isdigit() and int(words[1]) % 256 != 0
+
     # From the last command back: whether a failure is still the exit status once everything after it ran, and the
-    # separator that ends the `&&`, `||` and `|` chain a command is in (`&`: it runs in the background).
-    last, lasting, ends = len(commands) - 1, [True] * len(commands), [""] * len(commands)
+    # separator that ends the `&&`, `||` and `|` chain a command is in (`&`: it runs in the background). The command
+    # that closes a group is none of what runs after: `{ swift test; } 2>&1` keeps it.
+    lasting, ends = [True] * len(commands), [""] * len(commands)
     for index in range(last, -1, -1):
         sep = commands[index]["sep"]
         if sep in ("&", ";", ";;", "\n"):
-            lasting[index], ends[index] = sep != "&" and index == last, sep
+            closed = sep != "&" and index < last and closes(index + 1)
+            lasting[index] = (lasting[index + 1] and commands[index + 1]["sep"] not in ("|", "|&") if closed
+                              else sep != "&" and index == last)
+            ends[index] = sep
         elif index < last:
             lasting[index], ends[index] = sep != "||" and lasting[index + 1], ends[index + 1]
         else:
             lasting[index] = sep != "||"
     for index, command in enumerate(commands):
-        words = command["words"]
-        count = next((i for i, word in enumerate(words) if word not in KEYWORDS), len(words))
-        keywords, words = words[:count], words[count:]
-        piped = command["sep"] in ("|", "|&") and not pipefail  # a pipe's exit status is its last command's
-        ok = kept and not keywords and not piped and lasting[index]
+        keywords, words = split_keywords(command)
+        sep, outer = command["sep"], [entry for entry, _ in around[index]]
+        piped = sep in ("|", "|&") and not options.get("pipefail")  # a pipe's exit status is its last command's
+        end = index
+        while end < last and commands[end]["sep"] in ("|", "|&"):
+            end += 1
+        closed = all(entry[4] is not None for entry in outer)
+
+        def outer_seps(*seps):
+            return not any(commands[entry[4]]["sep"] in seps for entry in outer)
+
+        errexit = False
+        if "!" in keywords or any(condition for _, condition in around[index]):
+            ok = False  # its status is a condition's, or turned around
+        elif sep == "||" and exits(index + 1) and ends[index] != "&":
+            ok = closed and outer_seps("|", "|&", "&")  # `|| exit 1`: its failure ends the shell, in a loop too
+        elif options.get("errexit") and not piped and commands[end]["sep"] not in ("&&", "||", "&"):
+            ok = errexit = closed and outer_seps("&&", "||", "|", "|&", "&")  # `set -e`: likewise
+        else:
+            # Not in a loop (a later round decides) nor an `if` (which runs it, not whether it fails, is the question)
+            ok = closed and all(entry[0] == "{" for entry in outer) and not piped and lasting[index]
+        ok = kept and ok
         behind = background or ends[index] == "&"
         for sub in command["subs"]:
             flatten(sub, parts, False, True, behind)
@@ -506,12 +614,11 @@ def flatten(commands, parts, kept=True, captured=False, background=False, pipefa
             if keywords:
                 parts.append(Part([], keywords, False, captured, behind))
             inner = group if group is not None else ShellText(script).commands()
-            flatten(inner, parts, ok, captured, behind, pipefail and group is not None)
+            # A subshell has the options; it ignores `set -e` where the shell would for it. `bash -c` has its own.
+            flatten(inner, parts, ok, captured, behind, {**options, "errexit": errexit} if group is not None else None)
         elif words or keywords:
             parts.append(Part(words, keywords, ok, captured, behind))
-        if words[:1] == ["set"] and any(word == "pipefail" and re.fullmatch(r"-\w*o", words[i])
-                                        for i, word in enumerate(words[1:])):
-            pipefail = True
+        set_options(words, options)
 
 
 def run_words(words):
@@ -781,12 +888,16 @@ def post_one(event):
             note = regenerate_project()
     elif tool == "Bash":
         command = args.get("command", "")
-        ran = ran_kinds(command)
+        # Run in the background, or sent there when it took too long: the hook hears it started, not how it ended.
+        response = event.get("tool_response") if isinstance(event.get("tool_response"), dict) else {}
+        later = args.get("run_in_background") or any(
+            response.get(key) for key in ("backgroundTaskId", "timedOutAfterMs", "backgroundedToDeliverMessage"))
+        ran = [] if later else ran_kinds(command)
         for kind in ran:
             record(event, "ran", kind)
         for kind in ran_kinds(command, passed=True):  # run, but behind a pipe or the like: the stop reminder says so
             if kind not in ran:
-                record(event, "ran", UNJUDGED + kind)
+                record(event, "ran", kind if kind.startswith(UNJUDGED) else UNJUDGED + kind)
         if re.search(r"\.swift\b|project\.yml", command) and re.search(r"\b(rm|mv|git\s+rm|git\s+mv|touch|cp)\b", command):
             note = regenerate_project()
     return note
@@ -812,7 +923,8 @@ def ran_kinds(command, passed=False):
 
 def part_kinds(words, went=""):
     """The slow checks one command is: `words` from its program on (`run_words`), `went` the folders the command line
-    changed to before it."""
+    changed to before it. A run of only some of a check's tests (`--filter`, `--tests`, `-only-testing`) is that check
+    as `UNJUDGED`: it ran, but it doesn't count; a listing of them (`--list-tests`) is none."""
     # The app's own: its pattern has to match from the command's first word, or from the script an interpreter runs
     # (`python3 scripts/check.py`), not somewhere in the arguments.
     head = 1
@@ -823,18 +935,22 @@ def part_kinds(words, went=""):
     if program(words) in SHELLS:  # `bash laching/tools/conformance.sh`: the script is the program
         words = words[head - 1:]
     text = " ".join([program(words), *words[1:]])
-    if re.match(r"xcodebuild\s(.*\s)?test(-without-building)?(\s|$)", text) and "-only-testing" not in text:
-        kinds.append("xcodebuild-test")
+    if re.match(r"xcodebuild\s(.*\s)?test(-without-building)?(\s|$)", text):
+        kinds.append(part_of(r"\s-(only|skip)-testing\b", text, "xcodebuild-test"))
     if program(words).endswith("conformance.sh"):
         kinds.append("conformance")
-    if re.match(r"dotnet(\.exe)?\s+test\b", text):
-        kinds.append("dotnet-test")
-        # A solution-wide run includes the app's model tests; a run of another test project doesn't.
-        app_tests, where = NAMES["WINDOWS_APP_TESTS"], f"{text} {went}"
-        if (app_tests and app_tests in where) or not re.search(r"\.Tests\b", where):
-            kinds.append("dotnet-app-test")
-    if re.match(r"swift\s+test\b", text):
-        kinds.append("swift-test")
+    if re.match(r"dotnet(\.exe)?\s+test\b", text) and not re.search(r"\s(--list-tests|-t)(\s|$)", text):
+        # A solution-wide run includes the core's and the app's model tests; a test project's run its own.
+        core = NAMES["WINDOWS_CORE_TESTS"] or (f"{NAMES['WINDOWS_CORE']}.Tests" if NAMES["WINDOWS_CORE"] else "")
+        core_tests, app_tests = project_name(core), project_name(NAMES["WINDOWS_APP_TESTS"])
+        where = f"{text} {went}"
+        solution = not re.search(r"\.Tests\b", where)
+        if solution or (core_tests and core_tests in where):
+            kinds.append(part_of(r"\s--filter\b", text, "dotnet-test"))
+        if solution or (app_tests and app_tests in where):
+            kinds.append(part_of(r"\s--filter\b", text, "dotnet-app-test"))
+    if re.match(r"swift\s+test\b", text) and not re.match(r"swift\s+test\s+(.*\s)?(list|--list-tests)(\s|$)", text):
+        kinds.append(part_of(r"\s--(filter|skip)(\s|=|$)", text, "swift-test"))
     # The WinUI app built: in the Parallels VM (vm.sh's build, and screenshots and smoke, which build it), or by
     # dotnet on Windows. vm.sh test runs the same test projects as dotnet test.
     app = NAMES["WINDOWS_APP"]
@@ -847,8 +963,10 @@ def part_kinds(words, went=""):
     if re.match(r"gradlew?(\.bat)?\s", text):
         core, app = NAMES["ANDROID_CORE"], NAMES["ANDROID_APP"]
         whole = not re.search(r"\s:\w+:", text)  # no module-qualified task: every module
-        if (core and f":{core}:test" in text) or (whole and re.search(r"\s(test|check|build)\b", text)):
-            kinds.append("gradle-core-test")
+        if re.search(r"\s(-x|--exclude-task)[\s=]\S*test\b", text):
+            pass  # `./gradlew build -x test`: the build without its tests
+        elif (core and f":{core}:test" in text) or (whole and re.search(r"\s(test|check|build)\b", text)):
+            kinds.append(part_of(r"\s--tests[\s=]", text, "gradle-core-test"))
         if (app and re.search(rf":{re.escape(app)}:(assemble|build|install)", text)) or (
                 whole and re.search(r"\s(assemble\w*|build)\b", text)):
             kinds.append("android-build")
@@ -856,6 +974,16 @@ def part_kinds(words, went=""):
     if tool_name and re.match(rf"{re.escape(tool_name)}\s+(run\s+)?build\b", text):
         kinds.append("landing-build")
     return kinds
+
+
+def project_name(path):
+    """A test project's name from `windows.coreTests` or `windows.appTests`, which may name its folder or its .csproj."""
+    return re.sub(r"\.csproj$", "", path.rstrip("/").rsplit("/", 1)[-1]) if path else ""
+
+
+def part_of(pattern, text, kind):
+    """`kind`, or `UNJUDGED` and `kind` when `pattern` finds an option in `text` that runs only some of its tests."""
+    return UNJUDGED + kind if re.search(pattern, text) else kind
 
 
 def verify_ran():
@@ -879,7 +1007,8 @@ def verify_ran():
         # An app's check is noted as `bash -c <its run>`, the quotes around the script gone.
         named, ran = parts[1].split(), ran_kinds(re.sub(r"^bash -c ", "", parts[2]), passed=True)
         for kind in named + [kind for kind in ran if kind in own] if named else ran:
-            last[kind] = max(last.get(kind, 0), float(parts[0]) + 1)
+            if not kind.startswith(UNJUDGED):  # a run of some of the tests, which its note can't make the whole check
+                last[kind] = max(last.get(kind, 0), float(parts[0]) + 1)
     return last
 
 
@@ -1122,8 +1251,9 @@ def stop_problems(event):
         if asked:
             unjudged = last_ran.get(UNJUDGED + kind, 0) >= max(last_edit[p] for p in asked)
             stale.setdefault(asked, []).append(
-                label + (" [it ran, but where its failure doesn't fail the command (behind `|`, `;`, `||` or `&`, in "
-                         "`$(...)`): that run doesn't count]" if unjudged else ""))
+                label + (" [it ran, but that run doesn't count: in the background, only some of its tests (`--filter`, "
+                         "`--tests`, `-only-testing`), or where its failure doesn't fail the command (behind `|`, `;`, "
+                         "`||` or `&`, in `$(...)`)]" if unjudged else ""))
     if reminder := parity_reminder(event, last_edit, last_ran):
         problems.append(reminder)
     if stale:

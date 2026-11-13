@@ -488,10 +488,14 @@ that succeeded, so the check has to be what the command runs and what decides it
 the shell splits it (at `;`, `&&`, `||`, `|` and newlines, without heredoc bodies, quoted strings and comments) and
 looks for the check at the start of a part, after a `cd … &&`, variable assignments and a wrapper such as `time` or
 `env`; a subshell's parts and those of `bash -c '…'` count too. So a `grep`, an `echo`, a commit message or a heredoc
-that names a check records nothing, and neither does a check behind `|`, `;` with more after it, `||`, `&`, `if` or
-inside `$(…)`: `dotnet test | tail` succeeds whatever the tests did. `swift test && git status` counts, and so does a
-pipe after `set -o pipefail`. When a check ran that way after the last edit, the reminder says next to its name that
-it ran where a failure fails nothing. A `ran` pattern goes by the same rule: it matches from a part's first word, or from the
+that names a check records nothing, and neither does a check behind `|`, `;` with more after it, `||`, `&`, `if`, in a
+loop or `if` body or inside `$(…)`: `dotnet test | tail` succeeds whatever the tests did. `swift test && git status`
+counts, and so do `{ swift test; } 2>&1`, a pipe after `set -o pipefail`, and a failure that ends the shell whatever
+follows, in a loop too: `swift test || exit 1`, or any check after `set -e` (but in an `&&` list before its last
+command). A check that ran in the background (or was sent there when it ran too long), or ran only some of its tests
+(`--filter`, `--skip`, `--tests`, `-only-testing`, `-skip-testing`), doesn't count either; `dotnet test <project>` counts
+for that project's check only. When a check ran in one of these ways after the last edit, the reminder says so next to
+its name. A `ran` pattern goes by the same rule: it matches from a part's first word, or from the
 script an interpreter runs (`python3 scripts/shots.py`). A command that only names `verify.sh` (`--help`, a `grep` of
 it, a run that failed) counts for nothing. An entry of the app's own in
 `hooks.slow` therefore needs `ran`: `companion.py validate` says so. The reminder names each check with the edited
