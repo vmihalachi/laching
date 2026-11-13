@@ -358,8 +358,8 @@ change.
 The slow checks that share no build folder and no device run side by side, so a run takes about as long as its
 slowest group: the macOS tests, the iOS tests (each `xcodebuild` has its own DerivedData), `dotnet` on this machine,
 the build in the VM, the Windows images, Gradle with the app's own slow checks, and the landing build. The checks of
-one group run in sequence. The core package's tests and the vectors' regeneration run before the others and alone,
-because every other check reads the vectors. Each check's lines are held back and printed in the order a serial run
+one group run in sequence. A run that regenerates the vectors does that, and the core package's tests, before the
+others start, because every other check reads the vectors. Each check's lines are held back and printed in the order a serial run
 prints them, a failure with its own log, and the exit status is the same. `--serial` (or `LACHING_VERIFY_SERIAL=1`)
 runs them one after another, each printed as it ends, to debug a check that fails only beside another; that is also
 what Git Bash on Windows does unless `LACHING_VERIFY_SERIAL=0`.
@@ -367,7 +367,9 @@ what Git Bash on Windows does unless `LACHING_VERIFY_SERIAL=0`.
 Each slow check that ran and passed leaves a line in the repository's git folder (`laching-slow-checks.log`, one per
 worktree: when it started, the Stop hook's names for it, its command), which is how [the hook](#hookshookpy) knows
 what ran since an edit. The lines are written in the checks' order, whichever ended first. The Xcode tests leave one
-line, naming the schemes that ran, when every run the paths asked for passed. `--help`, `--fast`, a check that failed
+line, naming the schemes that ran, when every run the paths asked for passed; when only one of two schemes ran, its
+kind is scoped to that scheme's folder (`xcodebuild-test@<mac.dir>/macOS/`), so the hook still asks for the other
+scheme's and the shared files' tests. `--help`, `--fast`, a check that failed
 and one that was skipped (`--no-vm`, a busy VM, a missing toolchain) leave none.
 
 The app's own checks, which a copied `verify.sh` used to hold, are `verify.checks` in `companion.json`: each a `name`, the

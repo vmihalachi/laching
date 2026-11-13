@@ -815,7 +815,8 @@ class VerifyNotesWhatRan(HookTestCase):
 
     def test_the_xcode_tests_are_noted_when_each_run_the_paths_ask_for_passed(self):
         """The macOS and the iOS tests are one kind for the hook: noted once when each of the runs passed. A file of
-        one platform's folder asks for that platform's tests alone, and the note names the scheme that ran."""
+        one platform's folder asks for that platform's tests alone, noted for that folder's paths only
+        (`xcodebuild-test@<folder>/`), and the note names the scheme that ran."""
         config = self.root / "companion.json"
         data = json.loads(config.read_text("utf8"))
         data["mac"].update(iosScheme="FixtureiOS", format=["Fixture", "macOS", "iOS", "Shared"])
@@ -839,15 +840,19 @@ esac
             lines = [line for line in done.stdout.splitlines() if "xcodebuild test" in line]
             return lines, [line.split("\t")[1:] for line in self.log.read_text("utf8").splitlines()] if self.log.exists() else []
 
-        def tests(schemes):
-            return [["xcodebuild-test", f"cd macos && xcodebuild -project Fixture.xcodeproj -scheme {schemes} test"]]
+        def tests(schemes, kind="xcodebuild-test"):
+            return [[kind, f"cd macos && xcodebuild -project Fixture.xcodeproj -scheme {schemes} test"]]
 
         shared, mac, ios = "macos/Shared/Model.swift", "macos/macOS/MenuBar.swift", "macos/iOS/Today.swift"
         self.assertEqual(noted(shared), (["ok    xcodebuild test", "ok    xcodebuild test (iOS)"], tests("Fixture and FixtureiOS")))
         self.assertEqual(noted(shared, XCODE_FAILS="FixtureiOS"), (["ok    xcodebuild test", "FAIL  xcodebuild test (iOS)"], []))
         self.assertEqual(noted(shared, XCODE_FAILS="Fixture"), (["FAIL  xcodebuild test", "ok    xcodebuild test (iOS)"], []))
-        self.assertEqual(noted(mac, XCODE_FAILS="FixtureiOS"), (["ok    xcodebuild test"], tests("Fixture")), "no iOS run to fail")
-        self.assertEqual(noted(ios, XCODE_FAILS="Fixture"), (["ok    xcodebuild test (iOS)"], tests("FixtureiOS")))
+        self.assertEqual(noted(mac, XCODE_FAILS="FixtureiOS"),
+                         (["ok    xcodebuild test"], tests("Fixture", "xcodebuild-test@macos/macOS/")), "no iOS run to fail")
+        self.assertEqual(noted(ios, XCODE_FAILS="Fixture"),
+                         (["ok    xcodebuild test (iOS)"], tests("FixtureiOS", "xcodebuild-test@macos/iOS/")))
+        self.assertEqual(noted(mac, ios), (["ok    xcodebuild test", "ok    xcodebuild test (iOS)"],
+                                           tests("Fixture and FixtureiOS")), "both folders: the whole kind")
 
     def test_no_vm_leaves_the_winui_build_unrun(self):
         view = "windows/Fixture.App/Views/HomeView.xaml"

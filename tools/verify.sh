@@ -55,7 +55,7 @@
 # The slow checks that share no build folder or device run side by side: the macOS tests, the iOS tests, dotnet, the VM
 # build, the Windows images, Gradle with the app's own slow checks, the landing build; those of one group in sequence.
 # Each one's lines are held back and printed in the order above, so the output and the exit status are a serial run's.
-# The core package's tests and the vectors' regeneration run first and alone: every other check reads the vectors.
+# A run that regenerates the vectors does that (and the core package's tests) first, the others after: they read them.
 # A slow check that ran and passed is noted in the Git folder (laching-slow-checks.log: when it started, what it ran),
 # which is how the agent Stop hook knows what was run since an edit; a failed or skipped check leaves no note.
 set -uo pipefail
@@ -327,7 +327,7 @@ ran_record() { # <started> <kinds> <command>
 # slow <kinds> <group> <label> [locked <name>] <command...>: a check queued for run_queued (verify-lib.sh), which runs
 # the groups side by side and the checks of one group in sequence; slow_note notes it when it passed. No kind for a
 # check the hook has no name for (the app's own): the hook reads its command.
-slow_kinds=() slow_command=() xcode_checks=() xcode_command=""
+slow_kinds=() slow_command=() xcode_checks=() xcode_command="" xcode_kind=""
 slow() {
   local kinds="$1" i=${#queue_group[@]}; shift
   queue "$@"
@@ -336,7 +336,7 @@ slow() {
 }
 # slow_note <index>: run_queued calls it as each check is reported, in the order queued, so the notes are a serial
 # run's. A check is noted with its own start. The Xcode test runs (xcode_checks) are one kind for the hook: noted when
-# the last of them is reported and each passed, from the start of the first.
+# the last of them is reported and each passed, from the start of the first, as xcode_kind.
 slow_note() {
   local i="$1" j last started=""
   if [ -n "${slow_command[$i]-}" ]; then
@@ -351,7 +351,7 @@ slow_note() {
     case "${queue_started[$j]}" in '' | *[!0-9]*) return 0 ;; esac
     if [ -z "$started" ] || [ "${queue_started[$j]}" -lt "$started" ]; then started="${queue_started[$j]}"; fi
   done
-  ran_record "$started" xcodebuild-test "$xcode_command"
+  [ -z "$xcode_kind" ] || ran_record "$started" "$xcode_kind" "$xcode_command"
 }
 queue_after=slow_note
 
@@ -498,6 +498,16 @@ if [ "$fast" = 0 ]; then
         queue xcode-ios "xcodebuild test (iOS)" locked xcodebuild-ios ios_tests
       fi
       xcode_command="cd $MAC_DIR && xcodebuild -project $MAC_PROJECT -scheme $xcode_schemes test"
+      # One scheme of two covers only its own folder's paths: noted as <kind>@<folder>/ (the hook's reading), so a
+      # shared file or the other scheme's still asks for a run. A folder with a space in it isn't noted.
+      xcode_kind=xcodebuild-test
+      if [ -n "$MAC_IOS_SCHEME" ] && [ "$xcode_mac$xcode_ios" != 11 ]; then
+        xcode_prefix="$MAC_DIR/"
+        [ -n "$MAC_DIR" ] && [ "$MAC_DIR" != . ] || xcode_prefix=""
+        if [ "$xcode_mac" = 1 ]; then xcode_kind="xcodebuild-test@${xcode_prefix}macOS/"
+        else xcode_kind="xcodebuild-test@${xcode_prefix}iOS/"; fi
+        case "$xcode_kind" in *[[:space:]]*) xcode_kind="" ;; esac
+      fi
     else skip "xcodebuild test: needs macOS + Xcode"; fi
   fi
   if { touched "$RE_WINDOWS_CORE" || asked dotnet-test; } && [ -n "$WINDOWS_CORE_TESTS" ]; then
