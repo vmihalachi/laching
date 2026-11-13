@@ -52,6 +52,7 @@ or `$COMPANION_ROOT`); the schema is [`companion.schema.json`](companion.schema.
 | [`windows/check-winui.py`](#windowscheck-winuipy) | WinUI code that runs in Debug but breaks the Native AOT build or the XAML compiler. |
 | [`windows/assets.py`](#windowsassetspy) | The MSIX logos and `AppIcon.ico` from the app icon. |
 | [`windows/dotnet-sdk.ps1`](#windowsdotnet-sdkps1) | In CI, whether the runner image's .NET SDK will do, so a job skips `setup-dotnet`. |
+| [`windows/check-sdk.py`](#windowscheck-sdkpy) | On a self-hosted runner, whether its .NET SDK builds the app's Windows projects, asked before anything builds. |
 | [`windows/vm.sh`](#windowsvmsh) | On a Mac, the WinUI app built and checked in a Parallels Windows VM. |
 | [`windows-release.yml`, `windows-app.yml`](#windows-releaseyml-and-windows-appyml) | Reusable workflows: the Store release and the WinUI build check. |
 
@@ -537,7 +538,8 @@ An app's `windows-core.yml` keeps its dispatch, concurrency and runner policy an
 selects `ubuntu-latest`; `runner` supplies the self-hosted JSON labels; `laching-path` must match the profile;
 `submodules: "false"` checks out only Laching explicitly, while `"true"` also initializes recorded voices for app tests.
 The self-hosted machine supplies .NET 11 and Python; hosted runs install them, and the SDK the app's
-`windows/global.json` pins.
+`windows/global.json` pins. On the self-hosted machine [`windows/check-sdk.py`](#windowscheck-sdkpy) runs right after
+the pins, so an SDK that is too old stops the run with "update the runner's SDK to X" before `dotnet` first runs.
 
 `ci-windows-core.py` runs `pins`, `content`, `strings`, `format`, `lint`, `core` and `app`. Paths come from `windows.dir`,
 `windows.strings`, `windows.coreTests` and optional `windows.appTests`; test paths can name a project or its directory.
@@ -646,6 +648,7 @@ app builds, packages and checks the same way. Its `.csproj` sets its own propert
 
 - **`dotnet` runs in `windows.dir`** (every tool and workflow here does, and so should you), so the app's
   `windows/global.json` picks the SDK and a pin no installed SDK meets fails rather than falling back to the newest.
+  `check-sdk.py` says so in one line, with the version to install.
 - **Debug is unpackaged** (`cd windows && dotnet run --project MyApp.App -p:Platform=x64`): no Developer Mode, no
   registration, the screenshot runner as is. Without package identity `LocalSettingsStore.ForApp` keeps the settings
   in a JSON file and the app takes `MockStoreBackend` (`PackageIdentity.IsPackaged`). **Every other configuration is an
@@ -656,7 +659,9 @@ app builds, packages and checks the same way. Its `.csproj` sets its own propert
   notifications, their buttons and the startup task in the installed package (`smoke-package.ps1 -Keep`), never in a
   Debug run.
 - **Native AOT breaks what a Debug run hides**: a cast of an untyped XAML object throws or quietly fails, so the app
-  goes through `XamlCast.As<T>`; `check-winui.py` fails on the patterns, and `verify.sh` runs it on the changed files.
+  goes through `XamlCast.As<T>`, and a collection expression for a read-only list interface (`IReadOnlyList<int> sizes
+  = [20, 30];`) stops the publish (CsWinRT1032, one site a run); `check-winui.py` fails on the patterns, and `verify.sh`
+  runs it on the changed files.
   The Release screenshots and `smoke-package.ps1` on the built package are the proof before an upload.
 - **The model tests run on any OS.** The app's model, its words and the window list use no WinUI type; what has a
   WinUI half sits under `#if WINDOWS` (defined for `-windows` target frameworks only). A `net11.0` test project
@@ -726,6 +731,16 @@ with `-p:ScreenshotMode=true`); `-CheckOnly` only checks the package is native.
 
 WinUI code that runs in Debug but breaks the Native AOT build or the XAML compiler (each rule in its docstring).
 
+One rule is the pattern behind CsWinRT1032: a collection expression that isn't empty and whose type is
+`IEnumerable<T>`, `IReadOnlyCollection<T>` or `IReadOnlyList<T>` (`IList<T>` and `ICollection<T>` get a `List<T>` and
+are fine). The publish reports one site a run; the check lists every site it can tell at once, with "build an array or
+a List". It reads the sources, not the compiler's types, so it reports a site only where the type is written down: a
+field, property or local declared with it and set in the same file, what a method or property declared with it returns,
+and an argument when every declaration of that name with as many parameters has the type there (the app's projects, the
+projects they reference and Laching's packages). It misses what takes the compiler to tell (a member of another file,
+an object initializer, a parameter of the platform's own methods, differing overloads, `params`), so the Native AOT
+publish stays the proof.
+
 ### `windows/assets.py`
 
 The MSIX logos and `AppIcon.ico` (and the Debug build's) from the app icon; `--check`. **The images** come from the
@@ -742,6 +757,19 @@ before their `setup-dotnet`, which is gated on `steps.sdk.outputs.use != 'true'`
 app publishes Native AOT, so the runtime it ships is the SDK's, and an image a patch behind would ship last month's. The
 reusable Windows workflows hand `setup-dotnet` the app's `windows/global.json`, when it has one, so a hosted run also
 installs the SDK it pins.
+
+### `windows/check-sdk.py`
+
+Whether this machine's .NET SDK builds the app's Windows projects, for the runner that keeps its own SDK: a self-hosted
+one, where `setup-dotnet` never runs and too old an SDK was found minutes into a run, at the first build. It asks
+`dotnet --version` in `windows.dir`, where the host takes the SDK from the nearest `global.json` (its `rollForward`
+included), and compares the answer with the newest `netN.M` among the target frameworks of the `*.csproj` and `*.props`
+files there. Exit 1 says the fix in one line, an error annotation on GitHub Actions: "No installed .NET SDK meets
+windows/global.json (11.0.100, rollForward latestFeature); this machine has 10.0.203: update the runner's SDK to
+11.0.100.", or "The .NET SDK here is 10.0.203 and windows/MyApp.App/MyApp.App.csproj targets net11.0 (the build stops at
+NETSDK1045): update the runner's SDK to 11.0." The first job of `windows-core.yml`, `windows-app.yml` and
+`windows-release.yml` runs it when the run isn't `hosted`, before anything builds; it runs on a Mac or a PC as well
+(`python3 laching/tools/windows/check-sdk.py`).
 
 ### `windows/vm.sh`
 
@@ -800,5 +828,8 @@ jobs:
 ```
 
 `tests/fixture-app/.github/workflows` has both in full. An app whose package needs another submodule (recorded voices)
-passes `submodules: true`; the self-hosted runner's labels are `runner`. The skill is `release-windows`, the app's own
-facts (the Store ID's history, past certification reports) in `.agents/notes/release-windows.md`.
+passes `submodules: true`; the self-hosted runner's labels are `runner`. That runner keeps its own .NET SDK and Python
+(`python` on its `PATH`), and the first job of both asks [`check-sdk.py`](#windowscheck-sdkpy) before anything builds:
+an SDK older than the app's target framework, or one its `windows/global.json` refuses, fails there with "update the
+runner's SDK to X". The skill is `release-windows`, the app's own facts (the Store ID's history, past certification
+reports) in `.agents/notes/release-windows.md`.

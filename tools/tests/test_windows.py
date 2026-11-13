@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Tests for tools/windows/: check-winui.py's rules, assets.py's images from the fixture app's icon, smoke-package.ps1's
-package check and the PowerShell scripts parsing (where PowerShell is installed), companion.targets as MSBuild XML,
-dotnet-sdk.ps1's answer and the workflows that run it, and the app workflows running dotnet in windows.dir."""
+"""Tests for tools/windows/: check-winui.py's rules (the collection expressions of CsWinRT1032 on a sample that
+builds), assets.py's images from the fixture app's icon, smoke-package.ps1's package check and the PowerShell scripts
+parsing (where PowerShell is installed), companion.targets as MSBuild XML, dotnet-sdk.ps1's answer and the workflows
+that run it, check-sdk.py's answer on a self-hosted runner and the workflows asking it first, and the app workflows
+running dotnet in windows.dir."""
 
 from __future__ import annotations
 
@@ -23,10 +25,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "windows"))
 import assets  # noqa: E402
-from support import REPO, TOOLS, fixture_app, git, search_path  # noqa: E402
+from support import DOTNET_HOST, NO_SHEBANG, REPO, TOOLS, FixtureAppTestCase, fixture_app, git, search_path  # noqa: E402
 
 WINDOWS = TOOLS / "windows"
 CHECK_WINUI = WINDOWS / "check-winui.py"
+CHECK_SDK = WINDOWS / "check-sdk.py"
 POWERSHELL = shutil.which("pwsh") or shutil.which("powershell")
 PWSH = shutil.which("pwsh")
 """The shell of the workflows' `shell: pwsh` steps (ConvertFrom-Json -AsHashtable), which Windows PowerShell isn't."""
@@ -92,6 +95,124 @@ def icon_png(path: Path, size: int, margin: int, rgba=(200, 30, 40, 255)) -> Non
                      + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
+# Collection expressions as check-winui.py reads them: `// 1032` ends each line the Native AOT publish of a WinUI
+# project reports (CsWinRT1032), and every other line is one the rule must leave alone. The two files build as they
+# are (a net11.0 library with implicit usings, Proj referencing Lib).
+LIBRARY = """\
+namespace Lib;
+
+public sealed record Pack(string Name, IReadOnlyList<string> Moves);
+
+public static class Library
+{
+    public static void Show(int count, IReadOnlyList<string> names) { }
+    public static void Either(IReadOnlyList<string> names) { }
+    public static void Either(List<string> names) { }
+    public static bool Among(this string word, IEnumerable<string> words) => words.Contains(word);
+}
+"""
+SHAPES = """\
+using Lib;
+
+namespace Proj.Views;
+
+public sealed class Shapes
+{
+    private static readonly IReadOnlyList<int> Sizes = [20, 30]; // 1032
+    private static readonly IReadOnlyList<int> None = [];
+    private static readonly IList<int> Listed = [1, 2];
+    private static readonly ICollection<int> Gathered = [1, 2];
+    private static readonly List<int> Made = [1, 2];
+    private static readonly int[] Plain = [1, 2];
+    private readonly Dictionary<string, int[]> _byName = new() { ["a"] = [1] };
+    private IReadOnlyCollection<string> _names = new List<string>();
+    private IEnumerable<string>? _later;
+
+    public IReadOnlyList<string> Tags { get; } = ["a"]; // 1032
+    public IEnumerable<char> Letters => ['a']; // 1032
+    public IReadOnlyList<string> Same => [.. _names]; // 1032
+    public IList<string> Fine => ["a"];
+    public IReadOnlyCollection<string> Read
+    {
+        get { return ["a"]; } // 1032
+    }
+
+    public Shapes(bool dark, List<string> named, IReadOnlyList<string>? given)
+    {
+        _names = ["x", "y"]; // 1032
+        _later ??= ["z"]; // 1032
+        IReadOnlyList<string> themes = dark ? ["dark"] : ["light"]; // 1032
+        IReadOnlyList<string> kept = named.Count > 0 ? named : ["light", "dark"];
+        IReadOnlyList<string> other = given ?? ["a"];
+        Take(["a"]); // 1032
+        Take(names: ["a"], count: 2); // 1032
+        Library.Show(1, ["a"]); // 1032
+        Library.Either(["a"]);
+        _ = "a".Among(["a", "b"]); // 1032
+        Pack pack = new("Core", ["plank"]); // 1032
+        var made = new Pack("Core", ["plank"]); // 1032
+        Later(() => ["a"]); // 1032
+        var holder = new Holder { Tags = ["a"] };
+        int[] numbers = [1, 2];
+        _ = numbers[0] + Sizes[1] + None.Count + Listed.Count + Gathered.Count + Made.Count + Plain.Length + _byName.Count;
+        _names = ["quiet"]; // winui-check: ok, the debug window alone
+        _ = (themes, kept, other, pack, made, holder);
+    }
+
+    private static void Take(IReadOnlyList<string> names, int count = 1) { }
+    private static void Later(Func<IEnumerable<string>> make) { }
+
+    public IReadOnlyList<string> Pick(int kind)
+    {
+        if (kind == 0)
+        {
+            return ["zero"]; // 1032
+        }
+        try
+        {
+            return Load();
+        }
+        catch (InvalidOperationException)
+        {
+            return ["failed"]; // 1032
+        }
+    }
+
+    public IReadOnlyList<string> Kind(int kind) => kind switch
+    {
+        0 => ["zero"], // 1032
+        1 => throw new ArgumentException("one"),
+        _ => [],
+    };
+
+    public IReadOnlyList<string> Beside(int kind) => kind switch
+    {
+        0 => ["zero"],
+        _ => Load(),
+    };
+
+    public async Task<IReadOnlyList<string>> LoadAsync()
+    {
+        await Task.Yield();
+        return ["a"]; // 1032
+    }
+
+    public IEnumerable<int[]> Each()
+    {
+        yield return [1];
+    }
+
+    private List<string> Load() => ["a"];
+
+    private sealed class Holder
+    {
+        public List<string> Tags { get; set; } = [];
+    }
+}
+"""
+REFERENCE = '<Project>\n  <ItemGroup>\n    <ProjectReference Include="..\\Lib\\Lib.csproj" />\n  </ItemGroup>\n</Project>\n'
+
+
 class CheckWinUITests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -134,6 +255,44 @@ class CheckWinUITests(unittest.TestCase):
         done = self.lint(path)
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertIn("ok: 1 WinUI files", done.stdout)
+
+    def collection_expressions(self, project: str, *paths: str) -> tuple[list[int], str]:
+        """The lines of Shapes.cs that the rule reports, checking `paths` of a Proj with this project file."""
+        self.write("Lib/Lib.csproj", "<Project />\n")
+        self.write("Lib/Library.cs", LIBRARY)
+        self.write("Proj/Proj.csproj", project)
+        self.write("Proj/Views/Shapes.cs", SHAPES)
+        done = self.lint(*(self.root / path for path in paths))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        lines = [int(number) for number in re.findall(r"Shapes\.cs:(\d+): a collection expression for ", done.stdout)]
+        self.assertIn(f"\n{len(lines)} WinUI problem(s)", done.stdout)
+        return lines, done.stdout
+
+    def test_a_collection_expression_for_a_read_only_list_interface(self):
+        marked = [number for number, line in enumerate(SHAPES.splitlines(), 1) if line.endswith("// 1032")]
+        self.assertEqual(len(marked), 19)
+        for paths in (("Proj",), ("Proj/Views/Shapes.cs",)):  # the app's folder, and one changed file as verify.sh passes it
+            with self.subTest(paths=paths):
+                lines, said = self.collection_expressions(REFERENCE, *paths)
+                self.assertEqual(lines, marked)
+        for words in (
+            "Shapes.cs:7: a collection expression for IReadOnlyList<int> has no class of its own under Native AOT "
+            "(CsWinRT1032); build an array or a List\n    private static readonly IReadOnlyList<int> Sizes = [20, 30]; // 1032\n",
+            "Shapes.cs:18: a collection expression for IEnumerable<char> has",
+            "Shapes.cs:23: a collection expression for IReadOnlyCollection<string> has",
+            "Shapes.cs:83: a collection expression for Task<IReadOnlyList<string>> has",
+        ):
+            self.assertIn(words, said)
+
+    def test_an_argument_is_read_from_what_the_project_and_its_references_declare(self):
+        # Without the reference nothing says what Library.Show, Among and Pack take, so those calls aren't reported.
+        elsewhere = [number for number, line in enumerate(SHAPES.splitlines(), 1)
+                     if line.endswith("// 1032") and re.search(r"Library\.|\.Among\(|\bPack\b", line)]
+        self.assertEqual(len(elsewhere), 4)
+        with_it, _ = self.collection_expressions(REFERENCE, "Proj")
+        without, _ = self.collection_expressions("<Project />\n", "Proj")
+        self.assertEqual(sorted(set(with_it) - set(without)), elsewhere)
+        self.assertFalse(set(without) - set(with_it))
 
     def test_xaml_rules(self):
         for line, words in (
@@ -265,6 +424,99 @@ class DotnetSdkTests(unittest.TestCase):
         for workflow in sorted(workflows.glob("*.yml")):
             with self.subTest(copy=workflow.name):
                 self.assertNotIn("releases-index", workflow.read_text("utf8"))
+
+
+@unittest.skipIf(os.name == "nt", NO_SHEBANG)
+class CheckSdkTests(FixtureAppTestCase):
+    """check-sdk.py in the fixture app, whose one Windows project targets net11.0, on a machine whose dotnet is support's
+    DOTNET_HOST with one SDK installed."""
+
+    def setUp(self):
+        super().setUp()
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.bin = Path(temp.name)
+
+    def check(self, sdk: str | None, actions: str = "") -> subprocess.CompletedProcess:
+        """The check with this SDK as the machine's only one; None: no dotnet on PATH at all."""
+        if sdk:
+            (self.bin / "dotnet").write_text("#!/bin/sh\n" + DOTNET_HOST, "utf8")
+            (self.bin / "dotnet").chmod(0o755)
+        env = {**os.environ, "PATH": search_path(self.bin) if sdk else str(self.bin), "FAKE_SDK": sdk or "",
+               "GITHUB_ACTIONS": actions}
+        return subprocess.run([sys.executable, str(CHECK_SDK)], cwd=self.root, env=env, capture_output=True, encoding="utf8")
+
+    def test_an_sdk_as_new_as_the_target_framework_passes(self):
+        for sdk in ("11.0.100", "11.0.402", "12.0.100-preview.1.26070.3"):
+            with self.subTest(sdk=sdk):
+                done = self.check(sdk)
+                self.assertEqual((done.returncode, done.stdout, done.stderr), (0, f"ok: the .NET SDK {sdk} builds net11.0\n", ""))
+        (self.root / "windows/global.json").write_text(PIN.replace("11.0.999", "11.0.100"), "utf8")
+        done = self.check("11.0.100")
+        self.assertEqual((done.returncode, done.stdout),
+                         (0, "ok: the .NET SDK 11.0.100 builds net11.0 (windows/global.json picks it)\n"), done.stderr)
+
+    def test_an_older_sdk_fails_with_the_fix_in_the_message(self):
+        said = ("The .NET SDK here is 10.0.203 and windows/Fixture.Core/Fixture.Core.csproj targets net11.0 "
+                "(the build stops at NETSDK1045): update the runner's SDK to 11.0.")
+        done = self.check("10.0.203")
+        self.assertEqual((done.returncode, done.stdout, done.stderr), (1, "", f"error: {said}\n"))
+        done = self.check("10.0.203", actions="true")  # an annotation on the run's page
+        self.assertEqual((done.returncode, done.stdout, done.stderr), (1, f"::error::{said}\n", ""))
+
+    def test_a_pin_that_no_installed_sdk_meets_fails_with_the_pinned_version(self):
+        (self.root / "windows/global.json").write_text(PIN, "utf8")
+        done = self.check("11.0.100")
+        self.assertEqual((done.returncode, done.stdout), (1, ""))
+        self.assertEqual(done.stderr, "error: No installed .NET SDK meets windows/global.json (11.0.999, rollForward disable); "
+                                      "this machine has 11.0.100: update the runner's SDK to 11.0.999.\n")
+
+    def test_no_dotnet_at_all(self):
+        done = self.check(None)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertRegex(done.stderr, r"^error: dotnet doesn't start here \(.+\): update the runner's SDK to 11\.0\.\n$")
+
+    def test_the_newest_target_framework_of_the_projects_counts(self):
+        windows = self.root / "windows"
+        (windows / "Directory.Build.props").write_text(
+            "<Project>\n  <PropertyGroup>\n    <!-- <TargetFramework>net14.0</TargetFramework> -->\n"
+            "    <TargetFramework Condition=\"'$(TargetFramework)' == ''\">net11.0</TargetFramework>\n"
+            "  </PropertyGroup>\n</Project>\n", "utf8")
+        app = windows / "Fixture.App"
+        (app / "obj").mkdir(parents=True)
+        (app / "obj/Generated.props").write_text("<Project><PropertyGroup><TargetFramework>net13.0</TargetFramework></PropertyGroup></Project>\n", "utf8")
+        (app / "Fixture.App.csproj").write_text(
+            "<Project>\n  <PropertyGroup>\n"
+            "    <TargetFrameworks>netstandard2.0; net12.0-windows10.0.26100.0;net48</TargetFrameworks>\n"
+            "  </PropertyGroup>\n</Project>\n", "utf8")
+        done = self.check("11.0.402")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("The .NET SDK here is 11.0.402 and windows/Fixture.App/Fixture.App.csproj targets net12.0 ", done.stderr)
+        self.assertIn(": update the runner's SDK to 12.0.\n", done.stderr)
+        self.assertEqual(self.check("12.0.100").returncode, 0)
+
+    def test_the_first_job_asks_on_a_self_hosted_runner_before_anything_builds(self):
+        # The first job of each workflow, and in it before the first step that runs dotnet or a tool that builds.
+        for name, job, run, builds in (
+            ("windows-app.yml", "app", 'python "${{ inputs.laching-path }}/tools/windows/check-sdk.py"', "WinUI traps"),
+            ("windows-core.yml", "test", 'python3 "./$LACHING_PATH/tools/windows/check-sdk.py"', "Check strings and phrase keys"),
+            ("windows-release.yml", "version", 'python "${{ inputs.laching-path }}/tools/windows/check-sdk.py"',
+             "Read the package version (and refuse one released before)"),
+        ):
+            with self.subTest(workflow=name):
+                text = (REPO / ".github/workflows" / name).read_text("utf8")
+                self.assertEqual(re.search(r"^jobs:\n  ([\w-]+):$", text, re.M).group(1), job)
+                self.assertEqual(text.count("check-sdk.py"), 2, "its comment and the one step")
+                steps = workflow_steps(name, job)
+                check = step(steps, run=run)
+                self.assertEqual(check["if"], "${{ !inputs.hosted }}", "setup-dotnet installs the SDK on GitHub's runners")
+                self.assertEqual(steps.index(check) + 1, steps.index(step(steps, name=builds)))
+                later = [s.get("name", s.get("uses")) for s in steps[steps.index(check):]
+                         if s is not check and re.search(r"\bdotnet (?!--version)|store-release|ci-windows-core\.py\" (?!pins)", s.get("run", ""))]
+                earlier = [s.get("name", s.get("uses")) for s in steps[:steps.index(check)]
+                           if re.search(r"^dotnet |store-release|ci-windows-core\.py\" (?!pins)", s.get("run", ""), re.M)]
+                self.assertEqual(earlier, [], "nothing builds before the check")
+                self.assertTrue(later or job == "version", "what builds comes after it")
 
 
 class AppWorkflowTests(unittest.TestCase):

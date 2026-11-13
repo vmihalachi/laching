@@ -100,8 +100,7 @@ jobs:
           $script = Join-Path $env:GITHUB_WORKSPACE "$env:LACHING_PATH/tools/windows/dotnet-sdk.ps1"
           if (Test-Path $script) { pwsh $script } else { "No $script in this Laching: setup-dotnet runs." }
 
-      # The self-hosted runner keeps its own .NET 11 SDK and Python 3; a windows/global.json pin its SDK doesn't meet
-      # fails the steps that run dotnet.
+      # The self-hosted runner keeps its own .NET 11 SDK and Python 3: the SDK is checked below, before anything builds.
       - uses: actions/setup-dotnet@v6
         if: inputs.hosted && steps.sdk.outputs.use != 'true'
         with:
@@ -112,6 +111,13 @@ jobs:
         if: inputs.hosted
         with:
           python-version: "3.12"
+
+      # setup-dotnet runs on GitHub's runners only. On the self-hosted one an SDK older than a project's target
+      # framework (NETSDK1045 at the first build), or one the app's windows/global.json refuses, stops the run here
+      # with "update the runner's SDK to X" (tools/windows/check-sdk.py, asked in windows.dir).
+      - name: The runner's .NET SDK
+        if: ${{ !inputs.hosted }}
+        run: python "${{ inputs.laching-path }}/tools/windows/check-sdk.py"
 
       # What builds and runs in Debug but breaks under Native AOT or in the XAML compiler.
       - name: WinUI traps
