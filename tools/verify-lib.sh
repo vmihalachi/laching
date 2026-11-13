@@ -54,10 +54,15 @@ trap verify_cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# verify_skip_status: the exit status with which a check's command says it skipped itself (verify.sh sets 77 around the
+# app's own checks); empty, every status but 0 is a failure. Such a check is listed under `skip` with the last line it
+# printed, isn't a failure, and leaves verify_skipped=1 for the caller.
+verify_skip_status="" verify_skipped=0
 check() {
   local name="$1"; shift
   local log="$logdir/${name//[^A-Za-z0-9]/_}.log" started=$SECONDS since status=0 next="$verify_progress"
-  local ready="" lock folder launched=0
+  local ready="" lock folder launched=0 why
+  verify_skipped=0
   since="$(date +%H:%M)"
   : >"$log"
   if [ "${1:-}" = locked ]; then
@@ -112,6 +117,12 @@ check() {
   # A command may leave descendants after exiting; retain its lock through their teardown too.
   verify_stop
   verify_unlock
+  if [ -n "$verify_skip_status" ] && [ "$status" = "$verify_skip_status" ] && [ "$launched" = 1 ]; then
+    why="$(awk 'NF { sub(/^[ \t]+/, ""); line = $0 } END { print line }' "$log")"
+    skip "$name${why:+: $why}"
+    verify_skipped=1
+    return 0
+  fi
   if [ "$status" = 0 ]; then printf 'ok    %s' "$name"
   else printf 'FAIL  %s' "$name"; failed+=("$name"); fi
   if [ "${LACHING_VERIFY_TIMING:-0}" = 1 ]; then printf ' (%d s)' $((SECONDS - started)); fi

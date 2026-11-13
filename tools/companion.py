@@ -13,6 +13,8 @@
     python3 laching/tools/companion.py unlink               # back to the pinned release, byte for byte
     python3 laching/tools/companion.py conform              # the app uses Laching's tools, not copies (exit 1 on drift)
     python3 laching/tools/companion.py checks               # the app's own verify.sh checks (verify.checks), tab-separated
+    python3 laching/tools/companion.py slow [PATH…]         # the Stop hook's own slow checks hooks.slow asks for after a
+                                                            # change to these paths (or the ones on standard input)
     python3 laching/tools/companion.py apps [APP…]          # the apps next to this checkout: their pins and conform (exit 1 on drift)
 
 The root is the folder holding `companion.json`: `$COMPANION_ROOT` when set, else the nearest one walking up from the
@@ -382,6 +384,26 @@ def derived(config: Config) -> dict[str, str]:
         if values["SOUNDS_OUT"] and values["SOUNDS_RECIPES"] else never
     )
     return values
+
+
+def slow_asked(config: Config, paths: list[str]) -> list[str]:
+    """The Stop hook's own slow checks that the app's `hooks.slow` asks for after a change to one of `paths`.
+
+    verify.sh runs each for these as well as for its own paths, so the command the hook's reminder names is one that
+    clears it. It asks here rather than matching the paths itself: the hook reads an entry's `paths` as a Python
+    regular expression, and `grep -E` reads no lookahead. Nothing for a side the app lacks."""
+    values = derived(config)
+    asked = []
+    for entry in config.get("hooks.slow") or []:
+        kind, pattern = entry.get("name"), entry.get("paths")
+        if kind not in SLOW_CHECKS or not pattern or values[SLOW_CHECKS[kind]] == values["RE_NEVER"]:
+            continue
+        try:
+            if any(re.search(pattern, path) for path in paths):
+                asked.append(kind)
+        except re.error as error:
+            fail(f"hooks.slow ({kind}): `paths` isn't a regular expression Python reads: {error}")
+    return asked
 
 
 # What `git rev-parse --local-env-vars` lists, less the `-c` settings: the variables that tell git which repository to
@@ -1174,10 +1196,20 @@ def validate(data, schema: dict | None = None, where: str = "") -> list[str]:
     return problems
 
 
-# The Stop hook's own slow checks (hooks/hook.py), which know the commands that run them. A `hooks.slow` entry of
+# The Stop hook's own slow checks (hooks/hook.py), which know the commands that run them, each with the name of the
+# pattern (`derived`) whose paths it is for unless the app's `hooks.slow` gives it others. A `hooks.slow` entry of
 # another name is the app's, and only its `ran` says what runs it.
-SLOW_CHECKS = ("xcodebuild-test", "conformance", "swift-test", "dotnet-test", "dotnet-app-test", "landing-build",
-               "winui-build", "gradle-core-test", "android-build")
+SLOW_CHECKS = {
+    "xcodebuild-test": "RE_SWIFT",
+    "conformance": "RE_PURE",
+    "swift-test": "RE_COREPKG",
+    "dotnet-test": "RE_WINDOWS_CORE",
+    "dotnet-app-test": "RE_WINDOWS_APP_TESTS",
+    "landing-build": "RE_LANDING",
+    "winui-build": "RE_WINDOWS_BUILD",
+    "gradle-core-test": "RE_ANDROID_CORE",
+    "android-build": "RE_ANDROID_APP",
+}
 
 
 def consistency(data: dict) -> list[str]:
@@ -1255,6 +1287,8 @@ def main(argv: list[str]) -> int:
         for entry in config.get("verify.checks", []):
             print("	".join(["slow" if entry.get("slow") else "fast", "docs" if entry.get("docs") else "code",
                              entry["paths"], entry["name"], entry["run"]]))
+    elif command == "slow":
+        print(" ".join(slow_asked(config, rest or sys.stdin.read().splitlines())))
     elif (command, len(rest)) in (("bump", 1), ("link", 0), ("link", 1), ("unlink", 0)):
         try:
             if command == "bump":

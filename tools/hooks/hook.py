@@ -114,21 +114,22 @@ def setup(root=None):
         GUARDED.append((pattern, "guarded by companion.json (hooks.guardedExtra): don't edit it by hand.", False, True))
     I18N = re.compile(rf"^{ere(NAMES['LANDING_I18N'])}/[^/]+\.json$") if NAMES["LANDING_I18N"] else None
     landing = NAMES["LANDING_TOOL"] or "the landing tool"
-    SLOW = [
-        ("xcodebuild-test", NAMES["RE_SWIFT"], "macOS tests"),
-        ("conformance", NAMES["RE_PURE"], f"conformance vectors ({tools}/conformance.sh)"),
-        ("swift-test", NAMES["RE_COREPKG"], f"core package tests (swift test --package-path {NAMES['MAC_CORE']})"),
-        ("dotnet-test", NAMES["RE_WINDOWS_CORE"], "Windows Core tests"),
-        ("dotnet-app-test", NAMES["RE_WINDOWS_APP_TESTS"],  # from the Windows folder: its global.json picks the SDK
-         f"Windows app model tests (cd {NAMES['WINDOWS_DIR']} && dotnet test {NAMES['WINDOWS_APP_TESTS']})"),
-        ("landing-build", NAMES["RE_LANDING"], f"landing build ({landing} build)"),
-        ("winui-build", NAMES["RE_WINDOWS_BUILD"],
-         f"WinUI app build ({tools}/windows/vm.sh build in the Parallels VM, or dotnet build on Windows)"),
-        ("gradle-core-test", NAMES["RE_ANDROID_CORE"],
-         f"Kotlin core tests (cd {NAMES['ANDROID_DIR']} && ./gradlew :{NAMES['ANDROID_CORE']}:test)"),
-        ("android-build", NAMES["RE_ANDROID_APP"],
-         f"Android app build (cd {NAMES['ANDROID_DIR']} && ./gradlew :{NAMES['ANDROID_APP']}:assembleDebug)"),
-    ]
+    # How the reminder names each built-in check. Their paths are companion.SLOW_CHECKS's patterns, which verify.sh
+    # runs them for too (with the paths `hooks.slow` gives one, below and in `companion.slow_asked`).
+    labels = {
+        "xcodebuild-test": "macOS tests",
+        "conformance": f"conformance vectors ({tools}/conformance.sh)",
+        "swift-test": f"core package tests (swift test --package-path {NAMES['MAC_CORE']})",
+        "dotnet-test": "Windows Core tests",
+        "dotnet-app-test":  # from the Windows folder: its global.json picks the SDK
+            f"Windows app model tests (cd {NAMES['WINDOWS_DIR']} && dotnet test {NAMES['WINDOWS_APP_TESTS']})",
+        "landing-build": f"landing build ({landing} build)",
+        "winui-build": f"WinUI app build ({tools}/windows/vm.sh build in the Parallels VM, or dotnet build on Windows)",
+        "gradle-core-test": f"Kotlin core tests (cd {NAMES['ANDROID_DIR']} && ./gradlew :{NAMES['ANDROID_CORE']}:test)",
+        "android-build":
+            f"Android app build (cd {NAMES['ANDROID_DIR']} && ./gradlew :{NAMES['ANDROID_APP']}:assembleDebug)",
+    }
+    SLOW = [(kind, NAMES[default], labels[kind]) for kind, default in companion.SLOW_CHECKS.items()]
     RAN = []
     for check in CONFIG.get("hooks.slow", []):
         builtin = next((i for i, (kind, _, _) in enumerate(SLOW) if kind == check["name"]), None)

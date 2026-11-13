@@ -508,12 +508,13 @@ class StopAndParity(HookTestCase):
         self.assertIn("conformance vectors", self.run_hook("stop", session).stderr)
 
     def test_every_built_in_slow_check_is_one_companion_knows(self):
-        """`companion.py consistency` asks for `ran` on a hooks.slow entry that isn't one of these: the two lists agree."""
+        """`companion.py consistency` asks for `ran` on a hooks.slow entry that isn't one of these, and `derived` gives
+        verify.sh the paths an app sets for one that is: the hook's own checks are companion.py's, each with a label."""
         self.enable_android()
         self.assertLessEqual({kind for kind, _, _ in self.hook.SLOW}, set(companion.SLOW_CHECKS))
         source = HOOK.read_text("utf8")
         for kind in companion.SLOW_CHECKS:
-            self.assertIn(f'("{kind}", ', source, "a slow check of hook.py's setup")
+            self.assertIn(f'"{kind}":', source, "a slow check hook.py's setup has a label for")
 
     @unittest.skipIf(BASH is None, NO_SHELL)
     def test_stop_reports_what_the_fast_checks_reject(self):
@@ -771,6 +772,55 @@ class VerifyNotesWhatRan(HookTestCase):
         self.assertIn("skip  WinUI app: builds on Windows or in the Parallels VM (left alone: --no-vm)", done.stdout)
         self.assertEqual(self.noted(), ["dotnet-app-test"], "a skipped check isn't one that ran")
         self.assertEqual(self.named("windows"), ["WinUI app build"])
+
+    def test_an_app_check_that_exits_77_skipped_itself(self):
+        """A machine without the toolchain: the app's own check says why and exits 77, which is neither a failure nor
+        a run, where an early `exit 0` would count the APK as built."""
+        config = self.root / "companion.json"
+        data = json.loads(config.read_text("utf8"))
+        data["verify"]["checks"][0]["run"] = "echo looking; echo '  skipped: needs the Android SDK'; echo; exit 77"
+        data["verify"]["checks"].append({"name": "the manifest", "paths": "^android/app/",
+                                         "run": "echo 'skipped: needs aapt'; exit 77"})
+        config.write_text(json.dumps(data), "utf8")
+        self.edit("sdk", self.APP)
+        self.assertEqual(self.named("sdk"), ["Android app build"])
+        done = self.verify("--", self.APP)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("skip  the APK builds: skipped: needs the Android SDK\n", done.stdout)
+        self.assertIn("skip  the manifest: skipped: needs aapt\n", done.stdout, "a fast check skips itself the same way")
+        self.assertNotIn("ok    the", done.stdout)
+        self.assertNotIn("FAIL", done.stdout)
+        self.assertEqual(self.noted(), [], "a check that skipped itself isn't one that ran")
+        self.assertEqual(self.named("sdk"), ["Android app build"], "so the hook still asks for it")
+
+        # Only the app's own checks skip themselves this way, and any other status is still a failure.
+        data["verify"]["checks"][0]["run"] = "echo 'no SDK'; exit 78"
+        config.write_text(json.dumps(data), "utf8")
+        failed = self.verify("--", self.APP)
+        self.assertEqual(failed.returncode, 1, failed.stdout + failed.stderr)
+        self.assertIn("FAIL  the APK builds", failed.stdout)
+        self.assertEqual(self.noted(), [])
+
+    def test_verify_runs_a_built_in_check_for_the_paths_the_app_gives_it(self):
+        """`hooks.slow` gives a built-in check other paths: the hook reminds of it for them and names verify.sh as what
+        to run, so verify.sh runs the check for them too and the reminder clears."""
+        # A pattern as an app writes one: the hook reads it as a Python regular expression, lookahead and all.
+        paths = r"^(?!.*\.(?i:md|markdown|rst|adoc)$)(?:^android/core/|^android/gradle/)"
+        self.configure(slow=[{"name": "gradle-core-test", "paths": paths}])
+        catalog, guide = "android/gradle/libs.versions.toml", "android/gradle/README.md"
+        self.edit("guide", guide)
+        self.assertEqual(self.named("guide"), [], "the app's pattern leaves documentation out")
+        done = self.verify("--", guide)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("gradlew", done.stdout)
+        self.edit("catalog", catalog)
+        self.assertEqual(self.named("catalog"), ["Kotlin core tests"])
+        done = self.verify("--", catalog)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("grep", done.stdout + done.stderr)
+        self.assertIn("ok    gradlew :core:test", done.stdout)
+        self.assertEqual(self.noted(), ["gradle-core-test"])
+        self.assertEqual(self.named("catalog"), [])
 
 
 class Resume(HookTestCase):

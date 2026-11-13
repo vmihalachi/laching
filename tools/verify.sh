@@ -284,12 +284,13 @@ slow() {
   local kinds="$1" before=${#failed[@]} started; shift
   started="$(date +%s)"
   check "$@"
-  [ ${#failed[@]} -eq "$before" ] || return 0
+  [ ${#failed[@]} -eq "$before" ] && [ "$verify_skipped" = 0 ] || return 0
   shift; if [ "${1:-}" = locked ]; then shift 2; fi
   ran_record "$started" "$kinds" "$*"
 }
 
-# The app's own checks (verify.checks): speed, whether documentation counts, paths, name and command per line.
+# The app's own checks (verify.checks): speed, whether documentation counts, paths, name and command per line. One that
+# can't run here (a missing toolchain) exits 77: it's listed under `skip` with the last line it printed, and not noted.
 app_speed=() app_docs=() app_paths=() app_name=() app_run=()
 while IFS=$'	' read -r speed docs paths name run; do
   [ -n "$speed" ] || continue
@@ -301,8 +302,10 @@ app_checks() {
   for i in "${!app_speed[@]}"; do
     [ "${app_speed[$i]}" = "$1" ] || continue
     if { [ "${app_docs[$i]}" = docs ] && touched_any "${app_paths[$i]}"; } || touched "${app_paths[$i]}"; then
+      verify_skip_status=77
       if [ "$1" = slow ]; then slow "" "${app_name[$i]}" bash -c "${app_run[$i]}" </dev/null
       else check "${app_name[$i]}" bash -c "${app_run[$i]}" </dev/null; fi
+      verify_skip_status=""
     fi
   done
 }
@@ -392,16 +395,22 @@ app_checks fast
 
 # --- slow checks -------------------------------------------------------------------------------
 
+# asked <kind>: true when the app's hooks.slow gives that check of the Stop hook's own a changed path. The hook reminds
+# of the check for those paths and names this script as what to run, so each runs for them as well as for its own
+# paths. companion.py matches them, as the hook does: they're Python regular expressions (a lookahead isn't grep -E's).
+asked() { case " $slow_asked " in *" $1 "*) return 0 ;; esac; return 1; }
+
 if [ "$fast" = 0 ]; then
-  if [ -n "$MAC_CORE" ] && touched "$RE_COREPKG" "${CONFORMANCE_DIR:+^$CONFORMANCE_DIR/}" "$RE_PIN"; then
+  slow_asked="$(printf '%s\n' "$changed" | python3 "$TOOLS/companion.py" slow)" || exit 2
+  if [ -n "$MAC_CORE" ] && { touched "$RE_COREPKG" "${CONFORMANCE_DIR:+^$CONFORMANCE_DIR/}" "$RE_PIN" || asked swift-test; }; then
     if has swift; then slow swift-test "swift test ($MAC_CORE)" swift test --package-path "$MAC_CORE"
     else skip "swift test ($MAC_CORE): needs a Swift toolchain"; fi
   fi
-  if touched "$RE_PURE"; then
+  if touched "$RE_PURE" || asked conformance; then
     if [ "$darwin" = 1 ]; then slow conformance "conformance vectors current" conformance_current
     else skip "conformance.sh: needs macOS + Xcode"; fi
   fi
-  if touched "$RE_SWIFT" "${CONFORMANCE_DIR:+^$CONFORMANCE_DIR/}"; then
+  if touched "$RE_SWIFT" "${CONFORMANCE_DIR:+^$CONFORMANCE_DIR/}" || asked xcodebuild-test; then
     if [ "$darwin" = 1 ]; then
       # One kind for the hook: noted when the macOS tests and, with an iOS scheme, the iOS tests both passed.
       xcode_failed=${#failed[@]} xcode_started="$(date +%s)"
@@ -413,17 +422,17 @@ if [ "$fast" = 0 ]; then
       fi
     else skip "xcodebuild test: needs macOS + Xcode"; fi
   fi
-  if touched "$RE_WINDOWS_CORE" && [ -n "$WINDOWS_CORE_TESTS" ]; then
+  if { touched "$RE_WINDOWS_CORE" || asked dotnet-test; } && [ -n "$WINDOWS_CORE_TESTS" ]; then
     if has dotnet; then
       slow dotnet-test "dotnet test ($WINDOWS_CORE_TESTS)" windows_dotnet test "$WINDOWS_CORE_TESTS/$WINDOWS_CORE_TESTS.csproj" -v q --nologo
     else skip "dotnet test: needs the .NET SDK"; fi
   fi
-  if touched "$RE_WINDOWS_APP_TESTS" && [ -n "$WINDOWS_APP_TESTS" ]; then
+  if { touched "$RE_WINDOWS_APP_TESTS" || asked dotnet-app-test; } && [ -n "$WINDOWS_APP_TESTS" ]; then
     if has dotnet; then
       slow dotnet-app-test "dotnet test ($WINDOWS_APP_TESTS)" windows_dotnet test "$WINDOWS_APP_TESTS/$WINDOWS_APP_TESTS.csproj" -v q --nologo
     else skip "dotnet test ($WINDOWS_APP_TESTS): needs the .NET SDK"; fi
   fi
-  if touched "$RE_WINDOWS_BUILD"; then
+  if touched "$RE_WINDOWS_BUILD" || asked winui-build; then
     vm="left alone: $novm"
     if [ "$windows" = 1 ] && has dotnet; then
       # Debug, unpackaged, for this machine's architecture, named for a project without companion.targets.
@@ -438,13 +447,13 @@ if [ "$fast" = 0 ]; then
   if touched "$RE_WINDOWS_ASSETS"; then
     slow "" "Windows images match the icon (windows/assets.py)" python3 "$TOOLS/windows/assets.py" --check
   fi
-  if touched "$RE_ANDROID_CORE" && [ -n "$ANDROID_DIR" ]; then
+  if { touched "$RE_ANDROID_CORE" || asked gradle-core-test; } && [ -n "$ANDROID_DIR" ]; then
     # The pure Kotlin module replays the vectors; the app module needs the Android SDK, so it builds in kotlin.yml.
     if [ -x "$ANDROID_DIR/gradlew" ] && { has java || [ -n "${JAVA_HOME:-}" ]; }; then
       slow gradle-core-test "gradlew :$ANDROID_CORE:test" bash -c "cd \"$ANDROID_DIR\" && ./gradlew :$ANDROID_CORE:test -q --console=plain"
     else skip "gradlew :$ANDROID_CORE:test: needs $ANDROID_DIR/gradlew and a JDK 17 (setup-linux.sh)"; fi
   fi
-  if touched "$RE_LANDING" && [ -n "$LANDING_DIR" ] && [ -d "$ROOT/$LANDING_DIR" ] && [ -n "$landing_tool" ] &&
+  if { touched "$RE_LANDING" || asked landing-build; } && [ -n "$LANDING_DIR" ] && [ -d "$ROOT/$LANDING_DIR" ] && [ -n "$landing_tool" ] &&
     { has "$landing_tool" || [ -x "$landing_tool" ]; }; then
     slow landing-build "landing: $LANDING_TOOL build" bash -c "cd \"$LANDING_DIR\" && \"$landing_tool\" build"
   fi
