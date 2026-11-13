@@ -670,6 +670,34 @@ class StopAndParity(HookTestCase):
         self.run_hook("post", {**session, "tool_name": "Edit", "tool_input": {"file_path": str(self.root / conformance)}})
         self.assertIn("conformance vectors", self.run_hook("stop", session).stderr)
 
+    def test_a_check_verify_ran_over_a_part_counts_only_for_that_part(self):
+        """verify.sh notes a run of part of a check as `<kind>@<path prefix>` (the Mac scheme's tests alone): it stands
+        for the files under that prefix, never for one outside it, and isn't a check of its own."""
+        git(self.root, "init", "-q")
+        log = self.root / ".git" / self.hook.SLOW_LOG
+        session = {"session_id": "scoped"}
+        mac, ios, shared = (f"macos/Fixture/{folder}/A.swift" for folder in ("macOS", "iOS", "Shared"))
+        for path in (mac, ios, shared):
+            self.run_hook("post", {**session, "tool_name": "Edit", "tool_input": {"file_path": str(self.root / path)}})
+        now = int(time.time())
+
+        def reminder_after(line):
+            with log.open("a", encoding="utf8", newline="\n") as f:
+                f.write(line + "\n")
+            done = self.run_hook("stop", session)
+            return next((entry for entry in done.stderr.splitlines() if entry.startswith("- macOS tests")), "")
+
+        self.assertIn(mac, reminder_after(f"{now - 3600}\txcodebuild-test@macos/Fixture/macOS/\tan hour before"))
+        reminder = reminder_after(f"{now}\txcodebuild-test@macos/Fixture/macOS/\txcodebuild -scheme Fixture test")
+        self.assertNotIn(mac, reminder)
+        self.assertIn(ios, reminder)
+        self.assertIn(shared, reminder, "a file both schemes build asks for the whole check")
+        self.assertNotIn("xcodebuild-test@", self.run_hook("stop", session).stderr, "no reminder of its own")
+        reminder = reminder_after(f"{now}\txcodebuild-test@macos/Fixture/iOS/\txcodebuild -scheme FixtureiOS test")
+        self.assertEqual(reminder, f"- macOS tests, for {shared}")
+        self.assertIn("xcodebuild-test (macos/Fixture/iOS/ only)", self.run_hook("resume", session).stdout)
+        self.assertEqual(reminder_after(f"{now}\txcodebuild-test\txcodebuild -scheme Fixture test"), "")
+
     def test_every_built_in_slow_check_is_one_companion_knows(self):
         """`companion.py consistency` asks for `ran` on a hooks.slow entry that isn't one of these, and `derived` gives
         verify.sh the paths an app sets for one that is: the hook's own checks are companion.py's, each with a label."""

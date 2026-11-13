@@ -484,7 +484,9 @@ by hand checks those.
 The same stop names the slow checks (`hooks.slow`, and the built-in ones for the sides the app has) whose paths
 changed since they last ran. A slow check counts as run when
 `verify.sh` ran it and it passed, which `verify.sh` notes itself ([*`verify.sh`*](#verifysh)), or when a command of
-the agent's ran it (`swift test`, `./gradlew :core:test`, a `hooks.slow` entry's `ran`). The hook hears of a command
+the agent's ran it (`swift test`, `./gradlew :core:test`, a `hooks.slow` entry's `ran`). A run over part of a check,
+which `verify.sh` notes as `<kind>@<path prefix>` (the Mac scheme's tests alone), counts for the files under that
+prefix only: a file both schemes build still asks for the whole check. The hook hears of a command
 that succeeded, so the check has to be what the command runs and what decides its exit status. It reads the command as
 the shell splits it (at `;`, `&&`, `||`, `|` and newlines, without heredoc bodies, quoted strings and comments) and
 looks for the check at the start of a part, after a `cd … &&`, variable assignments and a wrapper such as `time` or

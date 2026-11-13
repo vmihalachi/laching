@@ -1272,10 +1272,10 @@ def stop_problems(event):
         last_ran[kind] = max(last_ran.get(kind, 0), stamp)
     stale = {}  # the edited files that ask for a check, to the checks they ask for
     for kind, pattern, label in SLOW:
-        ran = last_ran.get(kind, 0)
-        asked = tuple(sorted(p for p, t in last_edit.items() if t > ran and re.search(pattern, p)))
+        asked = tuple(sorted(p for p, t in last_edit.items()
+                             if t > ran_over(last_ran, kind, p) and re.search(pattern, p)))
         if asked:
-            unjudged = last_ran.get(UNJUDGED + kind, 0) >= max(last_edit[p] for p in asked)
+            unjudged = all(ran_over(last_ran, UNJUDGED + kind, p) >= last_edit[p] for p in asked)
             stale.setdefault(asked, []).append(
                 label + (" [it ran, but that run doesn't count: in the background, only some of its tests (`--filter`, "
                          "`--tests`, `-only-testing`), or where its failure doesn't fail the command (behind `|`, `;`, "
@@ -1291,6 +1291,15 @@ def stop_problems(event):
                         f"Run `{rel(script)} -- {files}` (it runs only what applies), "
                         "or tell the user why you're skipping it.")
     return problems
+
+
+def ran_over(last_ran, kind, path):
+    """When check `kind` last ran over `path`, from `last_ran` ({kind: stamp}): a run of all of it, or one of a part that
+    verify.sh noted as `<kind>@<path prefix>` (the Mac scheme's tests alone: `xcodebuild-test@macos/macOS/`) when the
+    path starts with that prefix. A part never stands for a path outside it: a shared file still asks for the whole."""
+    scoped = (stamp for key, stamp in last_ran.items()
+              if key.startswith(f"{kind}@") and path.startswith(key[len(kind) + 1:]))
+    return max(last_ran.get(kind, 0), *scoped, 0)
 
 
 def git_lines(*args):
@@ -1329,8 +1338,10 @@ def resume(event):
             break
         except ValueError:
             continue
-    if began is not None:
-        ran += [kind for kind, stamp in verify_ran().items() if stamp >= began and kind not in ran]
+    if began is not None:  # a check verify.sh ran over a part of it (`<kind>@<prefix>`) is named with that part
+        ran += [name for name in dict.fromkeys(
+            kind if "@" not in kind else "{} ({} only)".format(*kind.split("@", 1))
+            for kind, stamp in verify_ran().items() if stamp >= began) if name not in ran]
     status = git_lines("status", "--short")
     if not edited and not ran and not status:
         return
