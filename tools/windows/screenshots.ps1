@@ -45,6 +45,10 @@ Fails, after copying the shots, when the run reports problems (problems.txt, lef
 didn't open or couldn't be drawn, one captured before it drew (one flat colour, taken again), a shot that wasn't
 written, text that doesn't fit (LayoutCheck); or when the app didn't finish the run (it crashed or was closed partway,
 so some windows have no shot). check-layout.ps1 runs it per language.
+A pass that stopped early (the app left with an exit code, or rendered no shot) is launched once more, without another
+build, and only the second attempt counts: the run fails when that one stops early or reports problems too. What the
+first attempt left (why it stopped, the shots it got to, its problems) is kept as first-attempt.txt next to the shots,
+and the closing lines say that a second attempt was needed, on the run's summary page too on GitHub Actions.
 #>
 param(
     [string[]] $Only = @(),
@@ -248,9 +252,35 @@ function Invoke-Run([string] $into, [string[]] $languages) {
     @{ Work = $into; Languages = $languages; Run = $run }
 }
 
-# Every launch, into a folder of its own under $work: $kind is "run", or "contrast" for the contrast theme's.
+# Why a launch stopped early, or nothing when it reached its end: the app left with an exit code (it crashed or was
+# closed partway; a run that finishes exits 0, whatever problems it reports), or it left no shot at all.
+function Get-EarlyStop($launch) {
+    $drawn = @(Get-ChildItem -LiteralPath $launch.Work -Filter *.png -Recurse -ErrorAction SilentlyContinue | Sort-Object LastWriteTime)
+    $code = $launch.Run.ExitCode
+    if ($code -ne 0) {
+        $last = if ($drawn.Count -eq 0) { "" } elseif ($launch.Languages.Count -gt 1) { ", the last one $($drawn[-1].Directory.Name)\$($drawn[-1].Name)" } else { ", the last one $($drawn[-1].Name)" }
+        "The app stopped before the end of the run (exit code $code) after $($drawn.Count) shots$last"
+    }
+    elseif ($drawn.Count -eq 0) { "No screenshots were rendered (exit code 0)" }
+}
+
+# One pass: a launch and, when it stopped early, one more. An app that died partway through a pass has come through
+# the next launch with nothing changed, and that one pass failed the whole run. The second launch draws into a folder of
+# its own, so the pass's shots are all its own; the first one's folder stays for first-attempt.txt (below). A launch that
+# hangs until its time is up is not tried again.
+function Invoke-Pass([string] $into, [string[]] $languages) {
+    $launch = Invoke-Run $into $languages
+    $why = Get-EarlyStop $launch
+    if (-not $why) { return $launch }
+    Write-Host "$why$(if ($languages.Count) { " ($($languages -join ', '))" }): launching the app once more."
+    $again = Invoke-Run "$into-retry" $languages
+    $again.First = @{ Why = $why; Work = $into }
+    $again
+}
+
+# Every pass, into a folder of its own under $work: $kind is "run", or "contrast" for the contrast theme's.
 function Invoke-Passes([string] $kind) {
-    for ($index = 0; $index -lt $passes.Count; $index++) { Invoke-Run (Join-Path $work "$kind-$index") $passes[$index].Languages }
+    for ($index = 0; $index -lt $passes.Count; $index++) { Invoke-Pass (Join-Path $work "$kind-$index") $passes[$index].Languages }
 }
 
 # Windows' contrast theme, on and off as Settings does it (SPI_SETHIGHCONTRAST, the scheme last used), and the window
@@ -347,15 +377,19 @@ if ($Contrast) {
 }
 
 # Where each launch's shots go: <Out>\<language> for several languages, else <Out>; a launch of several wrote each
-# language's into its own folder.
+# language's into its own folder. First: what a pass's first attempt left there, when it took a second one.
 $targets = [ordered]@{}
 foreach ($run in $runs) {
     # $tongue, not $language: PowerShell names ignore case, and $Language is the [string[]] parameter.
     foreach ($tongue in $(if ($run.Languages.Count) { $run.Languages } else { @("") })) {
         $from = if ($run.Languages.Count -gt 1) { Join-Path $run.Work $tongue } else { $run.Work }
         $to = if ($Languages.Count -gt 1) { Join-Path $Out $tongue } else { $Out }
-        if (-not $targets.Contains($to)) { $targets[$to] = @{ Language = $tongue; From = @() } }
+        if (-not $targets.Contains($to)) { $targets[$to] = @{ Language = $tongue; From = @(); First = @() } }
         $targets[$to].From += $from
+        if ($run.First) {
+            $left = if ($run.Languages.Count -gt 1) { Join-Path $run.First.Work $tongue } else { $run.First.Work }
+            $targets[$to].First += @{ Why = $run.First.Why; From = $left }
+        }
     }
 }
 $failed = $false
@@ -368,8 +402,24 @@ foreach ($to in $targets.Keys) {
         })
     New-Item -ItemType Directory -Force $to | Out-Null
     Remove-Item (Join-Path $to "problems.txt") -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $to "first-attempt.txt") -ErrorAction SilentlyContinue
     foreach ($shot in $shots) { Copy-Item $shot.FullName $to -Force }
     "$($shots.Count) screenshots in $to"
+    # A pass that took its second attempt (Invoke-Pass) says so here and on the run's summary page on GitHub Actions,
+    # and what the first attempt left stays next to the shots: why it stopped, the shots it got to, its problems.
+    if ($target.First.Count -gt 0) {
+        $kept = Join-Path $to "first-attempt.txt"
+        @(foreach ($first in $target.First) {
+                "$($first.Why)."
+                $drawn = @(Get-ChildItem -LiteralPath $first.From -Filter *.png -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | ForEach-Object { $_.Name })
+                "Its shots, in the order drawn: $(if ($drawn.Count) { $drawn -join ', ' } else { 'none' })"
+                $theirs = Join-Path $first.From "problems.txt"
+                if (Test-Path $theirs) { "Its problems:"; Get-Content $theirs -Encoding UTF8 | ForEach-Object { "  $_" } }
+            }) | Set-Content $kept -Encoding UTF8
+        $note = "The screenshot run needed a second attempt$(if ($target.Language) { " ($($target.Language))" }). $(@($target.First | ForEach-Object { $_.Why }) -join '. ')."
+        "$note What the first attempt left: $kept"
+        if ($env:GITHUB_STEP_SUMMARY) { [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "$note`n`n") }
+    }
     $found = @(foreach ($from in $target.From) {
             $problems = Join-Path $from "problems.txt"
             if (Test-Path $problems) { Get-Content $problems -Encoding UTF8 }
@@ -389,6 +439,7 @@ if ($noContrast) {
     exit 1
 }
 if ($stopped = @($runs | Where-Object { $_.Run.ExitCode -ne 0 })) {
-    [Console]::Error.WriteLine("The app stopped before the end of the run (exit code $(($stopped | ForEach-Object { $_.Run.ExitCode }) -join ', ')), so some windows have no shot.")
+    $twice = if (@($stopped | Where-Object { $_.First }).Count) { ", in the second attempt too" } else { "" }
+    [Console]::Error.WriteLine("The app stopped before the end of the run$twice (exit code $(($stopped | ForEach-Object { $_.Run.ExitCode }) -join ', ')), so some windows have no shot.")
     exit 1
 }

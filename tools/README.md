@@ -693,7 +693,12 @@ app builds, packages and checks the same way. Its `.csproj` sets its own propert
 The WinUI app's windows in light and dark (`ScreenshotCapture`), in one language (`-Language`) or several in one launch
 of the app (`-Language it,de`, each into `<out>/<lang>`; an app on an older Laching launches once per language), from
 the Debug build or the Native AOT one (`-Configuration Release`); fails on the problems the run reports, or when the app
-stops before the end of it. `-Only` runs hidden (cloaked windows, shot as soon as they have drawn), so the PC stays
+stops before the end of it. A launch that stopped early (the app left with an exit code, or rendered no shot) is
+followed by one more, without another build, and only the second counts: the run fails when that one stops early or
+reports problems too. What the first left (why it stopped, the shots it got to in the order drawn, its problems) is
+`first-attempt.txt` next to the shots, until a run that needs no second attempt removes it, and the closing lines say
+that a second attempt was needed (on GitHub Actions the run's summary page too). A launch that hangs until its time is
+up isn't tried again. `-Only` runs hidden (cloaked windows, shot as soon as they have drawn), so the PC stays
 usable, with `-Front` for active windows, and copies only the shots it names. `-Skin id` wears that skin, as
 `screenshots.sh --skin` does, and `-Themes` names the themes to shoot, as `--themes` does; each window opens once for
 light and dark. `-Contrast` runs again in the machine's contrast theme and turns it off afterwards (one such run at a
@@ -826,6 +831,13 @@ jobs:
       hosted: ${{ inputs.hosted }}
       languages: en,de
 ```
+
+**What `languages` costs:** most of a `windows-app.yml` run is its screenshots. The default is `en` alone, one pass over
+every window, and each language a caller names is one more full pass (`contrast` adds a pass in the contrast theme): in
+one app's run three languages were 132 shots and about 14 of the run's 24 minutes, so about 44 shots and 5 minutes a
+language there. With `screenshot-run: release` a language whose pass stopped early costs one more launch of the app
+([`screenshots.ps1`](#windowsscreenshotsps1) tries it a second time, and the language fails only when that one fails
+too); the `package` run fails at the first.
 
 `tests/fixture-app/.github/workflows` has both in full. An app whose package needs another submodule (recorded voices)
 passes `submodules: true`; the self-hosted runner's labels are `runner`. That runner keeps its own .NET SDK and Python

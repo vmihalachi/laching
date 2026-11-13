@@ -2,8 +2,8 @@
 """Tests for tools/windows/: check-winui.py's rules (the collection expressions of CsWinRT1032 on a sample that
 builds), assets.py's images from the fixture app's icon, smoke-package.ps1's package check and the PowerShell scripts
 parsing (where PowerShell is installed), companion.targets as MSBuild XML, dotnet-sdk.ps1's answer and the workflows
-that run it, check-sdk.py's answer on a self-hosted runner and the workflows asking it first, and the app workflows
-running dotnet in windows.dir."""
+that run it, check-sdk.py's answer on a self-hosted runner and the workflows asking it first, the app workflows
+running dotnet in windows.dir, and screenshots.ps1's second attempt of a pass that stopped early, read as text."""
 
 from __future__ import annotations
 
@@ -581,6 +581,81 @@ class AppWorkflowTests(unittest.TestCase):
                     done = look()
                     self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
                     self.assertIn(f"::error::{said}", done.stdout)
+
+
+class ScreenshotRetryTests(unittest.TestCase):
+    """screenshots.ps1 launches a pass that stopped early once more. Read as text: the run itself needs Windows and
+    the app, so these hold the shape of it (one more launch, never a loop; what counts as stopping early; what is kept
+    and said), and test_the_scripts_parse reads the script where PowerShell is installed."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = (WINDOWS / "screenshots.ps1").read_text("utf8")
+        # The code alone: no comment line, and nothing of the help above param(.
+        cls.code = "\n".join(line for line in cls.text[cls.text.index("\nparam("):].splitlines()
+                             if not line.lstrip().startswith("#"))
+
+    def function(self, name: str) -> str:
+        """A function of the script, from its name to the closing brace in the first column."""
+        start = self.code.index(f"\nfunction {name}(")
+        return self.code[start:self.code.index("\n}", start)]
+
+    def test_a_pass_that_stopped_early_is_launched_once_more(self):
+        once = self.function("Invoke-Pass")
+        self.assertEqual(once.count("Invoke-Run "), 2, "a launch and one more")
+        first, second = (match.start() for match in re.finditer("Invoke-Run ", once))
+        fine = once.index("if (-not $why) { return $launch }")
+        self.assertTrue(first < once.index("$why = Get-EarlyStop $launch") < fine < second, "only after an early stop")
+        self.assertIn('$again = Invoke-Run "$into-retry" $languages', once,
+                      "into a folder of its own, the same languages")
+        self.assertNotRegex(once, r"\b(?:for|foreach|while|do|until|try|catch)\b", "never a loop; a hang isn't caught")
+        # Every launch of a run is a pass: nothing else starts the app.
+        self.assertEqual(len(re.findall(r"Invoke-Run\b", self.code)), 3, "its definition and Invoke-Pass's two")
+        self.assertEqual(len(re.findall(r"Invoke-Pass\b(?!es)", self.code)), 2, "its definition and Invoke-Passes's")
+        self.assertIn("Invoke-Pass (Join-Path $work", self.function("Invoke-Passes"))
+        self.assertEqual(re.findall(r'Invoke-Passes "(\w+)"', self.code), ["run", "contrast"])
+
+    def test_what_stopping_early_is(self):
+        early = self.function("Get-EarlyStop")
+        self.assertIn("$code = $launch.Run.ExitCode", early)
+        left, nothing = early.index("if ($code -ne 0) {"), early.index("elseif ($drawn.Count -eq 0) {")
+        self.assertLess(left, nothing)
+        self.assertIn('"The app stopped before the end of the run (exit code $code) after $($drawn.Count) shots$last"',
+                      early[left:nothing])
+        self.assertIn('"No screenshots were rendered (exit code 0)"', early[nothing:])
+        # A launch that hangs is killed and stops the run in Invoke-Run, which Invoke-Pass doesn't catch.
+        self.assertEqual(self.function("Invoke-Run").count(
+            '$run.Kill(); throw "The screenshot run didn\'t finish in $minutes minutes."'), 2)
+
+    def test_the_second_attempt_alone_counts_and_the_first_is_kept(self):
+        once = self.function("Invoke-Pass")
+        # The pass is its second launch (its folder, its exit code), carrying why the first stopped and where it drew.
+        self.assertTrue(once.endswith("\n    $again.First = @{ Why = $why; Work = $into }\n    $again"), once)
+        # What it prints begins with why the first stopped and with the note, never with "Problems" or an indent: a
+        # capture's log is read for its last line starting with "Problems" and the indented lines after it.
+        self.assertIn('\n    Write-Host "$why$(', once, "said when it happens, and not as the function's output")
+        rest = self.code[self.code.index('\n$runs = @(Invoke-Passes "run")'):]
+        self.assertIn('Remove-Item (Join-Path $to "first-attempt.txt") -ErrorAction SilentlyContinue', rest,
+                      "a run that needed none leaves no old one")
+        kept = rest.index('$kept = Join-Path $to "first-attempt.txt"')
+        self.assertLess(rest.index("if ($target.First.Count -gt 0) {"), kept)
+        self.assertIn("}) | Set-Content $kept -Encoding UTF8", rest[kept:])
+        note = next(line.strip() for line in rest.splitlines() if line.strip().startswith("$note = "))
+        self.assertTrue(note.startswith('$note = "The screenshot run needed a second attempt'), note)
+        self.assertIn('\n        "$note What the first attempt left: $kept"\n', rest)
+        summary = 'if ($env:GITHUB_STEP_SUMMARY) { [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "$note`n`n") }'
+        self.assertIn(summary, rest, "on the run's summary page")
+        # The run fails as before, on what the launches in $runs left: the second ones.
+        self.assertIn("if ($stopped = @($runs | Where-Object { $_.Run.ExitCode -ne 0 })) {", rest)
+        self.assertIn('", in the second attempt too"', rest)
+
+    def test_the_workflow_runs_each_language_once(self):
+        """The retry is the script's: the step still calls it once per language and fails on the languages that
+        failed."""
+        run = step(workflow_steps("windows-app.yml", "app"), name="Open every window")["run"]
+        self.assertEqual(run.count("screenshots.ps1"), 1)
+        self.assertIn("if ($LASTEXITCODE -ne 0) { $failed += $language }", run)
+        self.assertIn('if ($failed) { throw "The screenshot run failed in: $($failed -join \', \')" }', run)
 
 
 @unittest.skipUnless(POWERSHELL, "needs PowerShell")
