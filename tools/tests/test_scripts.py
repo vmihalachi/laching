@@ -48,6 +48,9 @@ class ScriptTests(FixtureAppTestCase):
         self.bin = self.root / "fake-bin"
         self.bin.mkdir()
         self.log = self.root / "calls.log"
+        # No test reaches a real Parallels VM: a run over a Windows path asks vm.sh, which would build there. A test
+        # that wants a VM fakes its own prlctl over this one.
+        self.fake("prlctl", 'echo "Failed to get VM config: The virtual machine could not be found."; exit 255\n')
 
     def fake(self, name: str, body: str) -> None:
         path = self.bin / name
