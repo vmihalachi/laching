@@ -168,8 +168,9 @@ def pythons(folder: str) -> list[str]:
         names = os.listdir(folder)
     except OSError:
         names = []
-    minors = {int(name[8:]) for name in names if name.startswith("python3.") and name[8:].isdigit()}
-    versioned = (f"python3.{minor}" for minor in sorted(minors, reverse=True))
+    # ASCII digits only: str.isdigit takes a ² too, which int() refuses.
+    versioned = sorted((name for name in names if name.startswith("python3.") and name[8:].isascii()
+                        and name[8:].isdigit()), key=lambda name: int(name[8:]), reverse=True)
     return [os.path.join(folder, name) for name in ("python3", *versioned)]
 
 
