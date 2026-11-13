@@ -407,7 +407,9 @@ name 55 and description 200; Google Play's push is `push-google.py`).
 ### `store/push.py`
 
 App Store Connect (text, in-app purchases, screenshots, previews, review notes, and a universal app's iOS page and
-iPhone and iPad screenshots; `--status` reads only).
+iPhone and iPad screenshots; `--status` reads only). `--build N` attaches a processed build; right after an upload,
+`--wait-build [minutes]` (30) waits for App Store Connect to process it, asking every 30 seconds, and stops at once on
+a build that ends `FAILED` or `INVALID`.
 
 ### `store/import.py`
 

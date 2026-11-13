@@ -92,10 +92,13 @@ only where the app's rules allow.
    - **Search results**: `store.apple.ios.searchResults`, `<store.dir>/apple/search-results.png` by default, 3:2 from
      1920×1280 to 3840×2560 (3840×2560 is best), or 5244×2950. It shows in App Store search results in place of the
      screenshots (the app's name and icon sit beside it); without it, search shows the screenshots.
-4. **Push** once the build has processed:
-   `python3 <store.dir>/apple/push.py --version <iOS version> --create --build <n> --only ios-text,ios-screenshots,ios-header,ios-search,review`
-   prints the plan (drop `ios-screenshots`, `ios-header` or `ios-search` when they didn't change; `ios-screenshots`
-   covers the Duo's too); read it, then rerun with `--apply`. Always pass `--only` with the iOS parts:
+4. **Push** right after the upload, without waiting for the email:
+   `python3 <store.dir>/apple/push.py --version <iOS version> --create --build <n> --wait-build --only ios-text,ios-screenshots,ios-header,ios-search,review`
+   waits until App Store Connect has processed the build (it asks every 30 seconds, for 30 minutes; `--wait-build=45`
+   for longer) and prints the plan (drop `ios-screenshots`, `ios-header` or `ios-search` when they didn't change;
+   `ios-screenshots` covers the Duo's too); read it, then rerun with `--apply`. A build that ends `FAILED` or
+   `INVALID` stops the wait at once: fix it and upload a new build number. When the time is up the rest is planned
+   without the build: run the same command again. Always pass `--only` with the iOS parts:
    without them the Mac's page is pushed too, under the iOS version number. It creates the iOS version with the
    release type of `store.apple.releaseType` (an existing editable version is set to it too), attaches the build, and
    syncs every language's text, the screenshots, the header (uploaded once to the app's Asset Library, placed on

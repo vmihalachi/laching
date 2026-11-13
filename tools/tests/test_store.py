@@ -476,6 +476,174 @@ class StoreTests(FixtureAppTestCase):
         self.assertIsNone(version["id"])
         self.assertEqual(api.calls, [])
 
+    # MARK: --wait-build
+
+    def add_build(self, api, state):
+        return api.add("builds", {"version": "4", "platform": "MAC_OS", "processingState": state}, self.listing.app_id)
+
+    def waiting(self, api, minutes, steps=()):
+        """A Sync that waits `minutes` for a build, on a clock only its sleep moves: each sleep runs the next of
+        `steps` (what App Store Connect does meanwhile). With it, the seconds slept and the lines logged."""
+        now, slept, lines, steps = [0.0], [], [], list(steps)
+
+        def sleep(seconds):
+            slept.append(seconds)
+            now[0] += seconds
+            if steps:
+                steps.pop(0)()
+
+        sync = push.Sync(self.listing, api, apply=True, log=lines.append, wait_build=minutes,
+                         clock=lambda: now[0], sleep=sleep)
+        return sync, slept, lines
+
+    def attached(self, api, version):
+        return ("PATCH", f"/v1/appStoreVersions/{version['id']}/relationships/build") in api.calls
+
+    def test_without_wait_build_an_unprocessed_build_is_reported_at_once(self):
+        api, version = self.setup_app()
+        sync = push.Sync(self.listing, api, apply=True, log=discard, sleep=self.fail)
+        sync.version("1.0.2", False, "4")
+        build = self.add_build(api, "PROCESSING")
+        sync.version("1.0.2", False, "4")
+        build["attributes"]["processingState"] = "INVALID"
+        sync.version("1.0.2", False, "4")
+        self.assertEqual(sync.problems, ["build 4 isn't in App Store Connect yet (still uploading?)",
+                                         "build 4 is PROCESSING, not VALID yet", "build 4 is INVALID, not VALID yet"])
+        self.assertFalse(self.attached(api, version))
+
+    def test_wait_build_asks_again_until_the_build_is_valid(self):
+        api, version = self.setup_app()
+        builds = []
+        sync, slept, lines = self.waiting(api, 5, [
+            lambda: None,  # still uploading
+            lambda: builds.append(self.add_build(api, "PROCESSING")),
+            lambda: None,
+            lambda: builds[0]["attributes"].update(processingState="VALID")])
+        sync.version("1.0.2", False, "4")
+        self.assertEqual(sync.problems, [])
+        self.assertEqual(slept, [30, 30, 30, 30])
+        self.assertTrue(self.attached(api, version), "then it goes on as with a processed build")
+        self.assertEqual([line for line in lines if "build 4" in line], [
+            "  build 4 isn't in App Store Connect yet (still uploading?): waiting up to 5 minutes",
+            "  build 4 is PROCESSING, not VALID yet",
+            "  build 4 is VALID",
+            "  attach build 4"])
+
+        # A build that is VALID at the first look is attached without a wait or a line about it.
+        sync, slept, lines = self.waiting(api, 5)
+        sync.version("1.0.2", False, "4")
+        self.assertEqual((sync.problems, slept), ([], []))
+        self.assertEqual([line for line in lines if "build 4" in line], ["  attach build 4"])
+
+    def test_wait_build_gives_up_when_the_time_is_up(self):
+        api, version = self.setup_app()
+        self.add_build(api, "PROCESSING")
+        sync, slept, _ = self.waiting(api, 1.25)
+        sync.version("1.0.2", False, "4")
+        self.assertEqual(sync.problems, ["build 4 is PROCESSING, not VALID yet (waited 1.25 minutes)"])
+        self.assertEqual(slept, [30, 30, 15], "the last sleep ends with the time")
+        self.assertFalse(self.attached(api, version))
+
+        # A build that never arrives is reported the same way, and a dry run waits too: it only reads.
+        api, version = self.setup_app()
+        sync, slept, _ = self.waiting(api, 1)
+        sync.apply = False
+        sync.version("1.0.2", False, "4")
+        self.assertEqual(sync.problems, ["build 4 isn't in App Store Connect yet (still uploading?) (waited 1 minutes)"])
+        self.assertEqual(slept, [30, 30])
+
+    def test_wait_build_stops_at_once_on_a_build_that_failed(self):
+        for state in ("FAILED", "INVALID"):
+            with self.subTest(state=state):
+                api, version = self.setup_app()
+                build = self.add_build(api, "PROCESSING")
+                sync, slept, _ = self.waiting(api, 30, [lambda: build["attributes"].update(processingState=state)])
+                sync.version("1.0.2", False, "4")
+                problem = f"build 4 is {state}: App Store Connect won't process it further, upload a new build number"
+                self.assertEqual(sync.problems, [problem])
+                self.assertEqual(slept, [30], "no wait for a state that won't change")
+                self.assertFalse(self.attached(api, version))
+
+                sync, slept, _ = self.waiting(api, 30)  # in that state from the first look
+                sync.version("1.0.2", False, "4")
+                self.assertEqual((sync.problems, slept), ([problem], []))
+
+    def test_a_look_that_fails_during_the_wait_is_tried_again(self):
+        api, version = self.setup_app()
+        build = self.add_build(api, "PROCESSING")
+        get_all, failures = api.get_all, []
+
+        def flaky(path):
+            if path.startswith("/v1/builds") and failures:
+                raise push.ApiError(failures.pop())
+            return get_all(path)
+
+        api.get_all = flaky
+        sync, slept, lines = self.waiting(api, 30, [lambda: failures.append("GET /v1/builds: timed out"),
+                                                    lambda: build["attributes"].update(processingState="VALID")])
+        sync.version("1.0.2", False, "4")
+        self.assertEqual(sync.problems, [])
+        self.assertIn("    ! GET /v1/builds: timed out", lines)
+        self.assertEqual(slept, [30, 30])
+        self.assertTrue(self.attached(api, version))
+
+        # When the time runs out on a failing look, the last answer is the problem.
+        build["attributes"]["processingState"] = "PROCESSING"
+        sync, slept, _ = self.waiting(api, 0.5, [lambda: failures.append("GET /v1/builds: timed out")])
+        sync.version("1.0.2", False, "4")
+        self.assertEqual(sync.problems, ["build 4 is PROCESSING, not VALID yet (waited 0.5 minutes)"])
+
+        # The first look fails as any other read does: a refused key isn't waited on.
+        failures.append("GET /v1/builds: 403 Forbidden")
+        sync, slept, _ = self.waiting(api, 30)
+        with self.assertRaises(push.ApiError):
+            sync.version("1.0.2", False, "4")
+        self.assertEqual(slept, [])
+
+    def test_the_command_line_waits_only_when_asked_and_for_a_named_build(self):
+        api, version = self.setup_app()
+        build = self.add_build(api, "PROCESSING")
+        made, real = [], push.Sync
+
+        def sync(*args, **kwargs):
+            made.append(kwargs)
+            return real(*args, **kwargs, clock=lambda: 0,
+                        sleep=lambda seconds: build["attributes"].update(processingState="VALID"))
+
+        def push_(*args):
+            argv = ["push.py", "--version", "1.0.2", "--only", "review", "--apply", *args]
+            with mock.patch.object(push, "load", return_value=self.listing), \
+                    mock.patch.object(check, "run", return_value=True), mock.patch.object(push, "Client", return_value=api), \
+                    mock.patch.object(push, "Sync", sync), mock.patch.object(sys, "argv", argv), \
+                    contextlib.redirect_stdout(io.StringIO()) as printed, contextlib.redirect_stderr(io.StringIO()) as errors:
+                try:
+                    push.main()
+                except SystemExit as stop:
+                    return stop.code, printed.getvalue() + errors.getvalue()
+            return 0, printed.getvalue()
+
+        code, output = push_("--build", "4")
+        self.assertEqual((code, made[-1]), (1, {"wait_build": None}))
+        self.assertIn("build 4 is PROCESSING, not VALID yet", output)
+        self.assertFalse(self.attached(api, version))
+
+        code, output = push_("--build", "4", "--wait-build")
+        self.assertEqual((code, made[-1]), (0, {"wait_build": 30}), output)
+        self.assertIn("build 4 is PROCESSING, not VALID yet: waiting up to 30 minutes", output)
+        self.assertTrue(self.attached(api, version))
+
+        # The minutes go after the languages or with an "=": argparse gives the flag the word that follows it.
+        for args, minutes in ((("--wait-build", "45", "en"), 45), (("en", "--wait-build"), 30), (("--wait-build=1.5", "en"), 1.5)):
+            self.assertEqual((push_("--build", "4", *args)[0], made[-1]), (0, {"wait_build": minutes}))
+        made.clear()
+        for args, problem in ((("--wait-build",), "--wait-build waits for the build --build names"),
+                              (("--build", "4", "--wait-build", "en"), "'en' isn't a number of minutes above 0"),
+                              (("--build", "4", "--wait-build=0"), "'0' isn't a number of minutes above 0")):
+            code, output = push_(*args)
+            self.assertEqual(code, 2)
+            self.assertIn(problem, output)
+        self.assertEqual(made, [], "refused before anything is read")
+
     def test_the_review_notes_come_from_their_block(self):
         self.assertEqual(push.review_notes(self.listing), "Fixture lives in the menu bar. Click it for a line.")
 
