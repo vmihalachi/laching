@@ -80,31 +80,34 @@ What each tool does: [`tools/README.md`](../tools/README.md).
    exit status, or `companion.py conform` fails; the templates for `sh`, Python and PowerShell, and `setup-linux.sh`'s:
    [*Staying on Laching's tools*](../tools/README.md#staying-on-lachings-tools).
 
-4. **The hook.** Claude Code, `.claude/settings.json`:
+4. **The hook.** Every agent calls it one way, through the app's wrapper, `.claude/hooks/hook.py`: the Python template
+   in [*Staying on Laching's tools*](../tools/README.md#staying-on-lachings-tools) with `"..", ".."` for the app's root
+   and `"laching", "tools", "hooks", "hook.py"` for the tool. Claude Code, `.claude/settings.json`:
 
    ```json
    {
      "hooks": {
        "PreToolUse": [{ "matcher": "Read|Edit|MultiEdit|Write|NotebookEdit|Grep|Bash", "hooks": [
-         { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/laching/tools/hooks/hook.py\" pre", "timeout": 10 }] }],
+         { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py\" pre", "timeout": 10 }] }],
        "PostToolUse": [{ "matcher": "Edit|MultiEdit|Write|NotebookEdit|Bash", "hooks": [
-         { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/laching/tools/hooks/hook.py\" post", "timeout": 60 }] }],
+         { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py\" post", "timeout": 60 }] }],
        "Stop": [{ "hooks": [
-         { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/laching/tools/hooks/hook.py\" stop", "timeout": 180 }] }],
+         { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py\" stop", "timeout": 180 }] }],
        "SessionStart": [{ "matcher": "startup", "hooks": [
          { "type": "command", "command": "[ \"$CLAUDE_CODE_REMOTE\" != true ] || \"$CLAUDE_PROJECT_DIR/scripts/setup-linux.sh\"", "timeout": 600 }] },
          { "matcher": "compact|resume", "hooks": [
-         { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/laching/tools/hooks/hook.py\" resume", "timeout": 10 }] }]
+         { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py\" resume", "timeout": 10 }] }]
      }
    }
    ```
 
    Codex, `.codex/config.toml` (`[features] hooks = true`): `PreToolUse`/`PostToolUse` with matcher
    `^(Bash|apply_patch)$` and `Stop`, each running
-   `python3 "$(git rev-parse --show-toplevel)/laching/tools/hooks/hook.py" <pre|post|stop>`. GitHub Copilot,
-   `.github/hooks/<app>.json`: `PreToolUse` and `PostToolUse` running `python3 laching/tools/hooks/hook.py pre|post`,
+   `python3 "$(git rev-parse --show-toplevel)/.claude/hooks/hook.py" <pre|post|stop>`. GitHub Copilot,
+   `.github/hooks/<app>.json`: `PreToolUse` and `PostToolUse` running `python3 .claude/hooks/hook.py pre|post`,
    and for Copilot's cloud coding agent `agentStop` running `hook.py cloud-stop` (the app's `verify.sh` on the branch,
-   inside GitHub Actions only). What the hook guards and refuses:
+   inside GitHub Actions only). `companion.py conform` fails on a hooks block that differs from this one, on a hook
+   that calls `laching/tools/hooks/hook.py` itself and on a missing wrapper. What the hook guards and refuses:
    [`tools/README.md`, *`hooks/hook.py`*](../tools/README.md#hookshookpy).
 
 5. **Skills.** Symlink the generic ones next to the app's own, then link every skill where Claude Code, Copilot and

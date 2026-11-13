@@ -15,7 +15,8 @@
     python3 laching/tools/companion.py checks               # the app's own verify.sh checks (verify.checks), tab-separated
     python3 laching/tools/companion.py slow [PATH…]         # the Stop hook's own slow checks hooks.slow asks for after a
                                                             # change to these paths (or the ones on standard input)
-    python3 laching/tools/companion.py apps [APP…]          # the apps next to this checkout: their pins and conform (exit 1 on drift)
+    python3 laching/tools/companion.py apps [APP…]          # the apps next to this checkout: their pins and conform (exit 1
+                                                            # on drift, and while an app is linked to a local checkout)
 
 The root is the folder holding `companion.json`: `$COMPANION_ROOT` when set, else the nearest one walking up from the
 current directory. Paths in the file are relative to it. Other tools import this module:
