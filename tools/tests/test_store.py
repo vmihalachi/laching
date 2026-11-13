@@ -70,6 +70,7 @@ class FakeApi:
         self.app_id = app_id
         self.objects = {}  # (kind, id) -> {"id", "type", "attributes", "parent"}
         self.calls = []
+        self.paths = []  # the writes' "METHOD /v1/kind", for the tests of the API version a kind is written through
         self.next_id = 1
 
     def add(self, kind, attributes, parent=None):
@@ -102,6 +103,10 @@ class FakeApi:
         parent_id = path.rsplit("/", 2)[1]
         if path.startswith("/v1/appAssetLibraries/") and kind == "images":
             kind = "appAssetLibraryImages"
+        if path.startswith("/v2/inAppPurchases/") and kind == "versions":
+            kind = "inAppPurchaseVersions"
+        if path.startswith("/v1/inAppPurchaseVersions/") and kind == "localizations":
+            kind = "inAppPurchaseLocalizations"
         return self.children(kind, parent_id)
 
     def request(self, method, path, body=None):
@@ -131,8 +136,9 @@ class FakeApi:
             return {"data": None}
         return None
 
-    def create(self, kind, attributes, relationships):
+    def create(self, kind, attributes, relationships, api="v1"):
         self.calls.append(("POST", kind, attributes.get("locale") or attributes.get("fileName")))
+        self.paths.append(f"POST /{api}/{kind}")
         parent = next(iter(relationships.values()))[1]
         if "locale" in attributes and any(o["attributes"].get("locale") == attributes["locale"]
                                           for o in self.children(kind, parent)):
@@ -148,10 +154,14 @@ class FakeApi:
         if kind in ("appScreenshots", "appPreviews", "appAssetLibraryImages",
                     "inAppPurchaseAppStoreReviewScreenshots"):
             obj["attributes"]["uploadOperations"] = []
+        if kind == "inAppPurchaseVersions":
+            earlier = [v["attributes"]["version"] for v in self.children(kind, parent) if v is not obj]
+            obj["attributes"].update(version=max(earlier, default=0) + 1, state="PREPARE_FOR_SUBMISSION")
         return obj
 
-    def update(self, kind, id, attributes):
+    def update(self, kind, id, attributes, api="v1"):
         self.calls.append(("PATCH", kind, tuple(sorted(attributes))))
+        self.paths.append(f"PATCH /{api}/{kind}")
         self.objects[(kind, id)]["attributes"].update(attributes)
 
     def delete(self, kind, id):
@@ -483,6 +493,87 @@ class StoreTests(FixtureAppTestCase):
         self.assertEqual(sync.problems, [])
         self.assertNotIn("PATCH", [c[0] for c in api.calls], "no review note set")
         self.assertFalse([c for c in api.calls if "appStoreReviewScreenshot" in str(c) or "ReviewDetail" in str(c)])
+
+    def iap(self, state=None, text=None, **languages):
+        """A fake App Store Connect with the fixture's in-app purchase, its newest version in `state` and that
+        version's text per locale; returns (api, product, version, the wanted English text)."""
+        (product_id, spec), = self.listing.iaps.items()
+        spec.pop("reviewNote", None), spec.pop("reviewShot", None)
+        api, _ = self.setup_app()
+        product = api.add("inAppPurchases", {"productId": product_id}, self.listing.app_id)
+        fields = self.listing.fields("en")
+        want = {"name": fields[spec["name"]], "description": fields[spec["description"]]}
+        version = None
+        if state:
+            api.add("inAppPurchaseVersions", {"version": 1, "state": "REPLACED_WITH_NEW_VERSION"}, product["id"])
+            version = api.add("inAppPurchaseVersions", {"version": 2, "state": state}, product["id"])
+            for locale, name in {"en-US": text or want["name"], **languages}.items():
+                api.add("inAppPurchaseLocalizations", {"locale": locale, "name": name,
+                                                       "description": want["description"]}, version["id"])
+        return api, product, version, want
+
+    def iap_texts(self, api, version):
+        return {x["attributes"]["locale"]: x["attributes"]["name"]
+                for x in api.children("inAppPurchaseLocalizations", version["id"])}
+
+    def test_an_in_app_purchases_text_goes_on_a_version_through_the_v2_endpoints(self):
+        api, product, _, want = self.iap()
+        sync = push.Sync(self.listing, api, apply=True, log=discard)
+        sync.iaps(["en"], extra=False)
+        self.assertEqual(sync.problems, [])
+        self.assertEqual(api.paths, ["POST /v1/inAppPurchaseVersions", "POST /v2/inAppPurchaseLocalizations"])
+        version, = api.children("inAppPurchaseVersions", product["id"])
+        self.assertEqual(version["relationships"], {"inAppPurchase": ("inAppPurchases", product["id"])})
+        localization, = api.children("inAppPurchaseLocalizations", version["id"])
+        self.assertEqual(localization["attributes"], {"locale": "en-US", **want})
+        self.assertEqual(localization["relationships"], {"version": ("inAppPurchaseVersions", version["id"])})
+
+    def test_an_in_app_purchases_draft_version_is_edited_in_place(self):
+        api, product, version, want = self.iap("PREPARE_FOR_SUBMISSION", text="Old name")
+        push.Sync(self.listing, api, apply=True, log=discard).iaps(["en"], extra=False)
+        self.assertEqual(api.paths, ["PATCH /v2/inAppPurchaseLocalizations"])
+        self.assertEqual(self.iap_texts(api, version), {"en-US": want["name"]})
+        self.assertEqual(len(api.children("inAppPurchaseVersions", product["id"])), 2)
+
+    def test_a_reviewed_in_app_purchase_gets_a_new_version_only_when_its_text_changed(self):
+        api, product, _, _ = self.iap("APPROVED")
+        push.Sync(self.listing, api, apply=True, log=discard).iaps(["en"], extra=False)
+        self.assertEqual(api.paths, [], "the same text starts no version")
+
+        api, product, version, want = self.iap("APPROVED", text="Old name", **{"it": "Sostenitore"})
+        push.Sync(self.listing, api, apply=True, log=discard).iaps(["en"], extra=False)
+        self.assertEqual(api.paths[0], "POST /v1/inAppPurchaseVersions")
+        newest = max(api.children("inAppPurchaseVersions", product["id"]), key=lambda v: v["attributes"]["version"])
+        self.assertEqual(newest["attributes"], {"version": 3, "state": "PREPARE_FOR_SUBMISSION"})
+        self.assertEqual(self.iap_texts(api, newest), {"en-US": want["name"], "it": "Sostenitore"},
+                         "a language the push leaves out is carried over to the new version")
+        self.assertEqual(self.iap_texts(api, version), {"en-US": "Old name", "it": "Sostenitore"})
+
+    def test_an_in_app_purchase_with_app_review_keeps_its_text(self):
+        for state in sorted(push.IAP_VERSION_WITH_REVIEW):
+            api, _, version, want = self.iap(state, text="Old name")
+            sync = push.Sync(self.listing, api, apply=True, log=discard)
+            sync.iaps(["en"], extra=False)
+            self.assertEqual(api.paths, [])
+            self.assertEqual(len(sync.problems), 1)
+            self.assertIn("with App Review", sync.problems[0])
+
+    def test_an_in_app_purchases_text_that_was_never_reviewed_is_named(self):
+        for state, named in (("DEVELOPER_REJECTED", True), ("PREPARE_FOR_SUBMISSION", True), ("REJECTED", True),
+                             ("APPROVED", False), ("IN_REVIEW", False)):
+            api, product, _, _ = self.iap(state)
+            lines = []
+            push.Sync(self.listing, api, apply=True, log=lines.append).iaps(["en"], extra=False)
+            self.assertEqual(api.paths, [], "the text is the same")
+            self.assertEqual(any(f"version 2 of its text is {state.lower()}" in x for x in lines), named, state)
+            self.assertEqual(push.iap_version(api, product)[1] is not None, named, state)
+
+    def test_a_dry_run_of_an_in_app_purchases_changed_text_writes_nothing(self):
+        api, _, _, _ = self.iap("APPROVED", text="Old name")
+        lines = []
+        push.Sync(self.listing, api, apply=False, log=lines.append).iaps(["en"], extra=False)
+        self.assertEqual(api.paths, [])
+        self.assertTrue(any("start a new version" in x for x in lines) and any("en-US: update name" in x for x in lines))
 
     def add_ios_version(self, api):
         return api.add("appStoreVersions", {"platform": "IOS", "versionString": "1.0.2",

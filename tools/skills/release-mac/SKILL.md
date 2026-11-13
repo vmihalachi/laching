@@ -93,7 +93,9 @@ where the app's rules allow.
    hand from the same files; never handle the key yourself.
 4. **Review notes** (`store.apple.review.notes`): update them when behavior changed (the `review` part pushes them);
    reply in the Resolution Center thread when App Review asked something. The in-app purchases go in the submission
-   when they're new or their text changed; a new one must be Ready to Submit.
+   when they're new or their text changed; a new one must be Ready to Submit. A changed text is a new version of the
+   purchase, live only once reviewed: `--status` names a purchase whose newest text has still to be submitted, and
+   the push leaves the text alone while one is with App Review.
 5. **Before submitting** (the owner), install the processed build from TestFlight and check it the way review will:
    it launches, onboarding opens on a fresh install, the main windows open, purchases show their prices (and anything
    the app's notes add). A build that fails here never goes to review: fix it and upload a new build number.
