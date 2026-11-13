@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -32,6 +33,16 @@ def load(path):
 
 def load_hook():
     return load(HOOK)
+
+
+def fake_verify(root, body):
+    """A stand-in for the app's scripts/verify.sh wrapper, which the hook takes over Laching's; on Windows it runs
+    through bash."""
+    wrapper = root / "scripts" / "verify.sh"
+    wrapper.parent.mkdir(exist_ok=True)
+    wrapper.write_text("#!/bin/sh\n" + body, "utf8", newline="\n")
+    wrapper.chmod(0o755)
+    return wrapper
 
 
 class HookTestCase(FixtureAppTestCase):
@@ -467,14 +478,44 @@ class StopAndParity(HookTestCase):
         self.assertEqual(self.run_hook("post", event).returncode, 0)
         done = self.run_hook("stop", {"session_id": "stop"})
         self.assertEqual(done.returncode, 2, done.stderr)
-        self.assertIn("Not run since your last edit: conformance vectors", done.stderr)
+        self.assertIn("Not run since your last edit:\n- conformance vectors (", done.stderr)
         # Laching's own (the fixture has no scripts/ wrapper), wherever this checkout of it is.
-        self.assertIn("tools/verify.sh -- macos/FixtureCore/", done.stderr)
+        self.assertIn(f"tools/verify.sh -- {conformance}` (it runs only what applies)", done.stderr)
         # A command that names verify.sh (a --help, a cat, a run that failed) isn't a slow check that ran.
         self.run_hook("post", {"session_id": "stop", "tool_name": "Bash", "tool_input": {"command": "scripts/verify.sh"}})
         again = self.run_hook("stop", {"session_id": "stop"})
         self.assertEqual(again.returncode, 2, again.stderr)
-        self.assertIn("Not run since your last edit: conformance vectors", again.stderr)
+        self.assertIn("Not run since your last edit:\n- conformance vectors (", again.stderr)
+
+    @unittest.skipIf(BASH is None, NO_SHELL)
+    def test_the_reminder_names_for_each_slow_check_only_the_files_that_ask_for_it(self):
+        """With every file of the session, the command would start the slow checks of all of them."""
+        fake_verify(self.root, "exit 0\n")
+        log = self.hook.state_file(self.event)
+        core, swift = "windows/Fixture.Core/A.cs", "macos/FixtureCore/Sources/FixtureCore/A.swift"
+
+        def reminder(*lines):
+            log.write_text("".join(f"{line}\n" for line in lines), "utf8")
+            return self.hook.stop_problems(self.event)[-1].splitlines()
+
+        said = reminder(f"100.0\tedit\t{core}", "101.0\tedit\tdocs/notes.md")
+        self.assertEqual(said[0], "Not run since your last edit:")
+        self.assertEqual(len(said), 3, "the checks one file asks for share a line")
+        self.assertRegex(said[1], rf"^- Windows Core tests, WinUI app build \(.+\), for {core}$")
+        self.assertEqual(said[2], f"Run `scripts/verify.sh -- {core}` (it runs only what applies), "
+                                  "or tell the user why you're skipping it.")
+        # Each check with the files it waits on, and one command for them all. A file the check ran after is none of
+        # them, and neither is one no check is for.
+        later = "windows/Fixture.Core/B.cs"
+        said = reminder(f"100.0\tedit\t{core}", "101.0\tedit\tdocs/notes.md", "102.0\tran\tdotnet-test",
+                        f"103.0\tedit\t{later}", f"104.0\tedit\t{swift}")
+        windows = {line.split(", ")[0]: line.split(", for ")[-1] for line in said[1:-1] if "Windows" in line}
+        self.assertEqual(windows, {"- Windows Core tests": later, "- WinUI app build (laching/tools/windows/vm.sh build "
+                                   "in the Parallels VM": f"{core} {later}"})
+        self.assertEqual([line.split(", for ")[-1] for line in said[1:-1] if "core package tests" in line], [swift])
+        self.assertEqual(said[-1], f"Run `scripts/verify.sh -- {swift} {core} {later}` (it runs only what applies), "
+                                   "or tell the user why you're skipping it.")
+        self.assertNotIn("notes.md", "\n".join(said))
 
     def test_a_slow_check_counts_once_verify_noted_that_it_passed(self):
         """verify.sh notes each slow check that passed in the Git folder (`SLOW_LOG`): when it started, the hook's kinds,
@@ -499,7 +540,7 @@ class StopAndParity(HookTestCase):
         done = stop_after(f"{now}\tconformance\tlaching/tools/conformance.sh --check")
         self.assertEqual(done.returncode, 2)
         self.assertNotIn("conformance vectors", done.stderr)
-        self.assertIn("Not run since your last edit: core package tests", done.stderr, "only the kinds it names")
+        self.assertIn("Not run since your last edit:\n- core package tests (", done.stderr, "only the kinds it names")
         # A check the hook has no name for (the app's own) is known by its command, as one the agent ran is.
         done = stop_after(f"{now}\t\tbash -c swift test --package-path macos/FixtureCore")
         self.assertEqual(done.returncode, 0, done.stderr)
@@ -520,17 +561,26 @@ class StopAndParity(HookTestCase):
 
     @unittest.skipIf(BASH is None, NO_SHELL)
     def test_stop_reports_what_the_fast_checks_reject(self):
-        # The app's scripts/verify.sh wrapper, which the hook takes over Laching's; on Windows it runs through bash.
-        wrapper = self.root / "scripts" / "verify.sh"
-        wrapper.parent.mkdir()
-        wrapper.write_text('#!/bin/sh\necho "lint: rejected $*"\nexit 1\n', "utf8", newline="\n")
-        wrapper.chmod(0o755)
+        fake_verify(self.root, 'echo "lint: rejected $*"\nexit 1\n')
         edited = "macos/FixtureCore/Sources/FixtureCore/A.swift"
         event = {"session_id": "rejected", "tool_name": "Edit", "tool_input": {"file_path": str(self.root / edited)}}
         self.assertEqual(self.run_hook("post", event).returncode, 0)
         done = self.run_hook("stop", {"session_id": "rejected"})
         self.assertEqual(done.returncode, 2, done.stderr)
         self.assertIn(f"Fast checks on the files you edited failed:\nlint: rejected --fast -- {edited}", done.stderr)
+
+    @unittest.skipIf(BASH is None, NO_SHELL)
+    def test_outside_a_repository_every_stop_runs_the_fast_checks(self):
+        """The hook can't see there what changed since a pass (`FastChecksMemo`), so it remembers none."""
+        if self.hook.tree_state(self.root) is not None:
+            self.skipTest("the temporary folder is inside a repository")
+        runs = Path(self.tmp) / "runs"
+        fake_verify(self.root, f"echo run >> {shlex.quote(runs.as_posix())}\n")
+        self.hook.record(self.event, "edit", "notes.md")
+        for _ in range(2):
+            self.assertEqual(self.hook.stop_problems(self.event), [])
+        self.assertEqual(len(runs.read_text("utf8").splitlines()), 2)
+        self.assertNotIn("\tpassed\t", self.hook.state_file(self.event).read_text("utf8"))
 
     def test_stop_says_so_when_windows_has_no_bash(self):
         self.hook.record(self.event, "edit", "macos/FixtureCore/Sources/FixtureCore/A.swift")
@@ -541,6 +591,224 @@ class StopAndParity(HookTestCase):
         self.assertEqual(stopped.exception.code, 2)
         self.assertIn("didn't run: Windows starts no shell script itself and there's no Git for Windows bash here",
                       stderr.getvalue())
+
+
+@unittest.skipIf(BASH is None, NO_SHELL)
+class FastChecksMemo(HookTestCase):
+    """`stop` over a state that already passed the fast checks runs them no second time: most stops come with no edit
+    after the last one. The app is a repository here, with a wrapper that counts its runs and fails while notes.md or
+    aside.txt holds `bad`; Laching is a second one, so work in this checkout during a test is no new state."""
+
+    def setUp(self):
+        super().setUp()
+        self.runs = Path(self.tmp) / "runs"
+        fake_verify(self.root, f"echo run >> {shlex.quote(self.runs.as_posix())}\n! grep -qs bad notes.md aside.txt\n")
+        (self.root / ".gitignore").write_text("ignored/\n", "utf8")
+        self.commit(self.root)
+        self.laching = Path(self.tmp) / "laching"
+        (self.laching / "tools").mkdir(parents=True)
+        (self.laching / "tools" / "verify.sh").write_text("#!/bin/sh\n", "utf8")
+        self.commit(self.laching)
+        self.hook = load_hook()
+        for patch in (mock.patch.dict(os.environ, {"TMPDIR": self.tmp}),
+                      mock.patch.object(self.hook, "TOOLS", self.laching / "tools")):
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.hook.setup(self.root)
+        self.event = {"session_id": "memo"}
+
+    @staticmethod
+    def commit(folder):
+        if not (folder / ".git").exists():
+            git(folder, "init", "-q")
+        git(folder, "add", "-A")
+        git(folder, "commit", "-qm", "a commit")
+
+    def edit(self, path, text, event=None):
+        """An edit of the session's: the file as `text`, and the line the post hook leaves for it."""
+        (self.root / path).parent.mkdir(parents=True, exist_ok=True)
+        (self.root / path).write_text(text, "utf8")
+        self.hook.record(event or self.event, "edit", path)
+
+    def count(self):
+        return len(self.runs.read_text("utf8").splitlines()) if self.runs.exists() else 0
+
+    def stop(self, event=None):
+        """A stop: how many times the fast checks ran for it, and whether it reports that they failed."""
+        before = self.count()
+        problems = self.hook.stop_problems(event or self.event)
+        return self.count() - before, any("Fast checks on the files you edited failed" in one for one in problems)
+
+    def test_a_second_stop_with_no_edit_in_between_runs_no_check(self):
+        self.edit("notes.md", "fine\n")
+        self.assertEqual(self.stop(), (1, False))
+        self.assertEqual(self.stop(), (0, False), "this state passed a moment ago")
+        self.assertEqual(self.stop(), (0, False))
+        self.edit("notes.md", "fine, and longer\n")
+        self.assertEqual(self.stop(), (1, False), "an edit is a new state")
+        self.assertEqual(self.stop(), (0, False))
+        self.edit("docs/more.md", "another file\n")
+        self.assertEqual(self.stop(), (1, False))
+        self.assertEqual(self.stop(), (0, False))
+
+    def test_the_hook_as_an_agent_runs_it_stops_twice_and_checks_once(self):
+        """The same through `hook.py stop`, with this checkout's tools as Laching's."""
+        before = self.hook.tree_state(TOOLS)
+        (self.root / "notes.md").write_text("fine\n", "utf8")
+        edit = {"session_id": "twice", "tool_name": "Edit", "tool_input": {"file_path": str(self.root / "notes.md")}}
+        self.assertEqual(self.run_hook("post", edit).returncode, 0)
+        for _ in range(2):
+            done = self.run_hook("stop", {"session_id": "twice"})
+            self.assertEqual((done.returncode, done.stderr), (0, ""))
+        if before is None or self.hook.tree_state(TOOLS) != before:
+            self.skipTest("this checkout is no repository, or changed during the test: a new state")
+        self.assertEqual(self.count(), 1)
+
+    def test_a_failure_is_never_remembered(self):
+        self.edit("notes.md", "bad\n")
+        self.assertEqual(self.stop(), (1, True))
+        self.assertEqual(self.stop(), (1, True), "a state that fails is checked at every stop")
+        self.assertNotIn("\tpassed\t", self.hook.state_file(self.event).read_text("utf8"))
+        self.edit("notes.md", "fine now\n")
+        self.assertEqual(self.stop(), (1, False))
+        self.assertEqual(self.stop(), (0, False))
+
+    def test_a_pass_never_hides_what_a_command_broke_since(self):
+        """No line of the session's log says what its commands did to the tree, and the checks read far more than the
+        edited files."""
+        self.edit("notes.md", "fine\n")
+        self.assertEqual(self.stop(), (1, False))
+        (self.root / "aside.txt").write_text("bad\n", "utf8")
+        self.assertEqual(self.stop(), (1, True))
+        self.assertEqual(self.stop(), (1, True))
+
+    def test_whatever_git_sees_change_is_a_new_state(self):
+        self.edit("notes.md", "fine\n")
+        self.assertEqual(self.stop(), (1, False))
+        listing, aside = self.root / "store-listing" / "en.md", self.root / "aside.txt"
+        for change, what in (
+            (lambda: listing.write_text("rewritten\n", "utf8"), "a tracked file a command rewrote"),
+            (lambda: listing.write_text("rewritten once more\n", "utf8"), "the same file again, changed already"),
+            (lambda: git(self.root, "add", "-A"), "staged"),
+            (lambda: self.commit(self.root), "committed"),
+            (lambda: aside.write_text("new\n", "utf8"), "a new file"),
+            (lambda: aside.write_text("new, and rewritten\n", "utf8"), "the new file again"),
+            (aside.unlink, "the new file gone"),
+            (lambda: git(self.root, "checkout", "-q", "HEAD~1"), "another commit checked out"),
+        ):
+            change()
+            self.assertEqual(self.stop(), (1, False), what)
+            self.assertEqual(self.stop(), (0, False), what)
+
+    def test_a_file_git_ignores_counts_once_the_session_edited_it(self):
+        ignored = self.root / "ignored" / "notes.md"
+        self.edit("ignored/notes.md", "fine\n")
+        self.assertNotIn(b"notes.md", self.hook.tree_state(self.root), "Git doesn't see it")
+        self.assertEqual(self.stop(), (1, False))
+        self.assertEqual(self.stop(), (0, False))
+        ignored.write_text("rewritten by a command\n", "utf8")
+        self.assertEqual(self.stop(), (1, False))
+        self.assertEqual(self.stop(), (0, False))
+        ignored.unlink()
+        self.assertEqual(self.stop(), (1, False), "a deleted file is a new state")
+        self.assertEqual(self.stop(), (0, False))
+
+    def test_laching_s_tools_are_part_of_the_state(self):
+        self.edit("notes.md", "fine\n")
+        self.assertEqual(self.stop(), (1, False))
+        (self.laching / "tools" / "verify.sh").write_text("#!/bin/sh\n# changed\n", "utf8")
+        self.assertEqual(self.stop(), (1, False), "the checks themselves changed")
+        self.assertEqual(self.stop(), (0, False))
+        self.commit(self.laching)
+        self.assertEqual(self.stop(), (1, False), "another commit of Laching")
+        self.assertEqual(self.stop(), (0, False))
+
+    def test_a_git_too_slow_for_the_stop_leaves_nothing_remembered(self):
+        """The stop has a few seconds beside the checks' own timeout, and the key gets no more of them."""
+        asked, git_itself = [], self.hook.companion.git
+
+        def slow(folder, *args, timeout=None, **more):
+            if timeout is None:
+                return git_itself(folder, *args, **more)
+            if "--show-toplevel" in args:
+                asked.append(timeout)
+            raise subprocess.TimeoutExpired("git", timeout)
+
+        self.edit("notes.md", "fine\n")
+        with mock.patch.object(self.hook.companion, "git", slow):
+            self.assertEqual(self.stop(), (1, False))
+            self.assertEqual(self.stop(), (1, False))
+        self.assertEqual(len(asked), 2)
+        self.assertTrue(all(0 < timeout <= 8 for timeout in asked), asked)
+        self.assertEqual(self.stop(), (1, False), "nothing was remembered meanwhile")
+        self.assertEqual(self.stop(), (0, False))
+
+    def test_a_run_that_changes_the_tree_is_followed_by_one_more(self):
+        """The key is read before the run, so a pass stands for the state the checks started from: one that rewrote a
+        file (a regenerated project, say) left another state, which the next stop checks."""
+        fake_verify(self.root, f"echo run >> {shlex.quote(self.runs.as_posix())}\n"
+                               "[ -f regenerated.txt ] || echo regenerated > regenerated.txt\n")
+        self.edit("notes.md", "fine\n")
+        self.assertEqual(self.stop(), (1, False))
+        self.assertEqual(self.stop(), (1, False))
+        self.assertEqual(self.stop(), (0, False))
+
+    def test_the_memo_is_each_session_s_own(self):
+        other = {"session_id": "other"}
+        self.edit("notes.md", "fine\n")
+        self.assertEqual(self.stop(), (1, False))
+        self.hook.record(other, "edit", "notes.md")
+        self.assertEqual(self.stop(other), (1, False), "another session checks its own edits")
+        self.assertEqual(self.stop(other), (0, False))
+        self.assertEqual(self.stop(), (0, False))
+        log = self.hook.state_file(self.event)  # next to the session's edits and runs, which read it as neither
+        self.assertEqual([line.split("\t")[1] for line in log.read_text("utf8").splitlines()], ["edit", "passed"])
+        self.assertNotIn("passed", self.run_hook("resume", self.event).stdout)
+
+    def test_the_key_holds_the_edited_files_the_script_companion_json_and_the_link(self):
+        """Each on its own, whatever Git sees of it: the script and companion.json may be ignored there."""
+        notes, script, seen = self.root / "notes.md", self.hook.verify_script(), []
+        notes.write_text("fine\n", "utf8")
+        link = self.root / "windows" / "Directory.Build.targets"  # as `companion.py link` marks it
+        with mock.patch.object(self.hook, "tree_state", return_value=b""):
+            seen.append(self.hook.fast_state(script, ["notes.md"]))
+            self.assertEqual(self.hook.fast_state(script, ["notes.md"]), seen[0], "the same state, the same key")
+            for change in (
+                lambda: notes.write_text("fine, rewritten\n", "utf8"),
+                notes.unlink,
+                lambda: script.write_text(script.read_text("utf8") + "# changed\n", "utf8", newline="\n"),
+                lambda: self.configure(bigFileLines=700),
+                lambda: link.write_text(f"<Project>\n  <!-- {companion.LINK_MARKER}: a trial -->\n</Project>\n", "utf8"),
+            ):
+                change()
+                self.assertNotIn(self.hook.fast_state(script, ["notes.md"]), seen)
+                seen.append(self.hook.fast_state(script, ["notes.md"]))
+            self.assertNotIn(self.hook.fast_state(script, ["more.md", "notes.md"]), seen, "another file of the session's")
+        with mock.patch.object(self.hook, "tree_state", return_value=None):
+            self.assertIsNone(self.hook.fast_state(script, ["notes.md"]), "nothing to remember a pass under")
+
+    def test_the_tree_state_reads_renames_and_into_submodules(self):
+        clean = self.hook.tree_state(self.root)
+        self.assertRegex(clean, rb"^# branch\.oid [0-9a-f]{40,64}$")
+        self.assertEqual(self.hook.tree_state(self.root / "store-listing"), clean, "from any folder of the repository")
+        git(self.root, "mv", "store-listing/en.md", "store-listing/english.md")
+        renamed = self.hook.tree_state(self.root).split(b"\0")
+        self.assertEqual(len(renamed), 4, "the commit, the entry, the file's stamp, the path it had")
+        self.assertTrue(renamed[1].endswith(b" store-listing/english.md"), renamed[1])
+        self.assertEqual(renamed[3], b"store-listing/en.md")
+        self.assertNotEqual(renamed[2], b"gone")
+        vendored = Path(self.tmp) / "vendored"
+        vendored.mkdir()
+        (vendored / "a.txt").write_text("a\n", "utf8")
+        self.commit(vendored)
+        git(self.root, "submodule", "add", "-q", vendored.as_uri(), "vendored")
+        self.commit(self.root)
+        clean = self.hook.tree_state(self.root)
+        (self.root / "vendored" / "a.txt").write_text("changed\n", "utf8")
+        changed = self.hook.tree_state(self.root)
+        self.assertNotEqual(changed, clean)
+        (self.root / "vendored" / "a.txt").write_text("changed once more\n", "utf8")
+        self.assertNotEqual(self.hook.tree_state(self.root), changed, "Git says the submodule has changes; which is read in it")
 
 
 class WhatACommandRan(HookTestCase):

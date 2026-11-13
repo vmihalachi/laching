@@ -462,8 +462,21 @@ On `Stop` it tells the user, once per compaction cycle, when Claude's context is
 (`hook.py resume`) it prints where the session was, as the agent's context: the files it edited, the slow checks it
 ran, the branch, git status and the recent commits (nothing when the tree is clean and the session has no log).
 
-On `Stop` it also runs `verify.sh --fast` on the session's edits and names the slow checks (`hooks.slow`, and the
-built-in ones for the sides the app has) whose paths changed since they last ran. A slow check counts as run when
+On `Stop` it also runs `verify.sh --fast` on the session's edits, unless that state already passed them: most stops
+come with no edit after the last one. A pass is remembered in the session's own log (beside its edits and runs, under
+`$TMPDIR`) with a hash of what the hook can see the checks depend on: the edited files (path, size, modification and
+change time; a deleted one as gone), the app's `verify.sh` wrapper, `companion.json`, whether the app is linked, and
+the working trees of the app and of Laching as Git sees them (the commit checked out, and every staged, changed,
+untracked or conflicted path with its size and times, read into a submodule that has changes). The next stop with the
+same hash runs nothing; after an edit, a commit, a checkout, a pin bump or a file a command rewrote the checks run
+once more, also when another session changed the checkout. A failure or a timeout is never remembered, and neither is
+anything in an app outside a Git repository, where every stop runs the checks. The hash is read before the run, so a
+run that rewrote a file is followed by one more. What it can't hold: a file Git ignores that the session didn't edit,
+a tool installed or removed on the machine, and what a check fetches (the voices' pushed pointer); `verify.sh --fast`
+by hand checks those.
+
+The same stop names the slow checks (`hooks.slow`, and the built-in ones for the sides the app has) whose paths
+changed since they last ran. A slow check counts as run when
 `verify.sh` ran it and it passed, which `verify.sh` notes itself ([*`verify.sh`*](#verifysh)), or when a command of
 the agent's ran it (`swift test`, `./gradlew :core:test`, a `hooks.slow` entry's `ran`). The hook hears of a command
 that succeeded, so the check has to be what the command runs and what decides its exit status. It reads the command as
@@ -476,12 +489,14 @@ pipe after `set -o pipefail`. When a check ran that way after the last edit, the
 it ran where a failure fails nothing. A `ran` pattern goes by the same rule: it matches from a part's first word, or from the
 script an interpreter runs (`python3 scripts/shots.py`). A command that only names `verify.sh` (`--help`, a `grep` of
 it, a run that failed) counts for nothing. An entry of the app's own in
-`hooks.slow` therefore needs `ran`: `companion.py validate` says so. The reminder names `verify.sh` on the edited files
-as what to run, so `verify.sh` runs a built-in check for the paths `hooks.slow` gives it as well as for its own
-(`companion.py slow` matches them as the hook does, as Python regular expressions, so a lookahead in one works in
-both); the APK build is the app's own `verify.checks` entry. A check `verify.sh` skips
-on this machine (`--no-vm`, a missing toolchain, an app check that exits 77) is still named. While the app is linked
-to a Laching checkout the hook says so once per session and blocks no stop for it.
+`hooks.slow` therefore needs `ran`: `companion.py validate` says so. The reminder names each check with the edited
+files that ask for it (those of its paths edited since it last ran; checks the same files ask for share a line), then
+`verify.sh` on those files alone as what to run: after a C# file and a Markdown file, the Windows tests are named for
+the C# file and the command has no other. So `verify.sh` runs a built-in check for the paths `hooks.slow` gives it as
+well as for its own (`companion.py slow` matches them as the hook does, as Python regular expressions, so a lookahead
+in one works in both); the APK build is the app's own `verify.checks` entry. A check `verify.sh` skips on this machine
+(`--no-vm`, a missing toolchain, an app check that exits 77) is still named. While the app is linked to a Laching
+checkout the hook says so once per session and blocks no stop for it.
 
 ## `skills/`
 

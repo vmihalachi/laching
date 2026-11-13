@@ -13,16 +13,20 @@
   hook.py post   PostToolUse: remember what this session edited and ran; format the Swift, C# or Kotlin file just
                                edited (ktlint -F, when ktlint is on PATH); regenerate the Xcode project when Swift files
                                come or go or the XcodeGen spec changes.
-  hook.py stop   Stop:        run the app's verify.sh --fast on this session's edits and remind about the slow checks
-                               (xcodebuild test, conformance, swift/dotnet test, the Windows app's model tests, the
-                               WinUI app build, the Kotlin core tests, the Android app build, the landing build,
-                               hooks.slow) not run since the last edit: run by a command of the session's (the check
-                               at the start of one of its parts, its exit status the command's: no `grep` that names
-                               it, no `swift test | tail`), or by verify.sh, which notes the slow checks that ran and
-                               passed (naming the script runs nothing); remind once about porting Mac UI changes to
-                               Windows and Android (hooks.macUI/windowsUI/androidUI); say once per session that the
-                               app is linked to a Laching checkout (companion.py link); tell the user once per
-                               compaction cycle when Claude's context is past hooks.longSessionTokens (130k).
+  hook.py stop   Stop:        run the app's verify.sh --fast on this session's edits, unless they passed it and
+                               nothing changed since (the edited files, the script, companion.json, the app's and
+                               Laching's working trees as Git sees them; a failure is never remembered), and remind
+                               about the slow checks (xcodebuild test, conformance, swift/dotnet test, the Windows
+                               app's model tests, the WinUI app build, the Kotlin core tests, the Android app build,
+                               the landing build, hooks.slow) not run since the last edit, each with the edited files
+                               that ask for it and verify.sh on those alone as what to run. A check ran when a command
+                               of the session's ran it (the check at the start of one of its parts, its exit status
+                               the command's: no `grep` that names it, no `swift test | tail`), or verify.sh did, which
+                               notes the slow checks that ran and passed (naming the script runs nothing); remind once
+                               about porting Mac UI changes to Windows and Android (hooks.macUI/windowsUI/androidUI);
+                               say once per session that the app is linked to a Laching checkout (companion.py link);
+                               tell the user once per compaction cycle when Claude's context is past
+                               hooks.longSessionTokens (130k).
   hook.py resume SessionStart (compact|resume): print where this session was, as the agent's context after a
                                compaction: the files it edited, the slow checks it ran, the branch, git status and
                                the recent commits; nothing when the tree is clean and the session has no log.
@@ -34,6 +38,7 @@ agents onto it (Codex's apply_patch, Copilot's string tool_input and `path`). Ex
 stderr to the agent. Everything else fails open (Copilot denies on any other non-zero exit, so errors exit 0),
 including a missing or invalid companion.json.
 """
+import hashlib
 import json
 import os
 import re
@@ -877,6 +882,84 @@ def verify_script():
     return wrapper if wrapper.exists() else TOOLS / "verify.sh"
 
 
+def file_stamp(path):
+    """A file's size and times, as the fast checks' memo keys it; `gone` for one that isn't there, so deleting a file
+    changes the key."""
+    try:
+        status = os.stat(path)
+    except OSError:
+        return "gone"
+    return f"{status.st_size} {status.st_mtime_ns} {status.st_ctime_ns}"
+
+
+def tree_state(folder, outer=None, until=None):
+    """The working tree of the repository `folder` is in, as Git sees it: the commit checked out, then every path that
+    differs from it or from the index (staged, changed, deleted, untracked, in conflict) as `git status` prints it and
+    with its `file_stamp`, and the same for a repository among them (a submodule with changes in it). Bytes, for a
+    hash; None when Git can't say (no repository, no git) or hasn't by `until` (`time.monotonic()`; 20 s a command
+    without one). What Git ignores is in neither."""
+    def left():
+        return 20 if until is None else max(0.1, until - time.monotonic())
+
+    try:
+        top = companion.git(folder, "rev-parse", "--show-toplevel", timeout=left())
+        if top.returncode or not top.stdout.strip():
+            return None
+        top = Path(top.stdout.strip())
+        if top == outer:  # a folder with a `.git` that is no repository: its files are the outer one's
+            return b""
+        done = companion.git(top, "--no-optional-locks", "status", "--porcelain=v2", "--branch", "-z",
+                             "--untracked-files=all", "--ignore-submodules=none", text=False, timeout=left())
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if done.returncode:
+        return None
+    # With -z an entry ends in NUL and its path, the last field, is as it is on disk. The fields before a path, by the
+    # entry's kind: changed, renamed (the old path is the next entry), in conflict, untracked.
+    before = {b"1": 8, b"2": 9, b"u": 10, b"?": 1}
+    state, entries = [], iter(done.stdout.split(b"\0"))
+    for entry in entries:
+        if entry.startswith(b"# branch.oid "):  # not the branch's name or how far it is from its upstream
+            state.append(entry)
+        if entry[:1] not in before:
+            continue
+        path = top / os.fsdecode(entry.split(b" ", before[entry[:1]])[-1])
+        state += [entry, file_stamp(path).encode()]
+        if entry[:1] == b"2":
+            state.append(next(entries, b""))
+        if (path / ".git").exists():
+            inner = tree_state(path, top, until)
+            if inner is None:
+                return None
+            state.append(inner)
+    return b"\0".join(state)
+
+
+def fast_state(script, edited):
+    """The key of the fast checks' memo: a hash of what their result depends on, as far as the hook can see. The files
+    the session edited, each with its `file_stamp`; the app's verify script and its companion.json; whether the app is
+    linked to a Laching checkout; and the working trees of the app and of Laching (its tools, this hook among them) as
+    `tree_state` reads them, since the checks read far more than the edited files: a commit, a checkout, a pin bump or
+    a file a command rewrote changes the key. None when a part can't be read (an app outside Git, a Git too slow for
+    the few seconds the stop has to spare beside the checks' own 170), and nothing is remembered then."""
+    until = time.monotonic() + 8
+    try:
+        parts = ["\n".join(f"{path}\t{file_stamp(ROOT / path)}" for path in edited).encode("utf8", "replace"),
+                 script.read_bytes(), (ROOT / companion.FILE).read_bytes(),
+                 str(companion.linked_to(CONFIG)).encode("utf8", "replace")]
+        for folder in (ROOT, TOOLS):
+            tree = tree_state(folder, until=until)
+            if tree is None:
+                return None
+            parts.append(tree)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        return None
+    digest = hashlib.sha256()
+    for part in parts:  # each as its own hash, so where one part ends is never in doubt
+        digest.update(hashlib.sha256(part).digest())
+    return digest.hexdigest()
+
+
 def context_size(transcript):
     """The context of the session's last model call in tokens, and how many compactions came before it, from Claude's
     transcript; (0, 0) when there is none (Codex, Copilot) or it has no usage yet."""
@@ -956,15 +1039,22 @@ def stop(event):
 
 
 def stop_problems(event):
-    """What the agent must still do before stopping: failed fast checks, slow checks not run, the parity reminder."""
+    """What the agent must still do before stopping: failed fast checks, slow checks not run, the parity reminder.
+
+    The fast checks don't run again over a state that passed them: a pass is remembered in the session's log under
+    its `fast_state`, read before the run, and the next stop with the same key runs nothing. A failure, a timeout and
+    a state the hook can't read are never remembered, so only a run that passed can stand for a later one."""
     try:
         lines = state_file(event).read_text().splitlines()
     except OSError:
         return []
-    last_edit, last_ran = {}, {}
+    last_edit, last_ran, passed = {}, {}, None
     for line in lines:
         stamp, kind, value = line.split("\t", 2)
-        (last_edit if kind == "edit" else last_ran)[value] = float(stamp)
+        if kind == "passed":
+            passed = value
+        else:
+            (last_edit if kind == "edit" else last_ran)[value] = float(stamp)
     edited = sorted(p for p in last_edit if not p.startswith("/"))
     if not edited:
         return []
@@ -975,7 +1065,7 @@ def stop_problems(event):
     if command is None:
         problems.append(f"{rel(script)} didn't run: Windows starts no shell script itself and there's no Git for "
                         "Windows bash here, so the fast checks on your edits were skipped. Tell the user.")
-    else:
+    elif (state := fast_state(script, edited)) is None or state != passed:
         try:
             # UTF-8 as the checks print it, whatever the locale: a byte cp1252 lacks would raise and skip the report.
             done = subprocess.run([*command, "--fast", "--", *edited], cwd=ROOT, capture_output=True, text=True,
@@ -983,23 +1073,30 @@ def stop_problems(event):
             if done.returncode:
                 problems.append("Fast checks on the files you edited failed:\n"
                                 + done.stdout[-4000:] + done.stderr[-1000:])
+            elif state:
+                record(event, "passed", state)
         except (OSError, subprocess.TimeoutExpired):
             pass
 
     for kind, stamp in verify_ran().items():
         last_ran[kind] = max(last_ran.get(kind, 0), stamp)
-    stale = []
+    stale = {}  # the edited files that ask for a check, to the checks they ask for
     for kind, pattern, label in SLOW:
-        newest = max((t for p, t in last_edit.items() if re.search(pattern, p)), default=None)
-        if newest is not None and last_ran.get(kind, 0) < newest:
-            unjudged = last_ran.get(UNJUDGED + kind, 0) >= newest
-            stale.append(label + (" [it ran, but where its failure doesn't fail the command (behind `|`, `;`, `||` "
-                                  "or `&`, in `$(...)`): that run doesn't count]" if unjudged else ""))
+        ran = last_ran.get(kind, 0)
+        asked = tuple(sorted(p for p, t in last_edit.items() if t > ran and re.search(pattern, p)))
+        if asked:
+            unjudged = last_ran.get(UNJUDGED + kind, 0) >= max(last_edit[p] for p in asked)
+            stale.setdefault(asked, []).append(
+                label + (" [it ran, but where its failure doesn't fail the command (behind `|`, `;`, `||` or `&`, in "
+                         "`$(...)`): that run doesn't count]" if unjudged else ""))
     if reminder := parity_reminder(event, last_edit, last_ran):
         problems.append(reminder)
     if stale:
-        files = " ".join(shlex.quote(p) for p in edited)
-        problems.append(f"Not run since your last edit: {', '.join(stale)}. "
+        # Only the files whose edit a check is waiting on: with every file of the session the command would start the
+        # slow checks of all of them, and late in a session that is dozens of paths.
+        listed = "".join(f"- {', '.join(labels)}, for {' '.join(asked)}\n" for asked, labels in stale.items())
+        files = " ".join(shlex.quote(p) for p in sorted({p for asked in stale for p in asked}))
+        problems.append(f"Not run since your last edit:\n{listed}"
                         f"Run `{rel(script)} -- {files}` (it runs only what applies), "
                         "or tell the user why you're skipping it.")
     return problems
