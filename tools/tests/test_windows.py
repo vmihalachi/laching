@@ -323,8 +323,8 @@ class CheckWinUITests(unittest.TestCase):
         self.assertFalse(set(without) - set(with_it))
 
     def test_a_line_is_what_ends_at_a_newline(self):
-        # A form feed or a line separator in a comment ends no line for the compiler, nor for the numbers and the
-        # quoted lines (str.splitlines() breaks there).
+        # A form feed in a comment ends no line for the compiler, nor for the numbers and the quoted lines
+        # (str.splitlines() breaks there).
         done = self.lint(self.write("Odd.cs", "// a\fb c\nvar s = (Style)Application.Current.Resources[\"Card\"];\n"
                                               "IReadOnlyList<int> sizes = [1, 2];\n"))
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)

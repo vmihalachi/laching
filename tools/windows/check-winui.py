@@ -707,7 +707,9 @@ def argument(s: Source, known: Declarations, open_: int, position: int, label: s
 
 def collection_expressions(path: Path, known: Declarations) -> list[str]:
     s = source(path)
-    lines = s.text.split("\n")  # the lines `number` counts: splitlines() also breaks at \f, \v, \x1c-\x1e, \x85,
+    # The lines `number` counts, one a "\n" (read_text turns \r\n and \r into it). splitlines() also breaks at \f, \v
+    # and \x1c-\x1e, which end no line for the compiler, so the number and the quoted line came apart there.
+    lines = s.text.split("\n")
     problems: dict[int, str] = {}  # one a line
     for m in EXPRESSION.finditer(s.code):
         i = m.end() - 1
