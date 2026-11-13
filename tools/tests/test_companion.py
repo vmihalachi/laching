@@ -10,8 +10,9 @@ import re
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import companion  # noqa: E402
@@ -42,8 +43,9 @@ class SchemaTests(unittest.TestCase):
     @unittest.skipUnless(MYBACKHURTS.exists(), "../mybackhurts isn't checked out next to laching")
     def test_mybackhurts_validates(self):
         # Its store.microsoft takes the one shape (shots, publisher) when it moves to 0.18, which `companion.py conform`
-        # reports until then; the rest validates as it is.
-        problems = [p for p in self.check(MYBACKHURTS) if not p.startswith("store.microsoft")]
+        # reports until then, and its own hooks.slow check gets a `ran` (or goes) with the release that asks for one;
+        # the rest validates as it is.
+        problems = [p for p in self.check(MYBACKHURTS) if not p.startswith(("store.microsoft", "hooks.slow["))]
         self.assertEqual(problems, [])
 
     def test_an_app_without_a_core_package(self):
@@ -64,6 +66,21 @@ class SchemaTests(unittest.TestCase):
         joined = "\n".join(problems)
         for needle in ("scheme", "'pixels' is not one of", "unknown key nonsense", "missing l10n", "defaultVoice"):
             self.assertIn(needle, joined)
+
+    def test_a_slow_check_of_the_apps_own_says_which_commands_run_it(self):
+        """The Stop hook counts a slow check as run from verify.sh's note of the checks that passed and from the
+        commands the agent ran: one that isn't built in has only its `ran` to be recognized by."""
+        data = json.loads((FIXTURE_APP / "companion.json").read_text("utf8"))
+        data["hooks"]["slow"] = [
+            {"name": "winui-build", "paths": "^windows/"},  # a built-in check with other paths
+            {"name": "app-build", "paths": "^windows/Fixture\\.App/", "label": "the app builds",
+             "ran": "\\bdotnet\\s+build\\b"},
+        ]
+        self.assertEqual(companion.validate(data) + companion.consistency(data), [])
+        data["hooks"]["slow"].append({"name": "android-test", "paths": "^android/core/", "label": "the core's tests"})
+        problems = companion.validate(data) + companion.consistency(data)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("hooks.slow[2] (android-test) needs `ran`", problems[0])
 
     def test_nullable_sections(self):
         data = json.loads((FIXTURE_APP / "companion.json").read_text("utf8"))
@@ -223,6 +240,46 @@ class LookupTests(unittest.TestCase):
             for file in ("android/build.gradle.kts", "android/core/src/main/kotlin/A.kt"):
                 self.assertRegex(file, names["RE_KOTLIN"])
             self.assertNotRegex("android/gradle.properties", names["RE_KOTLIN"])
+
+    def test_the_paths_an_app_gives_a_built_in_slow_check_reach_verify(self):
+        """verify.sh runs a built-in slow check for its own paths and for those `hooks.slow` gives it, so what the Stop
+        hook reminds of is what the script it names runs. `companion.py slow` matches them as the hook does, as Python
+        regular expressions: an app's pattern may hold a lookahead, which `grep -E` can't read. Nothing for a side the
+        app doesn't have, nor for the app's own checks."""
+        data = json.loads((FIXTURE_APP / "companion.json").read_text("utf8"))
+        sources, guide = "macos/FixtureCore/Sources/FixtureCore/A.swift", "macos/FixtureCore/Sources/README.md"
+        self.assertEqual(companion.slow_asked(companion.Config(data, FIXTURE_APP), [sources]), [], "no hooks.slow")
+        for default in companion.SLOW_CHECKS.values():
+            self.assertIn(default, companion.derived(companion.Config(data, FIXTURE_APP)))
+        data["hooks"]["slow"] = [
+            {"name": "xcodebuild-test", "paths": r"^(?!.*\.(?i:md|markdown)$)(?:^macos/FixtureCore/Sources/)"},
+            {"name": "swift-test", "paths": "^scripts/"},
+            {"name": "landing-build", "paths": "^landing/|^macos/"},  # the fixture app has no landing page
+            {"name": "app-build", "paths": "^macos/", "ran": "\\bdotnet\\s+build\\b"},  # the app's own check
+        ]
+        config = companion.Config(data, FIXTURE_APP)
+        self.assertEqual(companion.slow_asked(config, [sources]), ["xcodebuild-test"])
+        self.assertEqual(companion.slow_asked(config, [guide, "README.md"]), [], "the lookahead leaves the guide out")
+        self.assertEqual(companion.slow_asked(config, ["scripts/build.sh", guide, sources]),
+                         ["xcodebuild-test", "swift-test"])
+        self.assertEqual(companion.slow_asked(config, []), [])
+        with fixture_app() as root:
+            (root / "companion.json").write_text(json.dumps(data), "utf8")
+            for argv, stdin, expected in (
+                (["slow", sources], "", "xcodebuild-test"),
+                (["slow"], f"{guide}\nscripts/build.sh\n", "swift-test"),
+                (["slow"], "\n", ""),
+            ):
+                out = io.StringIO()
+                with redirect_stdout(out), mock.patch("sys.stdin", io.StringIO(stdin)):
+                    self.assertEqual(companion.main(argv), 0)
+                self.assertEqual(out.getvalue().strip(), expected)
+            data["hooks"]["slow"][0]["paths"] = "^macos/(unclosed"
+            (root / "companion.json").write_text(json.dumps(data), "utf8")
+            with redirect_stderr(io.StringIO()) as problem, self.assertRaises(SystemExit) as stopped:
+                companion.main(["slow", sources])
+            self.assertEqual(stopped.exception.code, 2)
+            self.assertIn("hooks.slow (xcodebuild-test)", problem.getvalue())
 
     def test_pins_agree_and_disagree(self):
         with fixture_app() as root:

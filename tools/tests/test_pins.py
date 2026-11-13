@@ -17,7 +17,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import companion  # noqa: E402
-from support import NO_SHEBANG, TOOLS, WINDOWS, FixtureAppTestCase, git  # noqa: E402
+import companion_ci  # noqa: E402
+from support import BASH, NO_SHEBANG, NO_SHELL, TOOLS, WINDOWS, FixtureAppTestCase, git, shell  # noqa: E402
 
 RESOLVED = "macos/FixtureCore/Package.resolved"
 PROJECT_RESOLVED = "macos/Fixture.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
@@ -348,10 +349,14 @@ class NpmVersionsTests(unittest.TestCase):
 
 
 class LinkTests(PinsTestCase):
-    """The app is a git repository (committed) and the Laching checkout sits next to it, at ../laching."""
+    """The app is a git repository (committed) and the Laching checkout sits next to it, at ../laching. Not on a CI
+    runner, whatever runs these tests: there a link fails the pins as it does for a commit."""
 
     def setUp(self):
         super().setUp()
+        local = mock.patch.dict(os.environ, {"CI": "", "GITHUB_ACTIONS": ""})
+        local.start()
+        self.addCleanup(local.stop)
         self.checkout = self.root.parent / "laching"
         git(self.root.parent, "clone", "-q", str(self.origin), str(self.checkout))
         for path, text in ((RESOLVED, resolved(self.commits["0.5.0"], "0.5.0", "c" * 64)),
@@ -379,8 +384,14 @@ class LinkTests(PinsTestCase):
         self.assertEqual(self.calls, ["regenerate_project"])
 
         code, out = self.cli("pins")
+        self.assertEqual(code, 0, "a linked app builds, tests and stops as usual: " + out)
+        self.assertIn(f"warning: linked to {self.checkout}: `companion.py unlink` before committing", out)
+        self.assertIn("(the checkout)           macos/project.yml (linked: not compared)", out)
+        self.assertNotIn("must be the same", out)
+        code, out = self.cli("pins", "--staged")
         self.assertEqual(code, 1, "a linked app can't be committed")
         self.assertIn(f"linked to {self.checkout}", out)
+        self.assertNotIn("warning:", out)
         code, out = self.cli("bump", "0.6.0")
         self.assertEqual(code, 1)
         self.assertIn("unlink", out)
@@ -463,7 +474,7 @@ class LinkTests(PinsTestCase):
         self.assertEqual(properties.read_text("utf8"), "sdk.dir=/opt/android")
         self.assertEqual(self.status(), "")
 
-        # Without a local.properties the link writes one and unlink removes it; one left behind fails the pins.
+        # Without a local.properties the link writes one and unlink removes it; one left behind is still a link.
         properties.unlink()
         self.cli("link")
         text = properties.read_text("utf8")
@@ -472,17 +483,73 @@ class LinkTests(PinsTestCase):
         self.assertFalse(properties.exists())
         properties.write_text(text, "utf8")
         code, out = self.cli("pins")
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: linked to a Laching checkout (local.properties)", out)
+        code, out = self.cli("pins", "--staged")
         self.assertEqual(code, 1)
         self.assertIn("linked to a Laching checkout (local.properties)", out)
 
-    def test_a_link_left_in_a_committed_file_fails_the_pins(self):
+    def test_a_link_left_in_a_committed_file_fails_the_pins_of_a_commit_and_of_ci(self):
         self.cli("link")
         targets = (self.root / "windows/Directory.Build.targets").read_text("utf8")
         self.cli("unlink")
         (self.root / "windows/Directory.Build.targets").write_text(targets, "utf8")
         code, out = self.cli("pins")
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: linked to a Laching checkout (Directory.Build.targets)", out)
+        code, out = self.cli("pins", "--staged")
         self.assertEqual(code, 1)
         self.assertIn("linked to a Laching checkout (Directory.Build.targets)", out)
+        for runner in ({"GITHUB_ACTIONS": "true"}, {"CI": "true"}, {"CI": "1"}):
+            with mock.patch.dict(os.environ, runner):
+                code, out = self.cli("pins")
+            self.assertEqual(code, 1, f"a runner got the link: {runner}")
+            self.assertIn("linked to a Laching checkout (Directory.Build.targets)", out)
+        self.assertEqual(self.cli("pins", "--fast")[0], 2, "only --staged is an argument")
+
+    def test_the_pins_that_are_left_are_still_compared_while_linked(self):
+        self.cli("link")
+        workflow = self.root / ".github/workflows/macos.yml"
+        workflow.write_text(workflow.read_text("utf8").replace("@v0.5.0", "@v0.4.0"), "utf8")
+        code, out = self.cli("pins")
+        self.assertEqual(code, 1, out)
+        self.assertIn("must be the same", out)
+        self.assertIn("v0.4.0", out)
+        self.assertIn(f"warning: linked to {self.checkout}", out)
+
+    @unittest.skipIf(BASH is None, NO_SHELL)
+    def test_a_linked_app_passes_verify_until_a_commit_or_ci(self):
+        """The three cases of a link: the fast pass (what the Stop hook runs) warns, the pre-commit hook's fast pass
+        and the reusable workflows' `pins` stage fail."""
+        self.cli("link")
+
+        def run(command: list[str], **env: str) -> subprocess.CompletedProcess:
+            return subprocess.run(command, cwd=self.root, capture_output=True, encoding="utf8", env={
+                **{key: value for key, value in os.environ.items() if not key.startswith("GIT_")}, **env})
+
+        verify = shell(TOOLS / "verify.sh")
+        fast = run([*verify, "--fast", "--", "notes.md"])
+        self.assertEqual(fast.returncode, 0, fast.stdout + fast.stderr)
+        self.assertEqual(fast.stdout.splitlines()[:2], [
+            "ok    Laching pins agree", f"warn  linked to {self.checkout}: `companion.py unlink` before committing"])
+
+        staged = run([*verify, "--fast", "--staged"])
+        self.assertEqual(staged.returncode, 1, staged.stdout + staged.stderr)
+        self.assertIn("FAIL  Laching pins agree", staged.stdout)
+        self.assertIn(f"linked to {self.checkout}", staged.stdout)
+        self.assertNotIn("warn  ", staged.stdout)
+
+        stage = [command for _, command in companion_ci.pins(companion.load(self.root), TOOLS) if "pins" in command]
+        self.assertEqual(len(stage), 1, stage)
+        on_runner = run(stage[0], GITHUB_ACTIONS="true", CI="true")
+        self.assertEqual(on_runner.returncode, 1, on_runner.stdout + on_runner.stderr)
+        self.assertIn(f"linked to {self.checkout}", on_runner.stdout)
+        self.assertEqual(run([*verify, "--fast", "--", "notes.md"], CI="true").returncode, 1, "verify.sh on a runner")
+
+        self.cli("unlink")
+        fast = run([*verify, "--fast", "--", "notes.md"])
+        self.assertEqual(fast.returncode, 0, fast.stdout + fast.stderr)
+        self.assertNotIn("warn  ", fast.stdout)
 
 
 if __name__ == "__main__":

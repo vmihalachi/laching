@@ -139,8 +139,11 @@ python3 laching/tools/companion.py unlink   # before committing
 - **Kotlin:** `link` writes `laching.kotlin.dir=<checkout>/kotlin` into the Android folder's git-ignored
   `local.properties` (the line the `settings.gradle.kts` in [`docs/getting-started.md`](../docs/getting-started.md)
   reads), so the included build is the checkout; `unlink` takes the line out again.
-- **While linked, `pins` fails**, and with it `verify.sh` and the pre-commit hook, so a linked app can't be committed;
-  `bump` refuses too.
+- **While linked, the link is a warning** from `pins` and `verify.sh` (the pins `link` switched to the checkout aren't
+  compared, the others still are), so the trial's builds and the agents' Stop hook go on; the hook says once per
+  session that the app is linked. **For a commit and in CI it's a failure**: `pins --staged`, which `verify.sh --staged`
+  (the pre-commit hook) runs, and `pins` where `CI` or `GITHUB_ACTIONS` is set, so a linked app can't be committed
+  or pass the workflows; `bump` refuses too.
 - **`unlink`** puts back every file `link` changed, byte for byte, and the `Package.resolved` files and the project the
   linked builds rewrote, then regenerates the project. A file edited meanwhile keeps that edit: only the link's own
   change comes out. The record of the link is in the repository's git folder (`.git/laching-link`, one per worktree).
@@ -344,9 +347,17 @@ Mac, Gradle gets Homebrew's openjdk@17 and Android Studio's SDK unless `JAVA_HOM
 `verify.sh` runs `character.py --check` and `synth.py --check` when their inputs, their outputs or the `laching/` pin
 change.
 
+Each slow check that ran and passed leaves a line in the repository's git folder (`laching-slow-checks.log`, one per
+worktree: when it started, the Stop hook's names for it, its command), which is how [the hook](#hookshookpy) knows
+what ran since an edit. `--help`, `--fast`, a check that failed and one that was skipped (`--no-vm`, a missing
+toolchain) leave none.
+
 The app's own checks, which a copied `verify.sh` used to hold, are `verify.checks` in `companion.json`: each a `name`, the
 `paths` that trigger it (an extended regular expression), the command to `run` (bash, from the root), `slow` for one
-`--fast` skips and `docs` for one that documentation changes trigger too (a skill folder's links, say).
+`--fast` skips and `docs` for one that documentation changes trigger too (a skill folder's links, say). A check that
+can't run on this machine (a missing toolchain) prints why and exits 77: `verify.sh` lists it under `skip` with that
+line, doesn't fail and notes nothing, so the Stop hook keeps reminding of it. Status 0 is for a check that ran and
+passed.
 
 ## `verify-lib.sh` and `verify-lock.py`
 
@@ -442,6 +453,18 @@ per compaction cycle, when Claude's context is past `hooks.longSessionTokens` (1
 goes to a fresh session. On `SessionStart` after a compaction or a resume (`hook.py resume`) it prints where the session
 was, as the agent's context: the files it edited, the slow checks it ran, the branch, git status and the recent
 commits (nothing when the tree is clean and the session has no log).
+
+On `Stop` it also runs `verify.sh --fast` on the session's edits and names the slow checks (`hooks.slow`, and the
+built-in ones for the sides the app has) whose paths changed since they last ran. A slow check counts as run when
+`verify.sh` ran it and it passed, which `verify.sh` notes itself ([*`verify.sh`*](#verifysh)), or when the agent ran
+its command (`swift test`, `./gradlew :core:test`, a `hooks.slow` entry's `ran`); a command that only names
+`verify.sh` (`--help`, a `grep` of it, a run that failed) counts for nothing. An entry of the app's own in
+`hooks.slow` therefore needs `ran`: `companion.py validate` says so. The reminder names `verify.sh` on the edited files
+as what to run, so `verify.sh` runs a built-in check for the paths `hooks.slow` gives it as well as for its own
+(`companion.py slow` matches them as the hook does, as Python regular expressions, so a lookahead in one works in
+both); the APK build is the app's own `verify.checks` entry. A check `verify.sh` skips
+on this machine (`--no-vm`, a missing toolchain, an app check that exits 77) is still named. While the app is linked
+to a Laching checkout the hook says so once per session and blocks no stop for it.
 
 ## `skills/`
 

@@ -495,7 +495,7 @@
             "properties": {
               "name": { "type": "string", "description": "The line verify.sh prints." },
               "paths": { "type": "string", "pattern": "^[^\t]+$", "description": "An extended regular expression over the changed root-relative paths; the check runs when one matches (and with --all)." },
-              "run": { "type": "string", "pattern": "^[^\t]+$", "description": "The command, run by bash from the app's root." },
+              "run": { "type": "string", "pattern": "^[^\t]+$", "description": "The command, run by bash from the app's root. Exit status 77 says it skipped itself (a missing toolchain, say): verify.sh lists it under `skip` with the last line it printed, fails nothing and doesn't note it as run, so the Stop hook keeps reminding of it. Status 0 is for a check that ran and passed." },
               "slow": { "type": "boolean", "description": "Skipped by --fast." },
               "docs": { "type": "boolean", "description": "Documentation changes (*.md, *.rst, …) count too; the checks leave them out otherwise, as the built-in app checks do." }
             }
@@ -526,16 +526,16 @@
         },
         "slow": {
           "type": "array",
-          "description": "The app's slow checks, reminded at stop when a matching path changed since they last ran. A `name` of a built-in check (xcodebuild-test, conformance, swift-test, dotnet-test, dotnet-app-test, landing-build, winui-build, gradle-core-test, android-build) replaces its paths (and label); any other name adds a check, counted as run when a shell command matches `ran` (or a full verify.sh).",
+          "description": "The app's slow checks, reminded at stop when a matching path changed since they last ran. A `name` of a built-in check (xcodebuild-test, conformance, swift-test, dotnet-test, dotnet-app-test, landing-build, winui-build, gradle-core-test, android-build) replaces its paths (and label), and verify.sh runs that check for those paths as well as its own (android-build excepted: verify.sh builds no APK, a verify.checks entry does); any other name adds a check, which needs `ran`. A check counts as run when verify.sh ran it and it passed (verify.sh notes that itself; a command that only names verify.sh counts for nothing), or when a command the agent ran is one that runs it.",
           "items": {
             "type": "object",
             "required": ["name", "paths"],
             "additionalProperties": false,
             "properties": {
               "name": { "type": "string" },
-              "paths": { "type": "string", "description": "A regular expression over root-relative paths." },
+              "paths": { "type": "string", "description": "A regular expression over root-relative paths, as Python reads one (a lookahead works): the hook and verify.sh both match it in Python." },
               "label": { "type": "string", "description": "How the reminder names the check." },
-              "ran": { "type": "string", "description": "A regular expression over shell commands that run the check." }
+              "ran": { "type": "string", "description": "A regular expression over shell commands that run the check: the agent's, and those of the slow checks verify.sh ran that passed (a verify.checks entry's `run`). Required for a name that isn't a built-in check." }
             }
           }
         },
