@@ -526,7 +526,7 @@
         },
         "slow": {
           "type": "array",
-          "description": "The app's slow checks, reminded at stop when a matching path changed since they last ran. A `name` of a built-in check (xcodebuild-test, conformance, swift-test, dotnet-test, dotnet-app-test, landing-build, winui-build, gradle-core-test, android-build) replaces its paths (and label), and verify.sh runs that check for those paths as well as its own (android-build excepted: verify.sh builds no APK, a verify.checks entry does); any other name adds a check, which needs `ran`. A check counts as run when verify.sh ran it and it passed (verify.sh notes that itself; a command that only names verify.sh counts for nothing), or when a command the agent ran is one that runs it.",
+          "description": "The app's slow checks, reminded at stop when a matching path changed since they last ran. A `name` of a built-in check (xcodebuild-test, conformance, swift-test, dotnet-test, dotnet-app-test, landing-build, winui-build, gradle-core-test, android-build) replaces its paths (and label), and verify.sh runs that check for those paths as well as its own (android-build excepted: verify.sh builds no APK, a verify.checks entry does); any other name adds a check, which needs `ran`. A check counts as run when verify.sh ran it and it passed (verify.sh notes that itself; a command that only names verify.sh counts for nothing), or when a command the agent ran runs it and its exit status is the command's: one that only names the check (a grep, an echo, a commit message, a heredoc) or loses its status (`| tail`, `; echo done`, `|| true`) counts for nothing.",
           "items": {
             "type": "object",
             "required": ["name", "paths"],
@@ -535,7 +535,7 @@
               "name": { "type": "string" },
               "paths": { "type": "string", "description": "A regular expression over root-relative paths, as Python reads one (a lookahead works): the hook and verify.sh both match it in Python." },
               "label": { "type": "string", "description": "How the reminder names the check." },
-              "ran": { "type": "string", "description": "A regular expression over shell commands that run the check: the agent's, and those of the slow checks verify.sh ran that passed (a verify.checks entry's `run`). Required for a name that isn't a built-in check." }
+              "ran": { "type": "string", "description": "A regular expression for the command that runs the check. The hook splits a shell line at `;`, `&&`, `||`, `|` and newlines and drops a leading `cd … &&`, variable assignments and wrappers such as `time` or `env`: the pattern has to match from a command's first word, or from the script an interpreter runs (`python3 scripts/shots.py`), so it can't span `&&` or match in the arguments. Matched against the agent's commands and those of the slow checks verify.sh ran that passed (a verify.checks entry's `run`). Required for a name that isn't a built-in check." }
             }
           }
         },

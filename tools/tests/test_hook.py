@@ -221,6 +221,8 @@ class PreToolUse(HookTestCase):
         xcstrings = "macos/Fixture/Resources/Localizable.xcstrings"
         self.assertTrue(self.blocked("Bash", command=["cat", xcstrings]))
         self.assertFalse(self.blocked("Bash", command=["git", "status"]))
+        self.assertTrue(self.blocked("Bash", command=["bash", "-lc", f"ls && cat {xcstrings}"]), "the script is the command")
+        self.assertFalse(self.blocked("Bash", command=["bash", "-lc", f"git add {xcstrings} && git status"]))
 
     def test_bad_input_and_a_bad_companion_json_fail_open(self):
         self.assertEqual(self.run_hook("pre", None, payload="not json").returncode, 0)
@@ -539,6 +541,194 @@ class StopAndParity(HookTestCase):
         self.assertEqual(stopped.exception.code, 2)
         self.assertIn("didn't run: Windows starts no shell script itself and there's no Git for Windows bash here",
                       stderr.getvalue())
+
+
+class WhatACommandRan(HookTestCase):
+    """Which slow checks a shell command counts for (`ran_kinds`): the ones it runs, where a failure would have failed
+    the command. The hook hears of a command that succeeded, so a check the command only names, or one whose exit
+    status a pipe, a `;` or a `||` replaced, says nothing about the tests."""
+
+    def setUp(self):
+        super().setUp()
+        self.hook = load_hook()
+        self.hook.setup(self.root)
+
+    def enable_android(self):
+        config = self.root / "companion.json"
+        data = json.loads(config.read_text("utf8"))
+        data["android"] = {"dir": "android", "strings": "android/app/src/main/res"}
+        config.write_text(json.dumps(data), "utf8")
+        self.hook.setup(self.root)
+
+    def assert_ran(self, command, *kinds):
+        self.assertEqual(self.hook.ran_kinds(command), list(kinds), command)
+
+    def test_a_command_that_names_a_check_runs_nothing(self):
+        self.enable_android()
+        for command in (
+            'grep -rn "swift test" docs/',
+            "grep -rn swift test docs/",
+            'echo "then run dotnet test"',
+            "echo then run dotnet test",
+            "cat > notes.md <<'EOF'\nrun laching/tools/conformance.sh\n./gradlew :app:assembleDebug\nswift test\nEOF",
+            "cat <<-EOF > notes.md\n\tdotnet test\n\tEOF",
+            "cat << EOF >> notes.md\nswift test\nEOF\ngit status",
+            'git commit -m "conformance.sh: the vectors are regenerated"',
+            "git commit -m \"$(cat <<'EOF'\nA title\n\nswift test passes; ./gradlew build too\nEOF\n)\"",
+            "git log --grep 'dotnet test'",
+            "cat laching/tools/conformance.sh",
+            "ls macos # then swift test",
+            "echo 'a; swift test'",  # a quoted separator
+            'echo "a && dotnet test"',
+            'echo "a\nswift test\nb"',
+            "which swift test xcodebuild",
+            "man xcodebuild test",
+            "swift build && echo swift test",
+        ):
+            self.assert_ran(command)
+
+    def test_a_check_whose_exit_status_is_lost_ran_nothing(self):
+        for command in (
+            "dotnet test | tail",
+            "swift test 2>&1 | tail -20",
+            "swift test |& tee log.txt",
+            "swift test; echo done",
+            "swift test\necho done",
+            "swift test || true",
+            "swift test && echo ok || echo failed",
+            "swift test &",
+            "if swift test; then echo ok; fi",
+            "! swift test",
+            "for package in a b; do swift test --package-path $package; done",
+            "echo $(swift test)",  # a command substitution
+            "out=`swift test`",
+            'echo "$(swift test 2>&1)" > log.txt',
+            "diff <(swift test) expected.txt",
+            "(swift test) | tail",  # a subshell
+            "(swift test; true)",
+            "bash -c 'swift test | tail'",
+        ):
+            self.assert_ran(command)
+        for command in (
+            "swift test",
+            "swift test;",
+            "swift test\n",
+            "swift test && echo ok",
+            "swift build && swift test",
+            "swift test > out.txt 2>&1 && tail out.txt",
+            "git status; swift test",
+            "(swift test)",
+            "(cd macos && swift test --package-path FixtureCore)",
+            "set -o pipefail; swift test 2>&1 | tail -20",
+            "set -euo pipefail\nswift test | xcbeautify",
+            "swift test # | tail",
+        ):
+            self.assert_ran(command, "swift-test")
+
+    def test_a_check_counts_where_the_command_runs_it(self):
+        self.enable_android()
+        self.assert_ran("cd macos && swift test --package-path FixtureCore", "swift-test")
+        self.assert_ran("swift test \\\n  --package-path macos/FixtureCore \\\n  --parallel", "swift-test")
+        self.assert_ran("env X=1 swift test", "swift-test")
+        self.assert_ran("X=1 Y='a b' swift test", "swift-test")
+        self.assert_ran("xcrun swift test", "swift-test")
+        self.assert_ran("timeout 600 /usr/bin/swift test", "swift-test")
+        self.assert_ran("bash -lc 'cd macos && swift test --package-path FixtureCore'", "swift-test")
+        self.assert_ran("time dotnet test", "dotnet-test", "dotnet-app-test")
+        self.assert_ran("cd windows && time dotnet test Fixture.Core.Tests", "dotnet-test")
+        self.assert_ran("./gradlew :core:test", "gradle-core-test")
+        self.assert_ran("cd android && ./gradlew :core:test :app:assembleDebug", "gradle-core-test", "android-build")
+        self.assert_ran("JAVA_HOME=/jdk ./gradlew -q --build-cache :app:assembleDebug", "android-build")
+        self.assert_ran("laching/tools/conformance.sh", "conformance")
+        self.assert_ran("bash laching/tools/conformance.sh --check", "conformance")
+        xcodebuild = "xcodebuild -project Fixture.xcodeproj -scheme Fixture -destination 'platform=macOS' test"
+        self.assert_ran(f"cd macos && {xcodebuild}", "xcodebuild-test")
+        self.assert_ran(f"{xcodebuild} -only-testing:FixtureTests/A")
+        self.assert_ran("xcodebuild -scheme Fixture build-for-testing")
+        self.assert_ran("laching/tools/windows/vm.sh build && laching/tools/windows/vm.sh test",
+                        "winui-build", "dotnet-test", "dotnet-app-test")
+
+    def test_an_apps_ran_pattern_goes_by_the_same_rule(self):
+        self.configure(slow=[
+            {"name": "app-build", "paths": "^windows/Fixture\\.App/", "ran": "\\bdotnet\\s+build\\b.*Fixture\\.App"},
+            {"name": "shots", "paths": "^macos/Fixture/Views/", "ran": "scripts/shots\\.py"},
+        ])
+        self.hook.setup(self.root)
+        self.assert_ran("dotnet build windows/Fixture.App/Fixture.App.csproj", "app-build", "winui-build")
+        self.assert_ran("cd windows && time dotnet build Fixture.App -v q", "app-build", "winui-build")
+        self.assert_ran("scripts/shots.py --all", "shots")
+        self.assert_ran("python3 -u scripts/shots.py --all && git status", "shots")
+        for command in (
+            'grep -rn "dotnet build Fixture.App" docs/',
+            "echo dotnet build Fixture.App",
+            'git commit -m "scripts/shots.py: every window"',
+            "cat scripts/shots.py",
+            "python3 scripts/lint.py scripts/shots.py",
+            "cat > scripts/shots.py <<'EOF'\nprint('dotnet build Fixture.App')\nEOF",
+            "dotnet build windows/Fixture.App | tail -5",
+            "scripts/shots.py; echo done",
+            "scripts/shots.py || true",
+        ):
+            self.assert_ran(command)
+        # verify.sh notes the app's check as `bash -c <its run>` once it passed: every command of it counts.
+        git(self.root, "init", "-q")
+        note = f"{int(time.time())}\t\tbash -c cd windows && dotnet build Fixture.App -v q; echo built\n"
+        (self.root / ".git" / self.hook.SLOW_LOG).write_text(note, "utf8", newline="\n")
+        self.assertEqual(set(self.hook.verify_ran()), {"app-build", "winui-build"})
+
+    def test_the_stop_reminder_stays_after_a_command_that_only_names_the_check(self):
+        sessions = iter(range(100))
+
+        def reminded_after(command):
+            session = f"names{next(sessions)}"  # the log has whole seconds: one session per command
+            self.run_hook("post", {"session_id": session, "tool_name": "Edit", "tool_input": {
+                "file_path": str(self.root / "macos/FixtureCore/Sources/FixtureCore/Phrases.swift")}})
+            self.run_hook("post", {"session_id": session, "tool_name": "Bash", "tool_input": {"command": command}})
+            self.reminder = self.run_hook("stop", {"session_id": session}).stderr
+            self.resumed = self.run_hook("resume", {"session_id": session}).stdout
+            return "core package tests" in self.reminder
+
+        self.assertTrue(reminded_after('grep -rn "swift test" docs/'))
+        self.assertNotIn("it ran", self.reminder)
+        self.assertTrue(reminded_after("swift test --package-path macos/FixtureCore 2>&1 | tail -5"))
+        # The agent saw the tests pass and is told why that run isn't one: the reminder names the lost exit status.
+        self.assertIn("core package tests (swift test --package-path macos/FixtureCore) [it ran, but where its failure "
+                      "doesn't fail the command (behind `|`", self.reminder)
+        self.assertNotIn("conformance.sh) [it ran", self.reminder, "only the check that ran")
+        self.assertNotIn("swift-test", self.resumed, "and it isn't among the checks the session ran")
+        self.assertNotIn("unjudged", self.resumed)
+        self.assertFalse(reminded_after("cd macos && swift test --package-path FixtureCore"))
+        self.assertIn("swift-test", self.resumed)
+        # Codex's argv: the words of a message are one argument, and `bash -lc` carries the command.
+        self.assertTrue(reminded_after(["git", "commit", "-m", "swift test passes"]))
+        self.assertFalse(reminded_after(["bash", "-lc", "cd macos && swift test --package-path FixtureCore"]))
+
+    def test_a_command_is_split_where_the_shell_splits_it(self):
+        parts = self.hook.shell_parts('cd a && X=1 time make -j4 2>&1 | tee "my log"; echo "$(date +%s)" > out.txt &')
+        self.assertEqual([part.words for part in parts],
+                         [["cd", "a"], ["X=1", "time", "make", "-j4"], ["tee", "my log"], ["date", "+%s"], ["echo", "$()"]])
+        self.assertEqual(self.hook.run_words(parts[1].words), ["make", "-j4"])
+        self.assertEqual([part.kept for part in parts], [False] * 5, "a pipe, a `;` with more after it, an `&`")
+        self.assertEqual([part.captured for part in parts], [False, False, False, True, False])
+        self.assertEqual([part.background for part in parts], [False, False, False, True, True])
+        parts = self.hook.shell_parts("until gh run view 7 | grep -q completed; do sleep 30; done")
+        self.assertEqual([(part.keywords, part.words) for part in parts], [
+            (["until"], ["gh", "run", "view", "7"]), ([], ["grep", "-q", "completed"]), (["do"], ["sleep", "30"]),
+            (["done"], [])])
+        for loop in ("while true; do sleep 5; done &", "{ sleep 5; echo up; } &", "(sleep 5; echo up) &"):
+            self.assertTrue(all(part.background for part in self.hook.shell_parts(loop)), loop)
+        self.assertEqual(self.hook.program(["/usr/bin/env"]), "env")
+        self.assertEqual(self.hook.shell_script(["/bin/zsh", "-lc", "ls | wc -l"]), "ls | wc -l")
+        self.assertIsNone(self.hook.shell_script(["bash", "scripts/build.sh", "-c", "Release"]))
+
+    def test_text_that_is_no_shell_command_splits_without_an_error(self):
+        for odd in ("echo 'unclosed", 'echo "unclosed $(', "$(", "(((", ")", "a | | b", "<<", "a <<EOF", "`", "$'", "${",
+                    "\\", "2>", ";;;", "", "(" * 5000, "$(" * 3000, "'" * 10001, "a;" * 3000, "case $x in a) swift test ;; esac",
+                    "f() { swift test; }", "[[ ( -f a ) ]] && b"):
+            self.assertIsInstance(self.hook.shell_parts(odd), list, odd[:20])
+            self.assert_ran(odd)
+        self.assert_ran(7)
+        self.assert_ran(None)
 
 
 class ShellScripts(unittest.TestCase):

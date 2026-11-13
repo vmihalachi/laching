@@ -456,9 +456,18 @@ commits (nothing when the tree is clean and the session has no log).
 
 On `Stop` it also runs `verify.sh --fast` on the session's edits and names the slow checks (`hooks.slow`, and the
 built-in ones for the sides the app has) whose paths changed since they last ran. A slow check counts as run when
-`verify.sh` ran it and it passed, which `verify.sh` notes itself ([*`verify.sh`*](#verifysh)), or when the agent ran
-its command (`swift test`, `./gradlew :core:test`, a `hooks.slow` entry's `ran`); a command that only names
-`verify.sh` (`--help`, a `grep` of it, a run that failed) counts for nothing. An entry of the app's own in
+`verify.sh` ran it and it passed, which `verify.sh` notes itself ([*`verify.sh`*](#verifysh)), or when a command of
+the agent's ran it (`swift test`, `./gradlew :core:test`, a `hooks.slow` entry's `ran`). The hook hears of a command
+that succeeded, so the check has to be what the command runs and what decides its exit status. It reads the command as
+the shell splits it (at `;`, `&&`, `||`, `|` and newlines, without heredoc bodies, quoted strings and comments) and
+looks for the check at the start of a part, after a `cd … &&`, variable assignments and a wrapper such as `time` or
+`env`; a subshell's parts and those of `bash -c '…'` count too. So a `grep`, an `echo`, a commit message or a heredoc
+that names a check records nothing, and neither does a check behind `|`, `;` with more after it, `||`, `&`, `if` or
+inside `$(…)`: `dotnet test | tail` succeeds whatever the tests did. `swift test && git status` counts, and so does a
+pipe after `set -o pipefail`. When a check ran that way after the last edit, the reminder says next to its name that
+it ran where a failure fails nothing. A `ran` pattern goes by the same rule: it matches from a part's first word, or from the
+script an interpreter runs (`python3 scripts/shots.py`). A command that only names `verify.sh` (`--help`, a `grep` of
+it, a run that failed) counts for nothing. An entry of the app's own in
 `hooks.slow` therefore needs `ran`: `companion.py validate` says so. The reminder names `verify.sh` on the edited files
 as what to run, so `verify.sh` runs a built-in check for the paths `hooks.slow` gives it as well as for its own
 (`companion.py slow` matches them as the hook does, as Python regular expressions, so a lookahead in one works in

@@ -14,12 +14,13 @@
   hook.py stop   Stop:        run the app's verify.sh --fast on this session's edits and remind about the slow checks
                                (xcodebuild test, conformance, swift/dotnet test, the Windows app's model tests, the
                                WinUI app build, the Kotlin core tests, the Android app build, the landing build,
-                               hooks.slow) not run since the last edit: run by a command of the session's that reads
-                               as one, or by verify.sh, which notes the slow checks that ran and passed (naming the
-                               script runs nothing); remind once about porting Mac UI changes to Windows and Android
-                               (hooks.macUI/windowsUI/androidUI); say once per session that the app is linked to a
-                               Laching checkout (companion.py link); tell the user once per compaction cycle when
-                               Claude's context is past hooks.longSessionTokens (130k).
+                               hooks.slow) not run since the last edit: run by a command of the session's (the check
+                               at the start of one of its parts, its exit status the command's: no `grep` that names
+                               it, no `swift test | tail`), or by verify.sh, which notes the slow checks that ran and
+                               passed (naming the script runs nothing); remind once about porting Mac UI changes to
+                               Windows and Android (hooks.macUI/windowsUI/androidUI); say once per session that the
+                               app is linked to a Laching checkout (companion.py link); tell the user once per
+                               compaction cycle when Claude's context is past hooks.longSessionTokens (130k).
   hook.py resume SessionStart (compact|resume): print where this session was, as the agent's context after a
                                compaction: the files it edited, the slow checks it ran, the branch, git status and
                                the recent commits; nothing when the tree is clean and the session has no log.
@@ -39,6 +40,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections import namedtuple
 from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parents[1]
@@ -67,6 +69,7 @@ SED_RANGE = re.compile(r"(\d+|/[^/]*/)\s*,\s*(\d+|\$|\+\d+|/[^/]*/)\s*[pP]|\b\d+
 OUTLINE = "grep -n '^\\(func\\|class\\|struct\\|extension\\|public\\|private\\|internal\\|##\\)'"
 NEVER = "^$a"
 SLOW_LOG = "laching-slow-checks.log"  # in the Git folder: the slow checks verify.sh ran and passed (`verify_ran`)
+UNJUDGED = "unjudged:"  # in the session log, before the kind of a slow check that ran where its failure fails nothing
 
 
 def setup(root=None):
@@ -218,6 +221,291 @@ def deny(reason):
     sys.exit(2)
 
 
+# --- What a shell command runs ---------------------------------------------------------------------------------------
+
+Part = namedtuple("Part", "words keywords kept captured background")
+Part.__doc__ = """One simple command of a shell command line (`shell_parts`).
+
+words       its words with the quotes removed and without redirections: the program and its arguments, after any
+            variable assignments and wrappers (`run_words` drops those).
+keywords    the shell keywords in front of it (`if`, `then`, `while`, `do`, `!`, `{` ...); `done`, `fi` and `}` are
+            parts with keywords and no words.
+kept        its failure is the whole command's: nothing after it replaces its exit status.
+captured    it runs inside `$(...)`, backquotes or `<(...)`.
+background  it runs behind an `&`: its own, its subshell's, or that of the loop, `if` or `{ }` it is in.
+"""
+
+KEYWORDS = frozenset(("if", "then", "elif", "else", "fi", "while", "until", "do", "done", "esac", "!", "{", "}"))
+WRAPPERS = frozenset(("time", "env", "command", "exec", "builtin", "noglob", "nice", "nohup", "caffeinate", "timeout",
+                      "gtimeout", "arch", "xcrun", "stdbuf", "npx"))
+COMPOUNDS = {"if": "fi", "while": "done", "until": "done", "for": "done", "select": "done", "case": "esac", "{": "}"}
+SHELLS = frozenset(("sh", "bash", "zsh", "dash"))
+INTERPRETERS = SHELLS | {"python", "python3", "node", "ruby", "perl", "pwsh"}
+ASSIGNMENT = re.compile(r"[A-Za-z_]\w*(\[[^\]]*\])?\+?=")
+REDIRECTION = re.compile(r"&>>?|<<<|<<-?|>>|>&|>\||<&|<>|[<>](?!\()")
+
+
+class ShellText:
+    """A shell command read just far enough to tell what it runs from what it only mentions: quotes, heredoc bodies,
+    comments and redirections are no commands, and a substitution's commands are kept apart from the command they sit
+    in. Not a shell: what it can't read (a `case` pattern, a function body) comes out as parts nobody recognizes."""
+
+    def __init__(self, text):
+        self.text, self.pos, self.heredocs = text.replace("\\\n", ""), 0, []
+
+    def commands(self, closer=""):
+        """The commands up to `closer` (`)` or a backquote; without one, the end of the text), each a dict: its `words`,
+        the command lists of the substitutions in them (`subs`), its own list when it is a subshell (`group`) and the
+        separator after it (`sep`: && || | |& ; ;; & or a newline, empty at the end)."""
+        text, found = self.text, []
+        command = {"words": [], "subs": [], "group": None, "sep": ""}
+
+        def close(sep):
+            nonlocal command
+            if command["words"] or command["subs"] or command["group"] is not None:
+                command["sep"] = sep
+                found.append(command)
+                command = {"words": [], "subs": [], "group": None, "sep": ""}
+
+        while self.pos < len(text):
+            c, two = text[self.pos], text[self.pos:self.pos + 2]
+            if c in " \t\r":
+                self.pos += 1
+            elif c == closer:
+                self.pos += 1
+                break
+            elif c == "\n":
+                self.pos += 1
+                close("\n")
+                self.skip_heredocs()
+            elif c == "#":
+                end = text.find("\n", self.pos)
+                self.pos = len(text) if end < 0 else end
+            elif two in ("&&", "||", ";;", "|&"):
+                self.pos += 2
+                close(two)
+            elif two in ("<(", ">("):
+                self.pos += 2
+                command["subs"].append(self.commands(")"))
+            elif redirection := REDIRECTION.match(text, self.pos):
+                self.pos = redirection.end()
+                while text[self.pos:self.pos + 1] in (" ", "\t"):
+                    self.pos += 1
+                target = self.word(None, closer)  # what it reads or writes is no word of the command
+                if redirection.group() in ("<<", "<<-") and target is not None:
+                    self.heredocs.append(target)
+            elif c in "|;&":
+                self.pos += 1
+                close(c)
+            elif c == "(" and all(word in KEYWORDS for word in command["words"]):
+                self.pos += 1
+                command["group"] = self.commands(")")
+            elif c == "(":  # an array, a function's `()`, a test's grouping
+                self.balanced()
+            elif c == ")":  # a `case` pattern's
+                self.pos += 1
+                close(";")
+            else:
+                self.word(command, closer)
+        close("")
+        return found
+
+    def word(self, command, closer=""):
+        """Reads one word, quotes removed, onto `command`'s words (None for a redirection's target), and returns it:
+        None when there is none here. A file descriptor in front of a redirection (`2>`) is no word."""
+        text, start, value, subs = self.text, self.pos, [], []
+        while self.pos < len(text):
+            c = text[self.pos]
+            if c in " \t\r\n;&|<>()" or (c == closer and c == "`"):
+                break
+            self.pos += 1
+            if c == "\\":
+                value.append(text[self.pos:self.pos + 1])
+                self.pos += 1
+            elif c == "'":
+                end = text.find("'", self.pos)
+                end = len(text) if end < 0 else end
+                value.append(text[self.pos:end])
+                self.pos = end + 1
+            elif c == '"':
+                self.quoted(value, subs)
+            elif c == "`":
+                subs.append(self.commands("`"))
+                value.append("$()")
+            elif c == "$" and text[self.pos:self.pos + 1] in ("(", "{", "'"):
+                self.dollar(value, subs)
+            else:
+                value.append(c)
+        if self.pos == start:
+            return None
+        word = "".join(value)
+        if command is not None:
+            command["subs"] += subs
+            if not (word.isdigit() and text[start:self.pos] == word and text[self.pos:self.pos + 1] in ("<", ">")):
+                command["words"].append(word)
+        return word
+
+    def quoted(self, value, subs):
+        """The rest of a double-quoted string: text, except for the substitutions in it."""
+        text = self.text
+        while self.pos < len(text):
+            c = text[self.pos]
+            self.pos += 1
+            if c == '"':
+                return
+            if c == "\\":
+                value.append(text[self.pos:self.pos + 1])
+                self.pos += 1
+            elif c == "`":
+                subs.append(self.commands("`"))
+                value.append("$()")
+            elif c == "$" and text[self.pos:self.pos + 1] in ("(", "{"):
+                self.dollar(value, subs)
+            else:
+                value.append(c)
+
+    def dollar(self, value, subs):
+        """After a `$`: a command substitution's commands go to `subs`; arithmetic, `${...}` and `$'...'` are text."""
+        text, start = self.text, self.pos
+        if text.startswith("((", start):
+            self.balanced()
+            value.append("$(())")
+        elif text.startswith("(", start):
+            self.pos += 1
+            subs.append(self.commands(")"))
+            value.append("$()")
+        elif text.startswith("{", start):
+            self.balanced("{", "}")
+            value.append("$" + text[start:self.pos])
+        else:
+            self.pos += 1
+            while self.pos < len(text) and text[self.pos] != "'":
+                self.pos += 2 if text[self.pos] == "\\" else 1
+            value.append(text[start + 1:self.pos])
+            self.pos += 1
+
+    def balanced(self, opener="(", closing=")"):
+        """Past the bracket here and its match."""
+        depth = 0
+        while self.pos < len(self.text):
+            c = self.text[self.pos]
+            self.pos += 1
+            depth += (c == opener) - (c == closing)
+            if depth <= 0:
+                return
+
+    def skip_heredocs(self):
+        """Past the bodies of the heredocs opened on the line that just ended: text being written, nothing that runs."""
+        text = self.text
+        for delimiter in self.heredocs:
+            while self.pos < len(text):
+                end = text.find("\n", self.pos)
+                end = len(text) if end < 0 else end
+                line, self.pos = text[self.pos:end], min(end + 1, len(text))
+                if line.strip() == delimiter:
+                    break
+        self.heredocs = []
+
+
+def shell_parts(command):
+    """`command` as the simple commands it runs, in the order written (a substitution's before the command it sits
+    in): a list of `Part`. `;`, `&&`, `||`, `|`, `&` and newlines separate them; heredoc bodies, quoted strings,
+    comments and redirections are left out; a line continuation joins; a subshell's commands and the script of
+    `bash -c '...'` are parts too. `part.kept` says whether a failure of that command fails the whole line: not when
+    `|`, `||` or `&` follows it, or `;` or a newline with another command after, or a keyword (`if`, `!`, `do`) stands
+    in front; `&&` keeps it, and so does a pipe under `set -o pipefail`. Use `run_words(part.words)` to see the
+    program a part runs."""
+    parts = []
+    try:
+        flatten(ShellText(str(command)).commands(), parts)
+    except RecursionError:
+        return []
+    # A compound command behind an `&` runs there whole: `while ...; do ...; done &`, `{ ...; } &`.
+    opened = []
+    for index, part in enumerate(parts):
+        for word in [*part.keywords, *part.words[:1]]:
+            if word in COMPOUNDS:
+                opened.append((COMPOUNDS[word], index))
+            elif opened and opened[-1][0] == word:
+                start = opened.pop()[1]
+                if part.background:
+                    parts[start:index] = [earlier._replace(background=True) for earlier in parts[start:index]]
+    return parts
+
+
+def flatten(commands, parts, kept=True, captured=False, background=False, pipefail=False):
+    """Appends the `Part`s of `commands` (`ShellText.commands`) to `parts`."""
+    # From the last command back: whether a failure is still the exit status once everything after it ran, and the
+    # separator that ends the `&&`, `||` and `|` chain a command is in (`&`: it runs in the background).
+    last, lasting, ends = len(commands) - 1, [True] * len(commands), [""] * len(commands)
+    for index in range(last, -1, -1):
+        sep = commands[index]["sep"]
+        if sep in ("&", ";", ";;", "\n"):
+            lasting[index], ends[index] = sep != "&" and index == last, sep
+        elif index < last:
+            lasting[index], ends[index] = sep != "||" and lasting[index + 1], ends[index + 1]
+        else:
+            lasting[index] = sep != "||"
+    for index, command in enumerate(commands):
+        words = command["words"]
+        count = next((i for i, word in enumerate(words) if word not in KEYWORDS), len(words))
+        keywords, words = words[:count], words[count:]
+        piped = command["sep"] in ("|", "|&") and not pipefail  # a pipe's exit status is its last command's
+        ok = kept and not keywords and not piped and lasting[index]
+        behind = background or ends[index] == "&"
+        for sub in command["subs"]:
+            flatten(sub, parts, False, True, behind)
+        group = command["group"]
+        script = shell_script(run_words(words)) if group is None else None
+        if group is not None or script is not None:  # a subshell, or `bash -c '...'`: its commands stand for it
+            if keywords:
+                parts.append(Part([], keywords, False, captured, behind))
+            inner = group if group is not None else ShellText(script).commands()
+            flatten(inner, parts, ok, captured, behind, pipefail and group is not None)
+        elif words or keywords:
+            parts.append(Part(words, keywords, ok, captured, behind))
+        if words[:1] == ["set"] and any(word == "pipefail" and re.fullmatch(r"-\w*o", words[i])
+                                        for i, word in enumerate(words[1:])):
+            pipefail = True
+
+
+def run_words(words):
+    """`words` from the program they run: without the variable assignments in front and the wrappers (`time`,
+    `env X=1`, `timeout 600`, `xcrun` ...) with their options."""
+    words = list(words)
+    while words:
+        if ASSIGNMENT.match(words[0]):
+            words.pop(0)
+        elif program(words) in WRAPPERS:
+            words.pop(0)
+            while words and (words[0].startswith("-") or ASSIGNMENT.match(words[0])
+                             or re.fullmatch(r"\d+(\.\d+)?[smhd]?", words[0])):
+                words.pop(0)
+        else:
+            break
+    return words
+
+
+def program(words):
+    """The name of the program `words` start with, without its folder."""
+    return words[0].rsplit("/", 1)[-1] if words else ""
+
+
+def shell_script(words):
+    """The script of `bash -c '...'` (`sh`, `zsh`; `-lc` and the like), None for any other command."""
+    if program(words) not in SHELLS:
+        return None
+    rest = iter(words[1:])
+    for word in rest:
+        if word in ("-o", "+o", "-O", "+O"):
+            next(rest, None)
+        elif re.fullmatch(r"-[A-Za-z]*c", word):
+            return next(rest, None)
+        elif not word.startswith(("-", "+")):
+            break
+    return None
+
+
 PATCHED = re.compile(r"^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+?)\s*$", re.M)
 
 
@@ -249,7 +537,9 @@ def normalize(event):
         if isinstance(start, int) and isinstance(end, int) and (end > 0 or start > 1):
             args = {**args, "offset": start, **({"limit": max(1, end - start + 1)} if end > 0 else {})}
     if tool == "Bash" and isinstance(args.get("command"), list):  # Codex sends argv
-        args = {**args, "command": " ".join(map(str, args["command"]))}
+        argv = list(map(str, args["command"]))
+        script = shell_script(argv)  # `bash -lc '<the command>'`: the command is the one to judge
+        args = {**args, "command": shlex.join(argv) if script is None else script}
     return [{**event, "tool_name": tool, "tool_input": args}]
 
 
@@ -387,74 +677,104 @@ def post_one(event):
             note = regenerate_project()
     elif tool == "Bash":
         command = args.get("command", "")
-        for kind in ran_kinds(command):
+        ran = ran_kinds(command)
+        for kind in ran:
             record(event, "ran", kind)
+        for kind in ran_kinds(command, passed=True):  # run, but behind a pipe or the like: the stop reminder says so
+            if kind not in ran:
+                record(event, "ran", UNJUDGED + kind)
         if re.search(r"\.swift\b|project\.yml", command) and re.search(r"\b(rm|mv|git\s+rm|git\s+mv|touch|cp)\b", command):
             note = regenerate_project()
     return note
 
 
-def ran_kinds(command):
-    """The slow checks a shell command runs, as far as its text says: the built-in kinds, and the app's own by their
-    `ran` (hooks.slow). verify.sh isn't one of them: a command that names it may be a --help, a grep of the file or a
-    run that failed, so the script says what it ran itself (`verify_ran`)."""
-    kinds = []
-    if re.search(r"\bxcodebuild\b.*\btest\b", command) and "-only-testing" not in command:
+def ran_kinds(command, passed=False):
+    """The slow checks a shell command runs: the built-in kinds, and the app's own by their `ran` (hooks.slow). A check
+    counts where the command runs it, not where it names it: at the start of one of its commands (`shell_parts`), so
+    not in a `grep`'s pattern, an `echo`, a commit message or a heredoc. And only when its failure would have failed
+    the whole command (`Part.kept`): the hook hears of a command that succeeded, and `dotnet test | tail` succeeds
+    whatever the tests did. `passed` says somebody else judged the outcome (verify.sh's note of a check that passed),
+    so every command in it counts. verify.sh isn't a check: a command that names it may be a --help or a run that
+    failed, so the script says what it ran itself (`verify_ran`)."""
+    kinds, went = [], []
+    for part in shell_parts(command):
+        words = run_words(part.words)
+        if words[:1] in (["cd"], ["pushd"]):
+            went += words[1:]
+        elif words and (part.kept or passed):
+            kinds += part_kinds(words, " ".join(went))
+    return list(dict.fromkeys(kinds))
+
+
+def part_kinds(words, went=""):
+    """The slow checks one command is: `words` from its program on (`run_words`), `went` the folders the command line
+    changed to before it."""
+    # The app's own: its pattern has to match from the command's first word, or from the script an interpreter runs
+    # (`python3 scripts/check.py`), not somewhere in the arguments.
+    head = 1
+    if program(words) in INTERPRETERS:
+        head += next((i for i, word in enumerate(words[1:], 1) if not word.startswith("-")), 0)
+    line, start = " ".join(words), len(" ".join(words[:head]))
+    kinds = [kind for kind, pattern in RAN if (found := re.search(pattern, line)) and found.start() < start]
+    if program(words) in SHELLS:  # `bash laching/tools/conformance.sh`: the script is the program
+        words = words[head - 1:]
+    text = " ".join([program(words), *words[1:]])
+    if re.match(r"xcodebuild\s(.*\s)?test(-without-building)?(\s|$)", text) and "-only-testing" not in text:
         kinds.append("xcodebuild-test")
-    if "conformance.sh" in command:
+    if program(words).endswith("conformance.sh"):
         kinds.append("conformance")
-    if re.search(r"\bdotnet\s+test\b", command):
+    if re.match(r"dotnet(\.exe)?\s+test\b", text):
         kinds.append("dotnet-test")
         # A solution-wide run includes the app's model tests; a run of another test project doesn't.
-        app_tests = NAMES["WINDOWS_APP_TESTS"]
-        if (app_tests and app_tests in command) or not re.search(r"\.Tests\b", command):
+        app_tests, where = NAMES["WINDOWS_APP_TESTS"], f"{text} {went}"
+        if (app_tests and app_tests in where) or not re.search(r"\.Tests\b", where):
             kinds.append("dotnet-app-test")
-    if re.search(r"\bswift\s+test\b", command):
+    if re.match(r"swift\s+test\b", text):
         kinds.append("swift-test")
     # The WinUI app built: in the Parallels VM (vm.sh's build, and screenshots and smoke, which build it), or by
     # dotnet on Windows. vm.sh test runs the same test projects as dotnet test.
     app = NAMES["WINDOWS_APP"]
-    if re.search(r"\bvm\.sh\s+(build|screenshots|smoke)\b", command) or (
-            app and re.search(rf"\bdotnet\s+(build|publish)\b.*{re.escape(app)}", command)):
+    if re.match(r"vm\.sh\s+(build|screenshots|smoke)\b", text) or (
+            app and re.match(rf"dotnet(\.exe)?\s+(build|publish)\b.*{re.escape(app)}", text)):
         kinds.append("winui-build")
-    if re.search(r"\bvm\.sh\s+test\b", command):
+    if re.match(r"vm\.sh\s+test\b", text):
         kinds += ["dotnet-test", "dotnet-app-test"]
     # Gradle: the core module's tests by name, or a whole-build `test`/`check`/`build`; the app's assemble likewise.
-    if re.search(r"\bgradlew?\b", command):
+    if re.match(r"gradlew?(\.bat)?\s", text):
         core, app = NAMES["ANDROID_CORE"], NAMES["ANDROID_APP"]
-        whole = not re.search(r"\s:\w+:", command)  # no module-qualified task: every module
-        if (core and f":{core}:test" in command) or (whole and re.search(r"\bgradlew?\b.*\b(test|check|build)\b", command)):
+        whole = not re.search(r"\s:\w+:", text)  # no module-qualified task: every module
+        if (core and f":{core}:test" in text) or (whole and re.search(r"\s(test|check|build)\b", text)):
             kinds.append("gradle-core-test")
-        if (app and re.search(rf":{re.escape(app)}:(assemble|build|install)", command)) or (
-                whole and re.search(r"\bgradlew?\b.*\b(assemble\w*|build)\b", command)):
+        if (app and re.search(rf":{re.escape(app)}:(assemble|build|install)", text)) or (
+                whole and re.search(r"\s(assemble\w*|build)\b", text)):
             kinds.append("android-build")
-    kinds += [kind for kind, pattern in RAN if re.search(pattern, command)]
     tool_name = NAMES["LANDING_TOOL"]
-    if tool_name and re.search(rf"\b{re.escape(tool_name)}\s+(run\s+)?build\b", command):
+    if tool_name and re.match(rf"{re.escape(tool_name)}\s+(run\s+)?build\b", text):
         kinds.append("landing-build")
-    return list(dict.fromkeys(kinds))
+    return kinds
 
 
 def verify_ran():
     """When verify.sh last ran each slow check in this checkout, as {kind: epoch seconds}. The script leaves a line in
     the Git folder for every slow check that ran and passed: when it started, the kinds it stands for and its command.
-    One of the app's own checks (verify.checks) names no kind, so its command says which, as an agent's would; `ran`
-    of hooks.slow is matched against every command. A check that failed, was skipped or never started (--help, --fast,
-    --no-vm for the WinUI build) left no line, so its reminder stays. The script's stamps are whole seconds, rounded
-    down: a check counts from the end of its second, since the edit made in that second came before it."""
+    One of the app's own checks (verify.checks) names no kind, so its command says which, as an agent's would
+    (`ran_kinds`, every command of it: the script saw it pass); `ran` of hooks.slow is matched against every note. A
+    check that failed, was skipped or never started (--help, --fast, --no-vm for the WinUI build) left no line, so its
+    reminder stays. The script's stamps are whole seconds, rounded down: a check counts from the end of its second,
+    since the edit made in that second came before it."""
     folder = git_lines("rev-parse", "--absolute-git-dir")
     try:
         lines = (Path(folder[0]) / SLOW_LOG).read_text("utf8", errors="replace").splitlines() if folder else []
     except OSError:
         lines = []
-    last = {}
+    last, own = {}, {kind for kind, _ in RAN}
     for line in lines:
         parts = line.split("\t", 2)
         if len(parts) != 3 or not parts[0].isdigit():
             continue
-        named, command = parts[1].split(), parts[2]
-        kinds = named + [kind for kind, pattern in RAN if re.search(pattern, command)] if named else ran_kinds(command)
-        for kind in kinds:
+        # An app's check is noted as `bash -c <its run>`, the quotes around the script gone.
+        named, ran = parts[1].split(), ran_kinds(re.sub(r"^bash -c ", "", parts[2]), passed=True)
+        for kind in named + [kind for kind in ran if kind in own] if named else ran:
             last[kind] = max(last.get(kind, 0), float(parts[0]) + 1)
     return last
 
@@ -608,7 +928,9 @@ def stop_problems(event):
     for kind, pattern, label in SLOW:
         newest = max((t for p, t in last_edit.items() if re.search(pattern, p)), default=None)
         if newest is not None and last_ran.get(kind, 0) < newest:
-            stale.append(label)
+            unjudged = last_ran.get(UNJUDGED + kind, 0) >= newest
+            stale.append(label + (" [it ran, but where its failure doesn't fail the command (behind `|`, `;`, `||` "
+                                  "or `&`, in `$(...)`): that run doesn't count]" if unjudged else ""))
     if reminder := parity_reminder(event, last_edit, last_ran):
         problems.append(reminder)
     if stale:
@@ -646,7 +968,7 @@ def resume(event):
         if bucket is not None and value not in bucket:
             bucket.append(value)
     ran = [kind for kind in ran  # without the reminders' markers
-           if kind not in ("parity-reminded", "link-reminded") and not kind.startswith("long-session-")]
+           if kind not in ("parity-reminded", "link-reminded") and not kind.startswith(("long-session-", UNJUDGED))]
     # And what verify.sh ran since the session began, which it notes itself.
     began = None
     for line in lines:
