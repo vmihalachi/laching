@@ -698,7 +698,8 @@ followed by one more, without another build, and only the second counts: the run
 reports problems too. What the first left (why it stopped, the shots it got to in the order drawn, its problems) is
 `first-attempt.txt` next to the shots, until a run that needs no second attempt removes it, and the closing lines say
 that a second attempt was needed (on GitHub Actions the run's summary page too). A launch that hangs until its time is
-up isn't tried again. `-Only` runs hidden (cloaked windows, shot as soon as they have drawn), so the PC stays
+up isn't tried again, nor an app that doesn't start in its package: neither was among the runs that failed by chance.
+`-Only` runs hidden (cloaked windows, shot as soon as they have drawn), so the PC stays
 usable, with `-Front` for active windows, and copies only the shots it names. `-Skin id` wears that skin, as
 `screenshots.sh --skin` does, and `-Themes` names the themes to shoot, as `--themes` does; each window opens once for
 light and dark. `-Contrast` runs again in the machine's contrast theme and turns it off afterwards (one such run at a

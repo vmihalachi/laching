@@ -49,6 +49,10 @@ A pass that stopped early (the app left with an exit code, or rendered no shot) 
 build, and only the second attempt counts: the run fails when that one stops early or reports problems too. What the
 first attempt left (why it stopped, the shots it got to, its problems) is kept as first-attempt.txt next to the shots,
 and the closing lines say that a second attempt was needed, on the run's summary page too on GitHub Actions.
+An app that doesn't start in its package at all (no process 30 seconds after Invoke-CommandInDesktopPackage) stops the
+run at once, as a launch that hangs until its time is up does: neither was among the runs that failed by chance, which
+stopped partway through a pass, and both point at the build, its registration or the machine, which another launch
+with nothing changed doesn't fix.
 #>
 param(
     [string[]] $Only = @(),
@@ -418,7 +422,9 @@ foreach ($to in $targets.Keys) {
             }) | Set-Content $kept -Encoding UTF8
         $note = "The screenshot run needed a second attempt$(if ($target.Language) { " ($($target.Language))" }). $(@($target.First | ForEach-Object { $_.Why }) -join '. ')."
         "$note What the first attempt left: $kept"
-        if ($env:GITHUB_STEP_SUMMARY) { [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "$note`n`n") }
+        if ($env:GITHUB_STEP_SUMMARY) {
+            try { [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "$note`n`n") } catch { Write-Warning "The run's summary page didn't take the note: $_" }
+        }
     }
     $found = @(foreach ($from in $target.From) {
             $problems = Join-Path $from "problems.txt"

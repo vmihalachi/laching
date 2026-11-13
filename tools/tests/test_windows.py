@@ -669,9 +669,15 @@ class ScreenshotRetryTests(unittest.TestCase):
         self.assertIn('"The app stopped before the end of the run (exit code $code) after $($drawn.Count) shots$last"',
                       early[left:nothing])
         self.assertIn('"No screenshots were rendered (exit code 0)"', early[nothing:])
-        # A launch that hangs is killed and stops the run in Invoke-Run, which Invoke-Pass doesn't catch.
-        self.assertEqual(self.function("Invoke-Run").count(
-            '$run.Kill(); throw "The screenshot run didn\'t finish in $minutes minutes."'), 2)
+        # A launch that hangs is killed and stops the run in Invoke-Run, which Invoke-Pass doesn't catch; so does an
+        # app that doesn't start in its package, and the help says why neither is tried again.
+        run = self.function("Invoke-Run")
+        self.assertEqual(run.count('$run.Kill(); throw "The screenshot run didn\'t finish in $minutes minutes."'), 2)
+        self.assertIn('if (-not $run) { throw "The app didn\'t start in its package." }', run)
+        help_ = " ".join(self.text[:self.text.index("\nparam(")].split())
+        self.assertIn("An app that doesn't start in its package at all (no process 30 seconds after "
+                      "Invoke-CommandInDesktopPackage) stops the run at once, as a launch that hangs until its time is "
+                      "up does: neither was among the runs that failed by chance", help_)
 
     def test_the_second_attempt_alone_counts_and_the_first_is_kept(self):
         once = self.function("Invoke-Pass")
@@ -689,8 +695,10 @@ class ScreenshotRetryTests(unittest.TestCase):
         note = next(line.strip() for line in rest.splitlines() if line.strip().startswith("$note = "))
         self.assertTrue(note.startswith('$note = "The screenshot run needed a second attempt'), note)
         self.assertIn('\n        "$note What the first attempt left: $kept"\n', rest)
-        summary = 'if ($env:GITHUB_STEP_SUMMARY) { [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "$note`n`n") }'
-        self.assertIn(summary, rest, "on the run's summary page")
+        summary = ('\n        if ($env:GITHUB_STEP_SUMMARY) {\n'
+                   '            try { [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "$note`n`n") } '
+                   'catch { Write-Warning "The run\'s summary page didn\'t take the note: $_" }\n        }\n')
+        self.assertIn(summary, rest, "on the run's summary page; a page that can't be written loses the note, not the shots")
         # The run fails as before, on what the launches in $runs left: the second ones.
         self.assertIn("if ($stopped = @($runs | Where-Object { $_.Run.ExitCode -ne 0 })) {", rest)
         self.assertIn('", in the second attempt too"', rest)
