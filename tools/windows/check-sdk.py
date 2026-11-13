@@ -88,10 +88,12 @@ def check(config: companion.Config, run=dotnet) -> tuple[bool, str]:
     if code:
         installed = re.findall(r"^(\d\S*) \[", run(folder, "--list-sdks")[1], re.M)
         have = f"this machine has {', '.join(installed)}" if installed else "this machine has none"
+        # The host's first line that isn't an installed SDK ("11.0.100 [/usr/share/dotnet/sdk]").
+        reason = next((line.strip() for line in said.splitlines() if line.strip() and not re.match(r"\s*\d\S* \[", line)),
+                      f"exit code {code}")
         if wanted:
             policy = f", rollForward {pinned[1]['rollForward']}" if pinned[1].get("rollForward") else ""
-            return False, f"No installed .NET SDK meets {where(pinned[0])} ({wanted}{policy}); {have}: {fix}."
-        reason = next((line.strip() for line in said.splitlines() if line.strip()), f"exit code {code}")
+            return False, f"No installed .NET SDK meets {where(pinned[0])} ({wanted}{policy}); {have}: {fix}. dotnet says: {reason}"
         return False, f"`dotnet --version` fails in {where(folder)} ({reason}); {have}: {fix}."
     sdk = next(filter(None, (VERSION.fullmatch(line.strip()) for line in reversed(said.splitlines()))), None)
     if not sdk:

@@ -741,10 +741,12 @@ One rule is the pattern behind CsWinRT1032: a collection expression that isn't e
 are fine). The publish reports one site a run; the check lists every site it can tell at once, with "build an array or
 a List". It reads the sources, not the compiler's types, so it reports a site only where the type is written down: a
 field, property or local declared with it and set in the same file, what a method or property declared with it returns,
-and an argument when every declaration of that name with as many parameters has the type there (the app's projects, the
-projects they reference and Laching's packages). It misses what takes the compiler to tell (a member of another file,
-an object initializer, a parameter of the platform's own methods, differing overloads, `params`), so the Native AOT
-publish stays the proof.
+and an argument when every declaration the call reaches with as many parameters has the type there (the app's projects,
+the projects they reference and Laching's packages): `new T(…)` reaches T's constructors, `x.M(…)` the methods of x's
+type when the sources write it down and declare it (a type's name, a local, parameter, field or property, `this`), and
+`M(…)` the local functions in scope or the methods of the type around it. It misses what takes the compiler to tell (a
+member of another file, an object initializer, a receiver whose type isn't written down, a parameter of the platform's
+own methods, differing overloads, `params`), so the Native AOT publish stays the proof.
 
 ### `windows/assets.py`
 
@@ -771,10 +773,11 @@ one, where `setup-dotnet` never runs and too old an SDK was found minutes into a
 included), and compares the answer with the newest `netN.M` among the target frameworks of the `*.csproj` and `*.props`
 files there. Exit 1 says the fix in one line, an error annotation on GitHub Actions: "No installed .NET SDK meets
 windows/global.json (11.0.100, rollForward latestFeature); this machine has 10.0.203: update the runner's SDK to
-11.0.100.", or "The .NET SDK here is 10.0.203 and windows/MyApp.App/MyApp.App.csproj targets net11.0 (the build stops at
-NETSDK1045): update the runner's SDK to 11.0." The first job of `windows-core.yml`, `windows-app.yml` and
-`windows-release.yml` runs it when the run isn't `hosted`, before anything builds; it runs on a Mac or a PC as well
-(`python3 laching/tools/windows/check-sdk.py`).
+11.0.100. dotnet says: A compatible .NET SDK was not found.", or "The .NET SDK here is 10.0.203 and
+windows/MyApp.App/MyApp.App.csproj targets net11.0 (the build stops at NETSDK1045): update the runner's SDK to 11.0."
+The first job of `windows-core.yml`, `windows-app.yml` and `windows-release.yml` runs it when the run isn't `hosted`,
+before anything builds, and so does each package job of `windows-release.yml`, which may land on another runner with
+the same labels; it runs on a Mac or a PC as well (`python3 laching/tools/windows/check-sdk.py`).
 
 ### `windows/vm.sh`
 
@@ -841,7 +844,8 @@ too); the `package` run fails at the first.
 
 `tests/fixture-app/.github/workflows` has both in full. An app whose package needs another submodule (recorded voices)
 passes `submodules: true`; the self-hosted runner's labels are `runner`. That runner keeps its own .NET SDK and Python
-(`python` on its `PATH`), and the first job of both asks [`check-sdk.py`](#windowscheck-sdkpy) before anything builds:
+(`python` on its `PATH`), and the first job of both asks [`check-sdk.py`](#windowscheck-sdkpy) before anything builds
+(the release's package jobs ask again):
 an SDK older than the app's target framework, or one its `windows/global.json` refuses, fails there with "update the
 runner's SDK to X". The skill is `release-windows`, the app's own facts (the Store ID's history, past certification
 reports) in `.agents/notes/release-windows.md`.

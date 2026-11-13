@@ -110,6 +110,11 @@ public static class Library
     public static void Either(List<string> names) { }
     public static bool Among(this string word, IEnumerable<string> words) => words.Contains(word);
 }
+
+public static class Formats
+{
+    public static string List(IReadOnlyList<string> items) => string.Join(", ", items);
+}
 """
 SHAPES = """\
 using Lib;
@@ -204,6 +209,28 @@ public sealed class Shapes
 
     private List<string> Load() => ["a"];
 
+    public Shapes? Next { get; set; }
+
+    private void Add(IReadOnlyList<int> items) { }
+
+    // A method reached through its receiver's type: List<T>.Add and List<T>'s constructor are not the ones declared
+    // here, and what Make() gives isn't read.
+    private void Receivers(Shapes peer, List<int[]> arrays, IReadOnlyList<string> names)
+    {
+        arrays.Add([1, 2]);
+        _ = new List<string>([.. names]);
+        peer.Add([1]); // 1032
+        this.Add([2]); // 1032
+        Add([3]); // 1032
+        peer.Next!.Add([4]); // 1032
+        var copy = new Shapes(false, [], null);
+        copy.Next?.Add([5]); // 1032
+        Make().Add([6]);
+        _ = Formats.List(["a"]); // 1032
+    }
+
+    private static Shapes Make() => new(false, [], null);
+
     private sealed class Holder
     {
         public List<string> Tags { get; set; } = [];
@@ -270,7 +297,7 @@ class CheckWinUITests(unittest.TestCase):
 
     def test_a_collection_expression_for_a_read_only_list_interface(self):
         marked = [number for number, line in enumerate(SHAPES.splitlines(), 1) if line.endswith("// 1032")]
-        self.assertEqual(len(marked), 19)
+        self.assertEqual(len(marked), 25)
         for paths in (("Proj",), ("Proj/Views/Shapes.cs",)):  # the app's folder, and one changed file as verify.sh passes it
             with self.subTest(paths=paths):
                 lines, said = self.collection_expressions(REFERENCE, *paths)
@@ -285,14 +312,26 @@ class CheckWinUITests(unittest.TestCase):
             self.assertIn(words, said)
 
     def test_an_argument_is_read_from_what_the_project_and_its_references_declare(self):
-        # Without the reference nothing says what Library.Show, Among and Pack take, so those calls aren't reported.
+        # Without the reference nothing says what Library.Show, Among, Pack and Formats.List take, so those calls
+        # aren't reported.
         elsewhere = [number for number, line in enumerate(SHAPES.splitlines(), 1)
-                     if line.endswith("// 1032") and re.search(r"Library\.|\.Among\(|\bPack\b", line)]
-        self.assertEqual(len(elsewhere), 4)
+                     if line.endswith("// 1032") and re.search(r"Library\.|\.Among\(|\bPack\b|Formats\.", line)]
+        self.assertEqual(len(elsewhere), 5)
         with_it, _ = self.collection_expressions(REFERENCE, "Proj")
         without, _ = self.collection_expressions("<Project />\n", "Proj")
         self.assertEqual(sorted(set(with_it) - set(without)), elsewhere)
         self.assertFalse(set(without) - set(with_it))
+
+    def test_a_line_is_what_ends_at_a_newline(self):
+        # A form feed or a line separator in a comment ends no line for the compiler, nor for the numbers and the
+        # quoted lines (str.splitlines() breaks there).
+        done = self.lint(self.write("Odd.cs", "// a\fb c\nvar s = (Style)Application.Current.Resources[\"Card\"];\n"
+                                              "IReadOnlyList<int> sizes = [1, 2];\n"))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("Odd.cs:2: casts an untyped XAML object; use XamlCast.As<T>\n"
+                      "    var s = (Style)Application.Current.Resources[\"Card\"];\n", done.stdout)
+        self.assertIn("Odd.cs:3: a collection expression for IReadOnlyList<int> has no class of its own under Native AOT "
+                      "(CsWinRT1032); build an array or a List\n    IReadOnlyList<int> sizes = [1, 2];\n", done.stdout)
 
     def test_xaml_rules(self):
         for line, words in (
@@ -469,7 +508,8 @@ class CheckSdkTests(FixtureAppTestCase):
         done = self.check("11.0.100")
         self.assertEqual((done.returncode, done.stdout), (1, ""))
         self.assertEqual(done.stderr, "error: No installed .NET SDK meets windows/global.json (11.0.999, rollForward disable); "
-                                      "this machine has 11.0.100: update the runner's SDK to 11.0.999.\n")
+                                      "this machine has 11.0.100: update the runner's SDK to 11.0.999. "
+                                      "dotnet says: A compatible .NET SDK was not found.\n")
 
     def test_no_dotnet_at_all(self):
         done = self.check(None)
@@ -496,17 +536,23 @@ class CheckSdkTests(FixtureAppTestCase):
         self.assertEqual(self.check("12.0.100").returncode, 0)
 
     def test_the_first_job_asks_on_a_self_hosted_runner_before_anything_builds(self):
-        # The first job of each workflow, and in it before the first step that runs dotnet or a tool that builds.
-        for name, job, run, builds in (
-            ("windows-app.yml", "app", 'python "${{ inputs.laching-path }}/tools/windows/check-sdk.py"', "WinUI traps"),
-            ("windows-core.yml", "test", 'python3 "./$LACHING_PATH/tools/windows/check-sdk.py"', "Check strings and phrase keys"),
-            ("windows-release.yml", "version", 'python "${{ inputs.laching-path }}/tools/windows/check-sdk.py"',
-             "Read the package version (and refuse one released before)"),
+        # The first job of each workflow, and in it before the first step that runs dotnet or a tool that builds. A
+        # release's package jobs ask again, right after the checkout: each may land on another runner with the labels.
+        release = 'python "${{ inputs.laching-path }}/tools/windows/check-sdk.py"'
+        for name, job, run, builds, mentions in (
+            ("windows-app.yml", "app", 'python "${{ inputs.laching-path }}/tools/windows/check-sdk.py"', "WinUI traps", 2),
+            ("windows-core.yml", "test", 'python3 "./$LACHING_PATH/tools/windows/check-sdk.py"', "Check strings and phrase keys", 2),
+            ("windows-release.yml", "version", release, "Read the package version (and refuse one released before)", 3),
+            ("windows-release.yml", "package", release, "The app's global.json", 3),
         ):
-            with self.subTest(workflow=name):
+            with self.subTest(workflow=name, job=job):
                 text = (REPO / ".github/workflows" / name).read_text("utf8")
-                self.assertEqual(re.search(r"^jobs:\n  ([\w-]+):$", text, re.M).group(1), job)
-                self.assertEqual(text.count("check-sdk.py"), 2, "its comment and the one step")
+                self.assertEqual(re.search(r"^jobs:\n  ([\w-]+):$", text, re.M).group(1), "version" if job == "package" else job)
+                self.assertEqual(text.count("check-sdk.py"), mentions, "its comment and a step a job")
+                if job == "package":
+                    steps = workflow_steps(name, job)
+                    self.assertEqual(steps.index(step(steps, run=run)) - 1,
+                                     steps.index(step(steps, name="Check out ${{ inputs.laching-path }}/")))
                 steps = workflow_steps(name, job)
                 check = step(steps, run=run)
                 self.assertEqual(check["if"], "${{ !inputs.hosted }}", "setup-dotnet installs the SDK on GitHub's runners")

@@ -23,16 +23,21 @@ Each rule cost an app a release or a day (mybackhurts first, then Laching's fixt
   - a field, property or local declared with the type, initialized or assigned in the same file;
   - an expression body, a getter or a `return` of a method, property or local function declared with it (a
     `Task<…>` of it too);
-  - an argument, by position or by name, a `new(…)` for a declared type included, when every declaration of that
-    name that takes as many arguments has the type there, and a lambda passed as a `Func<…>` returning it. The
-    declarations are read from the checked files' projects and the projects those reference (Laching's packages from
-    the sources next to this tool);
+  - an argument, by position or by name, when every declaration the call reaches that takes as many arguments has
+    the type there, and a lambda passed as a `Func<…>` returning it. `new T(…)` reaches T's constructors, and `new(…)`
+    those of the type it is declared as. `x.M(…)` reaches the methods of x's type (its bases' and the extensions for
+    it included): x a type's name, or a local, parameter, field, property, `this` or string whose type is written
+    down and declared in the sources, `model.Core` a property of one. `M(…)` reaches the local functions in scope,
+    else the methods of the type around it. The declarations are read from the checked files' projects and the
+    projects those reference (Laching's packages from the sources next to this tool);
   - a branch of `a ? b : c` or an arm of a switch expression in one of those places, when no other branch or arm has
     a type of its own (beside `named` in `ok ? named : ["light"]` the expression becomes what `named` is).
   It misses what is declared elsewhere or takes the compiler to tell: a member of another file assigned here, a
-  member set in an object initializer, a parameter of the platform's or another library's method, a `params`
-  parameter, a call whose overloads differ or whose type arguments hold a comma, the right side of `??`, a branch or
-  an arm beside one with a type, a cast, `yield return`, a `return` in a lambda's block, `base(…)` and `this(…)`.
+  member set in an object initializer, a parameter of the platform's or another library's method, a method a type
+  inherits from one, a call on what a call or an indexer gives, on a `var` set to anything but `new T(…)` or on a
+  lambda's parameter, a `params` parameter, a call whose overloads differ or whose type arguments hold a comma, the
+  right side of `??`, a branch or an arm beside one with a type, a cast, `yield return`, a `return` in a lambda's
+  block, `base(…)` and `this(…)`.
 
 Usage: python3 laching/tools/windows/check-winui.py [files or folders...]
        (none: the app in companion.json's windows.dir/windows.app)
@@ -44,6 +49,7 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -87,6 +93,12 @@ KEYWORDS = frozenset(
     "default switch foreach for lock catch finally try base this sizeof checked unchecked unsafe fixed where get set "
     "init class struct record interface enum namespace".split())
 BLOCKS = frozenset("if else for foreach while do switch try catch finally using lock fixed checked unchecked unsafe when".split())
+TYPE_DECLARATION = re.compile(r"(?<![\w@.])(record(?:\s+(?:class|struct))?|class|struct|interface)\s+@?(\w+)")
+NAMESPACE = re.compile(r"(?<![\w@.])namespace\s+([\w.]+)")
+MEMBER = re.compile(r"(?<![\w.@])@?(\w+)(?=\s*[;={])")  # a field's or a property's name, in a type's top-level code
+STATIC_USING = re.compile(r"\busing\s+static\s+(?:global::)?([\w.]+)\s*;")
+ALIASES = {"String": "string", "Object": "object", "Int32": "int", "Int64": "long", "Boolean": "bool", "Double": "double",
+           "Single": "float", "Char": "char"}
 Parameters = list[tuple[str, str, str]]  # (type, name, kind) each; kind is "this", "params", "optional" or ""
 
 
@@ -153,6 +165,8 @@ def declaration(text: str) -> tuple[str, str] | None:
     if not named:
         return None
     rest = text[:named.start()].rstrip()
+    if rest.endswith("=>"):
+        return None  # what a lambda or a member's body gives
     end = len(rest)
     while rest.endswith(("?", "[]"), 0, end):
         end -= 1 if rest[end - 1] == "?" else 2
@@ -172,6 +186,11 @@ def declaration(text: str) -> tuple[str, str] | None:
     if not name or name.group() in KEYWORDS:
         return None
     return rest[name.start():], named.group(1)
+
+
+def alias(name: str) -> str:
+    """The keyword for a type that has one (`String` is `string`)."""
+    return ALIASES.get(name, name)
 
 
 def generic(type_: str) -> tuple[str, list[str]]:
@@ -220,8 +239,8 @@ def parameters(text: str) -> Parameters | None:
             begin = at + 1
             modifiers = re.match(r"(?:(?:this|ref|in|out|params|scoped|readonly)\s+)*", part)
             declared = declaration(" " + part[modifiers.end():])
-            if not declared:
-                return None
+            if not declared or declared[0] == "var":
+                return None  # `out var x` is a call's argument
             kind = next((k for k in ("this", "params") if re.search(rf"\b{k}\s", modifiers.group())), "optional" if default else "")
             found.append((*declared, kind))
     return found
@@ -244,26 +263,225 @@ def referenced(projects: set[Path]) -> set[Path]:
     return seen
 
 
+class Part:
+    """A class, struct, record or interface that a file declares (one part of a partial one): its name, the braces of
+    its body, the types it names as its bases, and a record's parameters."""
+
+    def __init__(self, s: Source, m: re.Match):
+        code = s.code
+        self.source, self.name, self.at, self.found = s, m.group(2), m.start(2), None
+        opens = re.compile(r"\s*(?:<[^<>()]*>\s*)?\(").match(code, m.end())
+        close = s.partner.get(opens.end() - 1) if opens else None
+        self.primary = (parameters(code[opens.end():close]) or []) if close and m.group(1).startswith("record") else []
+        end, c = next(((at, c) for at, c in top(s, m.end(), len(code)) if c in "{;"), (len(code), ";"))
+        self.body = (end, s.partner[end]) if c == "{" and end in s.partner else None
+        head = re.split(r"\bwhere\b", "".join(" " if c in "([" else c for _, c in top(s, m.end(), end)))[0]
+        self.bases, depth, begin = [], 0, None
+        for at, c in enumerate(head + ","):
+            depth += (c == "<") - (c == ">")
+            if depth == 0 and c == ":" and begin is None:
+                begin = at + 1
+            elif depth == 0 and c == "," and begin is not None:
+                if head[begin:at].strip():
+                    self.bases.append(alias(generic(head[begin:at])[0]))
+                begin = at + 1
+
+    def members(self) -> dict[str, set[str]]:
+        """Its fields and properties, a record's parameters included: each name with the types it is declared with."""
+        if self.found is None:
+            self.found = {}
+            for type_, name, _ in self.primary:
+                self.found.setdefault(name, set()).add(type_)
+            if self.body:
+                flat = "".join(c for _, c in top(self.source, self.body[0] + 1, self.body[1]))
+                for m in MEMBER.finditer(flat):
+                    declared = declaration(flat[max(0, m.end() - 400):m.end()])
+                    if declared:
+                        self.found.setdefault(declared[1], set()).add(declared[0])
+        return self.found
+
+
+class Callable(NamedTuple):
+    """A declaration with parameters: a constructor (a primary one included), a member (a method, a delegate) or a
+    local function, which is called only within `scope`."""
+    parameters: Parameters
+    owner: Part | None
+    role: str  # "constructor", "member" or "local"
+    source: Source
+    scope: tuple[int, int]
+
+
 class Declarations:
-    """What the checked files' projects, and the projects those reference, declare with parameters: methods, local
-    functions, constructors and records, by name. Read when the first argument asks."""
+    """What the checked files' projects, and the projects those reference, declare: types with their bases and
+    members, and what takes parameters. Read when the first argument asks."""
 
     def __init__(self, files: list[Path]):
         self.files = [f for f in files if f.suffix == ".cs"]
-        self.found: dict[str, list[Parameters]] | None = None
+        self.loaded = False
 
-    def of(self, name: str) -> list[Parameters]:
-        if self.found is None:
-            self.found = {}
-            projects = {next((p for p in f.resolve().parents if any(p.glob("*.csproj"))), None) for f in self.files}
-            paths = set(self.files) | {p for folder in referenced(projects - {None}) for p in files_in(folder) if p.suffix == ".cs"}
-            for s in map(source, sorted(paths)):
-                for m in CALLABLE.finditer(s.code):
-                    close = s.partner.get(m.end() - 1)
-                    declared = parameters(s.code[m.end():close]) if close and m.group(1) not in KEYWORDS else None
-                    if declared:
-                        self.found.setdefault(m.group(1), []).append(declared)
-        return self.found.get(name, [])
+    def load(self):
+        if self.loaded:
+            return
+        self.loaded = True
+        self.types: dict[str, list[Part]] = {}
+        self.parts: dict[Source, list[Part]] = {}
+        self.callables: dict[str, list[Callable]] = {}
+        self.namespaces: set[str] = set()
+        checked = {f.resolve() for f in self.files}
+        projects = {next((p for p in f.resolve().parents if any(p.glob("*.csproj"))), None) for f in self.files}
+        others = {p for folder in referenced(projects - {None}) for p in files_in(folder) if p.suffix == ".cs"}
+        for s in map(source, self.files + sorted(p for p in others if p.resolve() not in checked)):
+            self.parts[s] = [Part(s, m) for m in TYPE_DECLARATION.finditer(s.code) if m.group(2) not in KEYWORDS]
+            for part in self.parts[s]:
+                self.types.setdefault(part.name, []).append(part)
+            for m in NAMESPACE.finditer(s.code):
+                names = m.group(1).split(".")
+                self.namespaces.update(".".join(names[:n]) for n in range(1, len(names) + 1))
+            for m in CALLABLE.finditer(s.code):
+                close = s.partner.get(m.end() - 1)
+                declared = parameters(s.code[m.end():close]) if close and m.group(1) not in KEYWORDS else None
+                if declared:
+                    self.callables.setdefault(m.group(1), []).append(self.callable(s, m, declared))
+
+    def callable(self, s: Source, m: re.Match, declared: Parameters) -> Callable:
+        primary = next((p for p in self.parts[s] if p.at == m.start(1)), None)
+        if primary:
+            return Callable(declared, primary, "constructor", s, (0, 0))
+        around, brace = self.inside(s, m.start()), s.enclosing(m.start())
+        owner = around[0] if around else None
+        if owner and brace == owner.body[0]:
+            return Callable(declared, owner, "constructor" if m.group(1) == owner.name else "member", s, owner.body)
+        return Callable(declared, owner, "local", s, (brace, s.partner.get(brace, len(s.code))) if brace >= 0 else (-1, len(s.code)))
+
+    def inside(self, s: Source, j: int) -> list[Part]:
+        """The types of this file whose body holds j, the innermost first."""
+        around = [p for p in self.parts.get(s, []) if p.body and p.body[0] < j < p.body[1]]
+        return sorted(around, key=lambda p: -p.body[0])
+
+    def lineage(self, name: str) -> set[str]:
+        """The type and the bases the sources declare for it, theirs included."""
+        found, todo = set(), [alias(name)]
+        while todo:
+            name = todo.pop()
+            if name not in found:
+                found.add(name)
+                todo += [base for part in self.types.get(name, []) for base in part.bases]
+        return found
+
+    def methods(self, type_: str, static: bool, name: str) -> list[Parameters]:
+        """The methods called `name` that a value of `type_` has (its bases' and the extensions for it), or the type."""
+        line, found = self.lineage(type_), []
+        for c in self.callables.get(name, []):
+            if c.role == "member" and c.owner.name in line:
+                found.append(c.parameters)
+            elif c.role == "member" and not static and c.parameters[0][2] == "this" and alias(generic(c.parameters[0][0])[0]) in line:
+                found.append(c.parameters[1:])
+        return found
+
+    def member(self, type_: str, name: str) -> tuple[str, bool] | None:
+        """What `type_.name` is: (its type, False) for a field or a property declared with one type, (name, True) for
+        a type nested in it; None when the sources don't say."""
+        parts = [p for n in self.lineage(type_) for p in self.types.get(n, [])]
+        found = {alias(generic(t)[0]) for p in parts for t in p.members().get(name, ())}
+        if found:
+            return (found.pop(), False) if len(found) == 1 else None
+        nested = any(o.source is p.source and p.body and p.body[0] < o.at < p.body[1] for o in self.types.get(name, []) for p in parts)
+        return (name, True) if nested else None
+
+    def constructors(self, name: str) -> list[Parameters]:
+        """What `new name(…)` reaches."""
+        self.load()
+        return [c.parameters for c in self.callables.get(name, []) if c.role == "constructor" and c.owner.name == name]
+
+    def called(self, s: Source, dot: int, name: str) -> list[Parameters]:
+        """What `x.name(…)` reaches, the `.` at `dot`: the methods of x's type, when x is a local, a parameter, a field,
+        a property, `this` or a string whose type the sources declare, or of the type x names; none when the sources
+        don't say what x is."""
+        self.load()
+        names = receiver(s, dot)
+        if not names:
+            return []
+        first, rest, found = names[0], names[1:], None
+        if first == '"':
+            found = "string", False
+        elif first in ("this", "base"):
+            around = self.inside(s, dot)
+            found = (around[0].name, False) if around else None
+        else:
+            declared = variable(s, first)
+            if declared == "":
+                return []
+            found = (declared, False) if declared else None
+            for part in (() if found else self.inside(s, dot)):  # a member declared in another file
+                found = self.member(part.name, first)
+                if found:
+                    break
+            if not found and first in self.types:
+                found = first, True
+            if not found:  # Namespace.Type
+                spaces = [n for n in range(1, len(names)) if ".".join(names[:n]) in self.namespaces and names[n] in self.types]
+                found, rest = ((names[spaces[-1]], True), names[spaces[-1] + 1:]) if spaces else (None, rest)
+        for next_ in rest:
+            found = self.member(found[0], next_) if found else None
+        return self.methods(*found, name) if found else []
+
+    def bare(self, s: Source, at: int, name: str) -> list[Parameters]:
+        """What `name(…)` at `at` reaches: the local functions in scope, else the methods of the innermost type around
+        it that has one (its bases' included), else those of a `using static` type."""
+        self.load()
+        found = self.callables.get(name, [])
+        local = [c.parameters for c in found if c.role == "local" and c.source is s and c.scope[0] < at < c.scope[1]]
+        if local:
+            return local
+        for type_ in [p.name for p in self.inside(s, at)] + [generic(t)[0] for t in STATIC_USING.findall(s.code)]:
+            line = self.lineage(type_)
+            members = [c.parameters for c in found if c.role == "member" and c.owner.name in line]
+            if members:
+                return members
+        return []
+
+
+def receiver(s: Source, dot: int) -> list[str] | None:
+    """The names before the `.` at `dot`, first to last (`model`, `Core` in `model.Core.Start(…)`), a string as `"`;
+    None for anything else there: a call, an indexer, a cast, a generic type."""
+    code, names, j = s.code, [], dot
+    while True:
+        k = s.before(j)
+        while k >= 0 and code[k] in "?!":  # x?.Name, x!.Name
+            k = s.before(k)
+        if k >= 0 and code[k] == '"':
+            return ['"'] + names
+        if k < 0 or not word(code[k]):
+            return None
+        start = k
+        while start and word(code[start - 1]):
+            start -= 1
+        names.insert(0, code[start:k + 1])
+        j = s.before(start)
+        if j < 0 or code[j] != ".":
+            return names
+
+
+def variable(s: Source, name: str) -> str | None:
+    """The type that this file declares `name` with (a local, a parameter, a field, a property): "" when it can't be
+    told (a `var` set to anything but `new T(…)`, a lambda's parameter, declarations that differ), None when the file
+    declares nothing by that name."""
+    code, types = s.code, set()
+    for m in re.finditer(rf"(?<![\w.@])@?{re.escape(name)}\b(?=\s*(?:[;={{,)]|in\b))", code):
+        declared = declaration(s.head(m.end()))
+        if declared and declared[0] == "var":
+            made = re.compile(r"\s*=\s*new\s+(?:global::)?((?:\w+\s*\.\s*)*\w+)\s*[(<{]").match(code, m.end())
+            types.add(alias(generic(made.group(1))[0]) if made else "")
+        elif declared:
+            types.add(alias(generic(declared[0])[0]))
+        else:
+            opens = s.enclosing(m.start())
+            close = s.partner.get(opens) if opens >= 0 and code[opens] == "(" else None
+            if re.compile(r"\s*=>").match(code, m.end()) or close and re.compile(r"\s*=>").match(code, close + 1):
+                types.add("")  # x => …, (x, y) => …
+    if not types:
+        return None
+    return types.pop() if len(types) == 1 else ""
 
 
 def top(s: Source, start: int, end: int):
@@ -449,32 +667,38 @@ def arrow(s: Source, known: Declarations, at: int, hops: int) -> str | None:
 
 
 def argument(s: Source, known: Declarations, open_: int, position: int, label: str | None, hops: int) -> str | None:
-    """The type that every declaration taking the call at `open_` gives the argument at `position`, or the one named
-    `label`: the first one's words when all say the same, the interface alone when they differ in what it holds."""
+    """The type that every declaration the call at `open_` reaches gives the argument at `position`, or the one named
+    `label`: the first one's words when all say the same, the interface alone when they differ in what it holds. A
+    call reaches the constructors of `new T(…)` (of the type a `new(…)` is declared with), the methods of x's type in
+    `x.M(…)`, and in `M(…)` the local functions in scope or the methods of the type around it (Declarations)."""
     code = s.code
     callee = re.search(r"(\w+)\s*(?:<[^()=;]*>)?\s*$", s.head(open_))
     if not callee:
         return None  # brackets or a tuple
     name, at = callee.group(1), open_ - len(s.head(open_)) + callee.start(1)
-    member = s.before(at) >= 0 and code[s.before(at)] == "."
     if name == "new":  # new(…): the type the expression is declared with
-        name = generic(target(s, known, at, hops + 1) or "")[0]
+        reached = known.constructors(generic(target(s, known, at, hops + 1) or "")[0])
     elif name in KEYWORDS:
         return None
+    elif re.search(r"\bnew\s+(?:global::)?(?:\w+\s*\.\s*)*$", s.head(at)):
+        reached = known.constructors(name)
+    elif s.before(at) >= 0 and code[s.before(at)] == ".":
+        reached = known.called(s, s.before(at), name)
+    else:
+        reached = known.bare(s, at, name)
     flat = "".join(c for _, c in top(s, open_ + 1, s.partner.get(open_, open_)))
     if re.search(r"<[^<>]*,[^<>]*>", flat):
         return None  # a comma that may be a type's (Dictionary<string, int>): the arguments can't be counted
     count = flat.count(",") + 1
     types = []
-    for declared in known.of(name):
-        for shape in [declared] + ([declared[1:]] if member and declared[0][2] == "this" else []):
-            more = bool(shape) and shape[-1][2] == "params"  # any number of arguments from there on
-            if not sum(1 for p in shape if p[2] in ("", "this")) <= count <= (count if more else len(shape)):
-                continue
-            at = min(position, len(shape) - 1) if more else position
-            chosen = [p for p in shape if p[1] == label] if label else shape[at:at + 1]
-            if chosen:
-                types.append("params" if chosen[0][2] == "params" else chosen[0][0])
+    for shape in reached:
+        more = bool(shape) and shape[-1][2] == "params"  # any number of arguments from there on
+        if not sum(1 for p in shape if p[2] in ("", "this")) <= count <= (count if more else len(shape)):
+            continue
+        at = min(position, len(shape) - 1) if more else position
+        chosen = [p for p in shape if p[1] == label] if label else shape[at:at + 1]
+        if chosen:
+            types.append("params" if chosen[0][2] == "params" else chosen[0][0])
     if len(set(map(verdict, types))) != 1:
         return None
     same = len({re.sub(r"\s+|\?$", "", type_) for type_ in types}) == 1
@@ -483,7 +707,7 @@ def argument(s: Source, known: Declarations, open_: int, position: int, label: s
 
 def collection_expressions(path: Path, known: Declarations) -> list[str]:
     s = source(path)
-    lines = s.text.splitlines()
+    lines = s.text.split("\n")  # the lines `number` counts: splitlines() also breaks at \f, \v, \x1c-\x1e, \x85,
     problems: dict[int, str] = {}  # one a line
     for m in EXPRESSION.finditer(s.code):
         i = m.end() - 1
@@ -503,7 +727,7 @@ def check(path: Path, known: Declarations) -> list[str]:
     rules = CSHARP if path.suffix == ".cs" else XAML if path.suffix == ".xaml" else []
     text = path.read_text(encoding="utf-8-sig")
     problems = []
-    for number, line in enumerate(text.splitlines(), 1):
+    for number, line in enumerate(text.split("\n"), 1):
         if "winui-check: ok" in line:
             continue
         for pattern, message in rules:
