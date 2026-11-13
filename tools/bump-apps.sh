@@ -3,18 +3,23 @@
 # Commits nothing: read each app's diff and commit there (the landing page's change inside its own repository). Runs
 # this checkout's companion.py, so an app whose submodule predates `bump` moves too. The apps are the folders with a
 # companion.json next to this Laching checkout (not a linked git worktree: its main checkout is the app), unless named.
+# An app whose NuGet pins move waits first until NuGet.org lists the packages, as `bump` does; --no-wait doesn't ask.
 #
 #   laching/tools/bump-apps.sh 0.9.1                     # ../*/companion.json, next to this checkout
 #   laching/tools/bump-apps.sh 0.9.1 ../app-a ../app-b
+#   laching/tools/bump-apps.sh --no-wait 0.9.1 [../app-a ...]  # without asking NuGet.org
 #   laching/tools/bump-apps.sh --report [../app-a ...]  # each app's pin against the releases, and conform (companion.py apps)
 set -uo pipefail
 
 TOOLS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+usage() { sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+no_wait=""
 case "${1:-}" in
-  -h|--help) sed -n '2,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
-  "") sed -n '2,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+  -h|--help) usage; exit 0 ;;
   --report) shift; exec python3 "$TOOLS/companion.py" apps "$@" ;;
+  --no-wait) no_wait=1; shift ;;
 esac
+[ $# -gt 0 ] || { usage >&2; exit 2; }
 version="$1"
 shift
 
@@ -42,7 +47,7 @@ failed=0
 for app in "${apps[@]}"; do
   name="$(basename "$app")"
   echo "== $name"
-  if ! COMPANION_ROOT="$app" python3 "$TOOLS/companion.py" bump "$version"; then
+  if ! COMPANION_ROOT="$app" python3 "$TOOLS/companion.py" bump ${no_wait:+--no-wait} "$version"; then
     summary+=("bump failed    $name")
     failed=1
     continue

@@ -34,6 +34,12 @@ refused push therefore spends no tag. After the tag, `npm` publishes the landing
 through Trusted Publishing and makes the GitHub release: GitHub's notes from the merged pull requests' titles
 (*Breaking* first, `.github/release.yml`) and a *Packages* list of what shipped. If either fails, re-run that job.
 
+When packages were pushed, `publish` ends by waiting until NuGet.org lists every one of them at X.Y.Z
+(`tools/companion.py nuget-listed`, asking every 15 seconds for up to 15 minutes; it has taken 5 to 7), so **a green
+run means the apps can bump**. When that step gives up the run is red although the release is out (the tag, the
+push and the GitHub release are done): look on nuget.org at what holds the packages, bump no app meanwhile, and re-run
+the job once they are listed (the push skips what is already there).
+
 By hand, from a checkout with its tags (`git fetch --tags`; `plan` reads the labels with `gh`, or takes
 `--bump patch|minor|major`):
 
@@ -76,12 +82,19 @@ fails after its tag is spent, so fix `master` and release the next number.
 
 ## Move the apps
 
-Once NuGet lists the packages (when they shipped: nuget.org indexes them a few minutes after the run), from this
-checkout:
+Once the Release run is green, from this checkout:
 
 ```sh
 tools/bump-apps.sh X.Y.Z   # companion.py bump in every app next to this checkout, then its verify.sh --fast
 ```
+
+There is no waiting for NuGet by hand: the green run has seen NuGet.org list the packages, and `companion.py bump`
+asks it again before it writes anything, for the packages the app pins. While one is missing it says what it is waiting
+for; after 15 minutes, or at once when NuGet.org can't be asked (offline), it stops with the app untouched. Run it
+again later, or with `--no-wait` (`tools/bump-apps.sh --no-wait X.Y.Z`) to pin unasked. NuGet's http-cache needs
+clearing (`dotnet nuget locals http-cache --clear`, on the machine that restored) only where a restore failed before
+NuGet.org listed the version: after `--no-wait`, or after a `bump` run from an app's own submodule while that still
+holds a release older than this check (`bump-apps.sh` runs this checkout's `companion.py`, so it always asks).
 
 `companion.py bump` pins every `Laching.*` NuGet reference at the release's `LachingVersion` (X.Y.Z or earlier) and
 everything else at the tag. It commits nothing: read each app's diff, build what the release touched, and commit there

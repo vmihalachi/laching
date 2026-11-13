@@ -94,8 +94,9 @@ The steps, from the submodule to an Android app's Gradle build: [`docs/getting-s
 ## `companion.py`
 
 Loads and validates `companion.json`; `get`, `path`, `root`, `validate`, `env` (paths and path patterns for shell),
-`pins` (the Laching version everywhere it's pinned), `bump` (every pin to a release), `link`/`unlink` (build against a
-Laching checkout): below, [*Moving to a release, or trying one first*](#moving-to-a-release-or-trying-one-first);
+`pins` (the Laching version everywhere it's pinned), `bump` (every pin to a release), `nuget-listed` (the wait for
+NuGet.org that `bump` and the release run share), `link`/`unlink` (build against a Laching checkout): below,
+[*Moving to a release, or trying one first*](#moving-to-a-release-or-trying-one-first);
 `conform` and `apps` (`conform.py`): below, [*Staying on Laching's tools*](#staying-on-lachings-tools); `checks` (the
 app's own `verify.checks`, for `verify.sh`).
 
@@ -110,8 +111,21 @@ It refuses a tag origin doesn't have, and changes nothing when the app is alread
 ```sh
 python3 laching/tools/companion.py bump 0.9.1   # in an app
 tools/bump-apps.sh 0.9.1                         # in the Laching checkout: every app next to it, then each verify.sh --fast
+python3 laching/tools/companion.py bump --no-wait 0.9.1   # without asking NuGet.org (bump-apps.sh --no-wait 0.9.1 too)
 ```
 
+- **Before it writes anything, `bump` asks NuGet.org** whether it lists the `Laching.*` packages it is about to pin, at
+  the version it pins them to: NuGet.org lists a version some minutes after its push, and a restore before that fails,
+  then stays failed from that machine's http-cache (`dotnet nuget locals http-cache --clear`). While a package is
+  missing, `bump` says what it is waiting for and asks again every 15 seconds; after 15 minutes it stops. Until NuGet.org
+  lists them all, the app is untouched: the submodule isn't moved and no pin is written, so a wait that gave up, or
+  was stopped with Ctrl-C, leaves nothing to undo.
+  - Nothing is asked when no NuGet pin moves: an app without `Laching.*` packages, or one whose pins already name the
+    release's `LachingVersion`.
+  - Offline, or when NuGet.org can't be asked, `bump` stops at once with nothing written and names the way on:
+    **`--no-wait`** pins unasked and says so. Once NuGet.org has answered, a failed request is asked again.
+  - The release run makes the same check as its last step (`companion.py nuget-listed X.Y.Z ID…`, which needs no
+    `companion.json`), so a `bump` after a green run usually asks once and goes on.
 - `@laching/landing` ships only when `tools/landing` changed, so the landing page gets npm's newest version at or below
   the release. Its lockfile follows through the landing
   tool's `install` (`landing.tool`), unless the tool is missing or the landing page has uncommitted dependency changes,
@@ -215,7 +229,8 @@ releases.
 ## `bump-apps.sh`
 
 `companion.py bump` in every app checked out next to this Laching checkout (or the ones named), then each one's
-`verify.sh --fast`; commits nothing. `--report` prints `companion.py apps`: each app's pin against the releases, and
+`verify.sh --fast`; commits nothing. `--no-wait`, before the version, is passed on to each `bump`: no app waits for
+NuGet.org to list the packages. `--report` prints `companion.py apps`: each app's pin against the releases, and
 whether it conforms. `bump-apps.sh` runs the Laching checkout's `companion.py`, so it moves an app whose submodule
 predates `bump` (the example: [*Moving to a release, or trying one first*](#moving-to-a-release-or-trying-one-first)).
 
