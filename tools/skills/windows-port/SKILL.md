@@ -102,8 +102,8 @@ Traps that cost a day each:
 ## Conventions
 
 - User-facing text uses the Mac's catalog keys (`Loc.Get("…")`, `Loc.Plural(key, count, args)`, `{l:Loc Key='…'}` in
-  XAML). Strings only Windows uses go in with `l10n.py add`, then the `localization` skill, then
-  `l10n.py export-windows`. Never read or edit the generated `.resw` files.
+  XAML). Strings only Windows uses go in with `l10n.py add`, then the `localization` skill, whose `l10n.py apply`
+  rewrites the `.resw` files (`l10n.py export-windows` alone does that too). Never read or edit them.
 - Colors come from the app's palette resources (`{ThemeResource}`) or its `CompanionPalette`, never hard-coded.
 - When Swift behavior covered by vectors changes, regenerate them (`conformance` skill); failing `dotnet test` cases
   tell you what to port.
