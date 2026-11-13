@@ -336,18 +336,25 @@ class ConformTests(FixtureAppTestCase):
                 "done: set it to false")
         block = "on:\n  workflow_dispatch:\n    inputs:\n      hosted:\n        type: boolean\n"
         only_dispatched = (block, "on: workflow_dispatch\n", "on: [workflow_dispatch]  # by hand\n", "'on':\n- workflow_dispatch\n",
-                           '"on":\n    workflow_dispatch:\n')
+                           '"on":\n    workflow_dispatch:\n', "on: { workflow_dispatch: {} }\n",
+                           "on: {workflow_dispatch: {inputs: {hosted: {type: boolean, options: [a, b]}}}}\n")
         for on in only_dispatched:
             self.write(".github/workflows/extra.yml", DISPATCHED.replace(block, on))
             self.assertEqual(self.problems(), [said], on)
-        self.write(".github/workflows/extra.yml", DISPATCHED.replace(
-            "concurrency:\n  group: ${{ github.workflow }}-${{ github.ref }}\n  cancel-in-progress: true\n",
-            "concurrency: { group: extra, cancel-in-progress: True }\n"))
-        self.assertEqual(self.problems(), [said], "a flow mapping, and YAML's True")
+        concurrency = "concurrency:\n  group: ${{ github.workflow }}-${{ github.ref }}\n  cancel-in-progress: true\n"
+        for flow in ("concurrency: { group: extra, cancel-in-progress: True }\n",
+                     'concurrency: {group: "ci-${{ github.ref }}", cancel-in-progress: true}\n',
+                     "concurrency: {cancel-in-progress: true, group: extra}\n"):
+            self.write(".github/workflows/extra.yml", DISPATCHED.replace(concurrency, flow))
+            self.assertEqual(self.problems(), [said], f"a flow mapping, an expression in it, and YAML's True: {flow}")
+        for flow in ('concurrency: {group: "ci-${{ github.ref }}", cancel-in-progress: false}\n',
+                     "concurrency: {group: extra}  # , cancel-in-progress: true\n"):
+            self.write(".github/workflows/extra.yml", DISPATCHED.replace(concurrency, flow))
+            self.assertEqual(self.problems(), [], flow)
 
         # A push supersedes a run, so there the setting earns its place.
         pushed = (block + "  push:\n    branches: [main]\n", "on: [push, workflow_dispatch]\n", "on:\n  - workflow_dispatch\n  - pull_request\n",
-                  "on: push\n", "on: workflow_call\n")
+                  "on: push\n", "on: workflow_call\n", "on: {push: {branches: [main, 'v*']}, workflow_dispatch: {}}\n")
         for on in pushed:
             self.write(".github/workflows/extra.yml", DISPATCHED.replace(block, on))
             self.assertEqual(self.problems(), [], on)
@@ -356,7 +363,7 @@ class ConformTests(FixtureAppTestCase):
                          ("cancel-in-progress: true", "cancel-in-progress: ${{ !inputs.hosted }}"),
                          ("  cancel-in-progress: true", "  # cancel-in-progress: true"),
                          ("  cancel-in-progress: true\n", ""),
-                         (block, "on: { workflow_dispatch: {} }\n"), (block, "on: [workflow_dispatch,\n  push]\n")):
+                         (block, "on: {workflow_dispatch: {},\n  push: {}}\n"), (block, "on: [workflow_dispatch,\n  push]\n")):
             self.write(".github/workflows/extra.yml", DISPATCHED.replace(old, new))
             self.assertEqual(self.problems(), [], new)
 
@@ -370,6 +377,12 @@ class ConformTests(FixtureAppTestCase):
                          {"push", "workflow_dispatch"})
         self.assertEqual(conform.triggers("on: [ push, 'pull_request' ]\n"), {"push", "pull_request"})
         self.assertEqual(conform.triggers('on: "workflow_dispatch"  # by hand\n'), {"workflow_dispatch"})
+        self.assertEqual(conform.triggers("on: {workflow_dispatch: {inputs: {x: {type: string}}}}\n"), {"workflow_dispatch"},
+                         "only the mapping's own keys, not its values'")
+        self.assertEqual(conform.triggers("on: { push: { branches: [main] }, 'pull_request': null, workflow_dispatch }\n"),
+                         {"push", "pull_request", "workflow_dispatch"})
+        self.assertIsNone(conform.triggers("on: {}\n"))
+        self.assertIsNone(conform.triggers("on: {push: {branches: [main]},\n  workflow_dispatch: {}}\n"), "over lines")
         self.assertIsNone(conform.triggers("jobs:\n  a:\n    with:\n      on: workflow_dispatch\n"), "not the workflow's own")
         self.assertIsNone(conform.triggers("on:\n"))
 

@@ -77,8 +77,11 @@ WRAPPER_FORM = {
 }
 # setup-linux.sh's first step in a clone made without its submodules.
 BOOTSTRAP = re.compile(r"\bgit\b.*\bsubmodule\s+update\b.*--init")
-# A literal true, block or flow style: an expression (${{ !inputs.commit }}) decides per run and passes.
-CANCELS = re.compile(r"""^\s*(concurrency\s*:\s*\{[^}\n]*)?['"]?cancel-in-progress['"]?\s*:\s*['"]?true\b""", re.I | re.M)
+# A literal true, block or flow style: an expression (${{ !inputs.commit }}) decides per run and passes. In a flow
+# mapping the key follows its `{` or a comma, and an expression's braces before it (group: ci-${{ github.ref }}) don't
+# end the mapping; a comment after it isn't the setting.
+CANCELS = re.compile(r"""^\s*(concurrency\s*:\s*\{([^#\n]*?[{,])?\s*)?['"]?cancel-in-progress['"]?\s*:\s*['"]?true\b""",
+                     re.I | re.M)
 # Claude Code's settings, the app's wrapper of tools/hooks/hook.py that every agent's hooks call, and where Codex and
 # Copilot keep theirs.
 SETTINGS = ".claude/settings.json"
@@ -282,8 +285,9 @@ def shared_workflow_problems(config: companion.Config, files: list[str], allowed
 
 
 def triggers(code: str) -> set[str] | None:
-    """The events that start a workflow, from its top-level `on:` as a word, a one-line list, or a block of events (a
-    mapping or a list); None for a workflow without one, or with one written another way."""
+    """The events that start a workflow, from its top-level `on:` as a word, a one-line list, a one-line mapping (its
+    top-level keys: `{workflow_dispatch: {inputs: …}}` is one event), or a block of events (a mapping or a list); None
+    for a workflow without one, or with one written another way."""
     lines = code.splitlines()
     for at, line in enumerate(lines):
         if not (match := re.match(r"""(?:on|"on"|'on')\s*:(.*)""", line)):
@@ -291,6 +295,16 @@ def triggers(code: str) -> set[str] | None:
         value = re.sub(r"(^|\s)#.*", "", match.group(1)).strip()
         if value.startswith("["):
             return set(re.findall(r"[\w-]+", value)) if value.endswith("]") else None
+        if value.startswith("{"):
+            if not value.endswith("}"):
+                return None
+            # The nested mappings and lists go, innermost first, leaving the keys at the top: `a: , b`.
+            inner, nested = value[1:-1], re.compile(r"\{[^{}\[\]]*\}|\[[^{}\[\]]*\]")
+            while nested.search(inner):
+                inner = nested.sub("", inner)
+            keys = [re.fullmatch(r"""\s*['"]?([\w-]+)['"]?\s*(:.*)?""", item) for item in inner.split(",")
+                    if item.strip()]
+            return {key.group(1) for key in keys} if keys and all(keys) else None
         if value:
             return {value.strip("'\"")} if re.fullmatch(r"""['"]?[\w-]+['"]?""", value) else None
         events, indent = set(), None
