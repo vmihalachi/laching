@@ -72,7 +72,7 @@ linked from the Mac's folders.
   where untyped XAML casts fail. After changing text or a window's layout, `laching/tools/windows/check-layout.ps1
   [-Only settings]` shoots every language side by side and names the ones whose text doesn't fit.
 - **Package**: `laching/tools/windows/store-release.ps1 -Platforms x64 -NoBundle -AnyVersion` publishes the Store
-  package (Native AOT, unsigned), checks it is native (no `runtimeconfig.json`) and, with Developer Mode, installs it
+  package (Native AOT, unsigned), checks it is native (no `runtimeconfig.json`, no .NET runtime) and, with Developer Mode, installs it
   fresh, starts it and removes it (`smoke-package.ps1`; run that on the built `.msix` with `-Keep` for the hand checks a
   package needs: the startup task, a notification click after the app quit). The release itself: `release-windows`.
 - **Lint**: `python3 laching/tools/windows/check-winui.py [files]`; `verify.sh` runs it on the changed app files.

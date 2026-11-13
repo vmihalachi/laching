@@ -95,6 +95,9 @@ class Store:
 
 # --- the bundle ------------------------------------------------------------------------------------
 
+# What a Native AOT package never holds: the executable has the runtime and the assemblies compiled in.
+RUNTIME_FILES = {"coreclr.dll", "clrjit.dll", "hostfxr.dll", "hostpolicy.dll", "system.private.corelib.dll"}
+
 
 def bundle_info(path):
     """The bundle's version and packages, and why it can't go to the Store: a package that isn't a Native AOT build."""
@@ -120,6 +123,9 @@ def bundle_info(path):
                 problems.append(f"{name} has no {executable.group(1)}")
             if any(n.endswith(".runtimeconfig.json") for n in names):
                 problems.append(f"{name} expects an installed .NET runtime (not a Native AOT build)")
+            runtime = sorted((n for n in names if n.rsplit("/", 1)[-1].lower() in RUNTIME_FILES), key=str.lower)
+            if runtime:
+                problems.append(f"{name} carries the .NET runtime beside its native executable ({', '.join(runtime)})")
     return match.group(1), packages, problems
 
 

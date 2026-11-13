@@ -79,6 +79,12 @@
     build's <name>.pdb as the project's debug symbols: two files for one path in the package, which fails the publish
     (APPX1101). Drop the JIT build's; it describes an assembly the package doesn't hold. Neither goes into the .msix:
     the tooling keeps every .pdb for the symbol package.
+
+    The tooling's own cleanup takes the .NET runtime and the managed assemblies out of the package by the SDK's list of
+    files a native publish skips, _AssembliesToSkipPublish. The .NET 11 SDK splits that list in two under new names (the
+    runtime pack's files and the assemblies compiled into the executable), which MSIX tooling before 1.7.261102100
+    doesn't read: the package then carries coreclr, the JIT and every assembly beside the native app, some 240 files and
+    two and a half times the size, and still starts. Drop both lists here; with newer tooling they're gone already.
   -->
   <Target Name="CompanionRemoveRuntimeFilesFromNativePackage" Condition="'$(PublishAot)' == 'true'"
           AfterTargets="GetPackagingOutputs" BeforeTargets="_ComputeAppxPackagePayload">
@@ -87,6 +93,8 @@
                         Condition="'%(PackagingOutputs.TargetPath)' == '$(ProjectRuntimeConfigFileName)' or '%(PackagingOutputs.TargetPath)' == '$(ProjectDepsFileName)'" />
       <PackagingOutputs Remove="@(PackagingOutputs)"
                         Condition="'%(PackagingOutputs.OutputGroup)' == 'DebugSymbolsProjectOutputGroup'" />
+      <PackagingOutputs Remove="@(_RuntimePackFilesToSkipPublish)" />
+      <PackagingOutputs Remove="@(_IlcManagedInputAssemblies)" />
     </ItemGroup>
   </Target>
 </Project>

@@ -49,7 +49,7 @@ laching/tools/windows/store-release.ps1 [-SideBySide] [-Screenshots C:\shots -La
 ```
 
 Per platform it publishes the unsigned Native AOT package (the Store signs), checks it is native (its executable, no
-`runtimeconfig.json`), installs it fresh like a customer's and checks it starts; then it bundles both into
+`runtimeconfig.json`, no .NET runtime beside it), installs it fresh like a customer's and checks it starts; then it bundles both into
 `<bundle>_<version>_x64_arm64.msixbundle` under `build/store-release/<version>` and opens the folder. It puts the Visual
 Studio Installer folder on `PATH` when `vswhere` isn't there (an ARM64 PC needs it), and refuses without Developer Mode
 (`-NoSmoke` skips the install check: only for a quick look, never for the packages you upload).

@@ -9,8 +9,10 @@ Usage: laching/tools/windows/smoke-package.ps1 -Package <path to .msix> [-Second
        laching/tools/windows/smoke-package.ps1 -Package <.msix published with -p:ScreenshotMode=true> -Screenshots <folder>
                                                [-Language fr] [-ScreenshotNames all] [-SideBySide]
 
--CheckOnly installs nothing: it fails unless the package holds its executable and no runtimeconfig.json (a Native AOT
-package needs no .NET runtime; a runtimeconfig.json means the packaging took the JIT build's files).
+-CheckOnly installs nothing: it fails unless the package holds its executable, no runtimeconfig.json and no .NET
+runtime (a Native AOT package needs none; a runtimeconfig.json means the packaging took the JIT build's files, and
+coreclr.dll or System.Private.CoreLib.dll beside the executable that it packed the runtime and the assemblies the
+executable already holds, which starts fine at two and a half times the size).
 Plain mode launches the app from Start, waits up to -Seconds for its window (onboarding, on a fresh install), then
 -Hold seconds more, and fails unless it is still running with that window open and Windows logged no crash. Needs Developer Mode (the package is unsigned). Installs the Windows App
 Runtime packages found next to the .msix (Dependencies\<arch>) when they're missing. Removes the test install afterwards
@@ -67,6 +69,8 @@ if ($CheckOnly) {
     try { $names = @($zip.Entries | ForEach-Object { [Uri]::UnescapeDataString($_.FullName) }) } finally { $zip.Dispose() }
     if ($names -like '*.runtimeconfig.json') { throw "$(Split-Path $Package -Leaf) expects an installed .NET runtime (it holds a runtimeconfig.json)." }
     if ($names -notcontains $exeName) { throw "$(Split-Path $Package -Leaf) has no $exeName." }
+    $runtime = @($names | Where-Object { (Split-Path $_ -Leaf) -in 'coreclr.dll', 'clrjit.dll', 'hostfxr.dll', 'hostpolicy.dll', 'System.Private.CoreLib.dll' })
+    if ($runtime) { throw "$(Split-Path $Package -Leaf) carries the .NET runtime beside its native executable ($($runtime -join ', ')): the packaging didn't leave out what the executable already holds." }
     "$(Split-Path $Package -Leaf): native, $($names.Count) files, $([math]::Round((Get-Item $Package).Length / 1MB, 1)) MB"
     return
 }

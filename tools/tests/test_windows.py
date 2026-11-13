@@ -240,6 +240,14 @@ class TargetsTests(unittest.TestCase):
         self.assertIn("CompanionRemoveRuntimeFilesFromNativePackage", targets)
         self.assertIn("CompanionKeepVoiceOutOfPri", targets)
 
+    def test_a_native_package_leaves_out_what_the_executable_holds(self):
+        # The .NET 11 SDK's two lists (the runtime pack's files, the assemblies compiled in), which MSIX tooling before
+        # 1.7.261102100 doesn't read.
+        project = ElementTree.parse(WINDOWS / "companion.targets").getroot()
+        target = next(t for t in project.iter("Target") if t.get("Name") == "CompanionRemoveRuntimeFilesFromNativePackage")
+        removed = {item.get("Remove") for item in target.iter("PackagingOutputs")}
+        self.assertLessEqual({"@(_RuntimePackFilesToSkipPublish)", "@(_IlcManagedInputAssemblies)"}, removed)
+
 
 class DotnetSdkTests(unittest.TestCase):
     # The check exists once: every workflow that sets up .NET on a GitHub-hosted Windows runner asks the script first,
@@ -572,6 +580,10 @@ class PowerShellTests(unittest.TestCase):
             done = check("Fixture.exe", "Fixture.runtimeconfig.json")
             self.assertNotEqual(done.returncode, 0)
             self.assertIn("runtimeconfig.json", done.stdout + done.stderr)
+            done = check("Fixture.exe", "coreclr.dll", "System.Private.CoreLib.dll", "Fixture.Core.dll")
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn("carries the .NET runtime", done.stdout + done.stderr)
+            self.assertIn("coreclr.dll, System.Private.CoreLib.dll", done.stdout + done.stderr)
             done = check("Other.exe")
             self.assertNotEqual(done.returncode, 0)
             self.assertIn("has no Fixture.exe", done.stdout + done.stderr)

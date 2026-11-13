@@ -81,6 +81,13 @@ class BundleTests(unittest.TestCase):
         self.assertTrue(any("no Fixture.exe" in p for p in problems), problems)
         self.assertTrue(any("runtime" in p for p in problems), problems)
 
+    def test_refuses_a_native_package_that_carries_the_runtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, problems = push.bundle_info(make_bundle(tmp, files=("Fixture.exe", "coreclr.dll", "System.Private.CoreLib.dll")))
+        self.assertEqual(len(problems), 2, problems)
+        self.assertTrue(all("carries the .NET runtime" in p and "coreclr.dll, System.Private.CoreLib.dll" in p for p in problems),
+                        problems)
+
 
 class StoreTestCase(FixtureAppTestCase):
     def setUp(self):
