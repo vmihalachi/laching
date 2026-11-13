@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for tools/l10n.py and tools/phrases.py over the fixture app (tools/tests/fixture-app): gaps, work files,
-apply, the Windows (.resw) and Linux (.po) exports, manual keys, `--since` over a landing page in its own repository,
-language-scoped phrases and the phrase sync."""
+apply and the exports it regenerates, the Windows (.resw), Linux (.po) and Android (strings.xml) exports, manual keys,
+`--since` over a landing page in its own repository, language-scoped phrases and the phrase sync."""
 
 from __future__ import annotations
 
@@ -181,7 +181,8 @@ class GapTests(L10nTestCase):
 
     def test_export_and_apply(self):
         out = self.root / "work"
-        quiet(l10n.cmd_export, self.args(out=str(out)))
+        listed = quiet(l10n.cmd_export, self.args(out=str(out)))[1]
+        self.assertEqual(listed.splitlines(), ["work/de.json (3)", "3 distinct strings in 1 file"])
         self.assertFalse((out / "it.json").exists(), "nothing to translate in Italian")
         work = json.loads((out / "de.json").read_text("utf8"))
         self.assertEqual(list(work["app"]), ["Hello. This is how I sound.", "Shh", "phrase.joke.1"])
@@ -194,9 +195,27 @@ class GapTests(L10nTestCase):
         result, text = quiet(l10n.cmd_apply, SimpleNamespace(files=[str(out / "de.json")]))
         self.assertEqual(result, 1, "a specifier the English lacks is rejected")
         self.assertIn("applied 1", text)
+        self.assertIn("regenerated 3 of 3 exports in windows/Fixture.App/Strings", text, "what went in is exported")
         self.assertEqual(
             l10n.collect()["de"]["app"], {"Hello. This is how I sound.": ["missing"], "phrase.joke.1": ["missing"]}
         )
+
+    def test_export_ends_with_the_batch_size(self):
+        """The distinct strings across the files: what the localization skill's threshold counts."""
+        catalog = l10n.load_catalog(l10n.CATALOGS["app"])
+        del catalog["strings"]["Shh"]["localizations"]["it"]
+        l10n.dump_catalog(l10n.CATALOGS["app"], catalog)
+        out = str(self.root / "work")
+        listed = quiet(l10n.cmd_export, self.args(out=out))[1]
+        self.assertEqual(
+            listed.splitlines(), ["work/de.json (3)", "work/it.json (1)", "3 distinct strings in 2 files"],
+            "a string two languages lack counts once",
+        )
+        listed = quiet(l10n.cmd_export, self.args(out=out, lang=["it"]))[1]
+        self.assertEqual(listed.splitlines(), ["work/it.json (1)", "1 distinct string in 1 file"])
+        (self.root / "work" / "it.json").write_text(json.dumps({"lang": "it", "app": {"Shh": {"value": "Zitto"}}}), "utf8")
+        quiet(l10n.cmd_apply, SimpleNamespace(files=[str(self.root / "work" / "it.json")]))
+        self.assertEqual(quiet(l10n.cmd_export, self.args(out=out, lang=["it"]))[1], "nothing to translate\n")
 
     def test_glossary_sources_add_terms_from_the_code(self):
         (self.root / "macos/Fixture/Items.swift").write_text(
@@ -247,6 +266,131 @@ class GapTests(L10nTestCase):
         lines = entry["localizations"]["de"]["substitutions"]["lines"]
         self.assertEqual((lines["argNum"], lines["formatSpecifier"]), (1, "lld"))
         self.assertEqual(lines["variations"]["plural"]["other"]["stringUnit"]["value"], "%arg Zeilen")
+
+
+class ApplyExportsTests(L10nTestCase):
+    """`apply` leaves the ports' exports in line with the catalog it wrote, so `check` passes with no export step."""
+
+    GERMAN = {
+        "Hello. This is how I sound.": "Hallo. So klinge ich.",
+        "Shh": "Pst",
+        "phrase.joke.1": "Warum hat sich der Clown hingesetzt?",
+    }
+    STALE = ("error: the catalog was written, but the exports made from it are stale: fix that, then run "
+             "`export-windows` / `export-linux` / `export-android`")
+
+    def reconfigure(self, change) -> None:
+        """Loads the fixture's companion.json after `change(data)`."""
+        path = self.root / "companion.json"
+        data = json.loads(path.read_text("utf8"))
+        change(data)
+        path.write_text(json.dumps(data), "utf8")
+        l10n.configure(companion.load())
+
+    def translated(self) -> Path:
+        """German's work file with every gap filled."""
+        out = self.root / "work"
+        quiet(l10n.cmd_export, self.args(out=str(out)))
+        work = json.loads((out / "de.json").read_text("utf8"))
+        for key, item in work["app"].items():
+            item["value"] = self.GERMAN[key]
+        (out / "de.json").write_text(json.dumps(work, ensure_ascii=False), "utf8")
+        return out / "de.json"
+
+    def apply(self, file: Path) -> tuple[int, str, str]:
+        """`apply` in this process: its result, what it printed and what it said went wrong."""
+        err = io.StringIO()
+        with redirect_stderr(err):
+            result, out = quiet(l10n.cmd_apply, SimpleNamespace(files=[str(file)]))
+        return result, out, err.getvalue()
+
+    def run_tool(self, *args: str, **streams) -> subprocess.CompletedProcess:
+        """`l10n.py` as an app runs it, from the fixture's root."""
+        streams = streams or {"capture_output": True}
+        return subprocess.run([sys.executable, str(TOOLS / "l10n.py"), *args], cwd=self.root, encoding="utf8", **streams)
+
+    def test_check_passes_straight_after_apply_with_windows_and_android_sides(self):
+        def sides(data):
+            data["android"] = {"dir": "android", "strings": "android/app/src/main/res"}
+            data["l10n"]["linuxPo"] = "linux/po"  # named, but the app has no Linux port
+
+        self.reconfigure(sides)
+        (self.root / "android").mkdir()
+        file = self.translated()
+        self.assertEqual(len(l10n.stale_exports()), 7, "three .resw, three strings.xml and locales_config.xml")
+        applied = self.run_tool("apply", str(file.parent / "*.json"))
+        self.assertEqual((applied.returncode, applied.stderr), (0, ""))
+        self.assertEqual(applied.stdout.splitlines(), [
+            "applied 3, skipped 0 empty, rejected 0",
+            "regenerated 3 of 3 exports in windows/Fixture.App/Strings",
+            "regenerated 4 of 4 exports in android/app/src/main/res",
+        ])
+        checked = self.run_tool("check")
+        self.assertEqual((checked.returncode, checked.stdout), (0, "de: ok\nit: ok\n"), checked.stderr)
+        self.assertIn("<value>Pst</value>", (self.root / "windows/Fixture.App/Strings/de/Resources.resw").read_text("utf8"))
+        res = self.root / "android/app/src/main/res"
+        self.assertIn(">Pst</string>", (res / "values-de" / "strings.xml").read_text("utf8"))
+        self.assertTrue((res / "xml" / "locales_config.xml").is_file())
+        self.assertFalse((self.root / "linux").exists(), "a port without a folder gets no files: check asks for none")
+        again = self.run_tool("apply", str(file))
+        self.assertEqual(again.stdout, "applied 3, skipped 0 empty, rejected 0\n", "nothing differs, nothing is rewritten")
+
+    def test_check_passes_straight_after_apply_without_ports(self):
+        self.reconfigure(lambda data: data.pop("windows"))
+        self.assertEqual(l10n.export_ports(), [])
+        self.assertEqual(self.apply(self.translated()), (0, "applied 3, skipped 0 empty, rejected 0\n", ""))
+        self.assertEqual(quiet(l10n.cmd_check, self.args(verbose=False)), (0, "de: ok\nit: ok\n"))
+        self.assertFalse((self.root / "windows" / "Fixture.App").exists(), "nothing but the catalog is written")
+
+    def test_a_string_no_port_can_take_fails_apply_after_the_catalog_is_written(self):
+        def unit(value):
+            return {"stringUnit": {"state": "translated", "value": value}}
+
+        def count(number, one, other):
+            return {"argNum": number, "formatSpecifier": "lld", "variations": {"plural": {"one": unit(one), "other": unit(other)}}}
+
+        file = self.translated()
+        catalog = l10n.load_catalog(l10n.CATALOGS["app"])
+        catalog["strings"]["%lld lines, %lld jokes"] = {"localizations": {"en": {
+            **unit("%#@lines@, %#@jokes@"),
+            "substitutions": {"lines": count(1, "%arg line", "%arg lines"), "jokes": count(2, "%arg joke", "%arg jokes")},
+        }}}
+        l10n.dump_catalog(l10n.CATALOGS["app"], catalog)
+        # Both streams in one pipe, as a terminal or an agent reads them: the summary, the reason, then where it leaves things.
+        done = self.run_tool("apply", str(file), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self.assertEqual(done.stdout.splitlines(), [
+            "applied 3, skipped 0 empty, rejected 0",
+            "error: '%lld lines, %lld jokes' (en): only one plural substitution per string is supported",
+            self.STALE,
+        ])
+        self.assertEqual(done.returncode, 2)
+        strings = l10n.load_catalog(l10n.CATALOGS["app"])["strings"]
+        self.assertEqual(strings["Shh"]["localizations"]["de"]["stringUnit"]["value"], "Pst")
+        self.assertFalse((self.root / "windows" / "Fixture.App").exists(), "every export is made before one is written")
+
+    def test_an_export_that_cant_be_written_fails_apply_with_the_reason(self):
+        l10n.WINDOWS_STRINGS.mkdir(parents=True)
+        (l10n.WINDOWS_STRINGS / "de").write_text("", "utf8")  # a file where German's folder goes
+        file = self.translated()
+        result, out, err = self.apply(file)
+        self.assertEqual((result, out), (2, "applied 3, skipped 0 empty, rejected 0\n"))
+        reason, stale = err.splitlines()
+        self.assertTrue(reason.startswith("error: [") and "Strings" in reason, reason)
+        self.assertEqual(stale, self.STALE)
+        self.assertEqual(l10n.collect()["de"]["app"], {}, "the translations are in the catalog")
+        file.write_text(json.dumps({"lang": "de", "app": {"Shh": {"value": ""}}}), "utf8")
+        result, out, err = self.apply(file)
+        self.assertEqual((result, out), (2, "applied 0, skipped 1 empty, rejected 0\n"))
+        self.assertIn("error: the catalog was left as it was, but the exports made from it are stale", err)
+
+    def test_an_export_that_breaks_says_the_catalog_was_written_and_keeps_its_traceback(self):
+        file = self.translated()
+        err = io.StringIO()
+        with mock.patch.object(l10n, "windows_files", side_effect=KeyError("other")), redirect_stderr(err):
+            with self.assertRaises(KeyError):
+                quiet(l10n.cmd_apply, SimpleNamespace(files=[str(file)]))
+        self.assertEqual(err.getvalue().splitlines(), [self.STALE])
+        self.assertEqual(l10n.collect()["de"]["app"], {}, "the translations are in the catalog")
 
 
 class ExportTests(L10nTestCase):
