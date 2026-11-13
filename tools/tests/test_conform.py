@@ -1,10 +1,12 @@
 """tools/conform.py over the fixture app: `companion.py conform` (wrappers, not copies, of Laching's tools; the reusable
-Windows workflows at the pinned release; skills linked into laching/tools/skills; store.microsoft as the schema wants
-it) and `companion.py apps` (the apps' pins against the releases, and a link to a checkout)."""
+Windows workflows at the pinned release; no dispatch-only workflow that cancels its own runs; Laching's hooks in
+.claude/settings.json, called through the app's wrapper; skills linked into laching/tools/skills; store.microsoft as the
+schema wants it) and `companion.py apps` (the apps' pins against the releases, and a link to a checkout)."""
 
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -25,6 +27,54 @@ try { & "$PSScriptRoot/../../laching/tools/windows/smoke-package.ps1" @args } fi
 exit $LASTEXITCODE
 """
 TEMPLATES = "see the templates in laching/tools/README.md, *Staying on Laching's tools*"
+# An app's .claude/settings.json: Laching's hooks, and the permissions that are the app's own.
+SETTINGS = """{
+  "permissions": { "allow": ["Bash(python3 laching/tools/hooks/hook.py:*)"], "deny": ["Read(./voices/**)"] },
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "startup", "hooks": [{ "type": "command", "timeout": 600,
+          "command": "[ \\"$CLAUDE_CODE_REMOTE\\" != true ] || \\"$CLAUDE_PROJECT_DIR/scripts/setup-linux.sh\\"" }] },
+      { "matcher": "compact|resume", "hooks": [{ "type": "command", "timeout": 10,
+          "command": "python3 \\"$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py\\" resume" }] }
+    ],
+    "PreToolUse": [{ "matcher": "Read|Edit|MultiEdit|Write|NotebookEdit|Grep|Bash", "hooks": [
+      { "type": "command", "command": "python3 \\"$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py\\" pre", "timeout": 10 }] }],
+    "PostToolUse": [{ "matcher": "Edit|MultiEdit|Write|NotebookEdit|Bash", "hooks": [
+      { "type": "command", "command": "python3 \\"$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py\\" post", "timeout": 60 }] }],
+    "Stop": [{ "hooks": [
+      { "type": "command", "command": "python3 \\"$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py\\" stop", "timeout": 180 }] }]
+  }
+}
+"""
+HOOK_WRAPPER = """#!/usr/bin/env python3
+# Laching's agent hook for this app, which every agent's hooks call.
+import os, subprocess, sys
+root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+os.environ["COMPANION_ROOT"] = root
+sys.exit(subprocess.call([sys.executable, os.path.join(root, "laching", "tools", "hooks", "hook.py"), *sys.argv[1:]]))
+"""
+SETUP_LINUX = """#!/bin/sh
+export COMPANION_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+[ -f "$COMPANION_ROOT/laching/tools/setup-linux.sh" ] || git -C "$COMPANION_ROOT" submodule update --init laching
+exec "$COMPANION_ROOT/laching/tools/setup-linux.sh" "$@"
+"""
+DISPATCHED = """name: Extra
+on:
+  workflow_dispatch:
+    inputs:
+      hosted:
+        type: boolean
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  extra:
+    runs-on: ubuntu-latest
+    steps:
+      - run: "true"
+"""
 
 
 class ConformTests(FixtureAppTestCase):
@@ -279,6 +329,170 @@ class ConformTests(FixtureAppTestCase):
         self.edit_config(lambda data: data.update(conform={"allow": [{"path": ".github/workflows/core.yml",
                                                                       "why": "a core of the app's own"}]}))
         self.assertEqual(self.problems(), [])
+
+    def test_a_workflow_only_a_dispatch_starts_does_not_cancel_its_runs(self):
+        said = (".github/workflows/extra.yml: runs only on workflow_dispatch and sets cancel-in-progress: true: no push "
+                "supersedes a run there, so a second dispatch on the same branch would only cancel a run that is nearly "
+                "done: set it to false")
+        block = "on:\n  workflow_dispatch:\n    inputs:\n      hosted:\n        type: boolean\n"
+        only_dispatched = (block, "on: workflow_dispatch\n", "on: [workflow_dispatch]  # by hand\n", "'on':\n- workflow_dispatch\n",
+                           '"on":\n    workflow_dispatch:\n')
+        for on in only_dispatched:
+            self.write(".github/workflows/extra.yml", DISPATCHED.replace(block, on))
+            self.assertEqual(self.problems(), [said], on)
+        self.write(".github/workflows/extra.yml", DISPATCHED.replace(
+            "concurrency:\n  group: ${{ github.workflow }}-${{ github.ref }}\n  cancel-in-progress: true\n",
+            "concurrency: { group: extra, cancel-in-progress: True }\n"))
+        self.assertEqual(self.problems(), [said], "a flow mapping, and YAML's True")
+
+        # A push supersedes a run, so there the setting earns its place.
+        pushed = (block + "  push:\n    branches: [main]\n", "on: [push, workflow_dispatch]\n", "on:\n  - workflow_dispatch\n  - pull_request\n",
+                  "on: push\n", "on: workflow_call\n")
+        for on in pushed:
+            self.write(".github/workflows/extra.yml", DISPATCHED.replace(block, on))
+            self.assertEqual(self.problems(), [], on)
+        # Not cancelling, an expression that decides per run, a comment, and a trigger written a way this doesn't read.
+        for old, new in (("cancel-in-progress: true", "cancel-in-progress: false"),
+                         ("cancel-in-progress: true", "cancel-in-progress: ${{ !inputs.hosted }}"),
+                         ("  cancel-in-progress: true", "  # cancel-in-progress: true"),
+                         ("  cancel-in-progress: true\n", ""),
+                         (block, "on: { workflow_dispatch: {} }\n"), (block, "on: [workflow_dispatch,\n  push]\n")):
+            self.write(".github/workflows/extra.yml", DISPATCHED.replace(old, new))
+            self.assertEqual(self.problems(), [], new)
+
+        self.write(".github/workflows/extra.yml", DISPATCHED)
+        self.edit_config(lambda data: data.update(conform={"allow": [{"path": ".github/workflows/extra.yml",
+                                                                      "why": "one run at a time, the newest"}]}))
+        self.assertEqual(self.problems(), [])
+
+    def test_triggers(self):
+        self.assertEqual(conform.triggers("name: x\non:\n  push:\n    branches: [main]\n  workflow_dispatch:\njobs: {}\n"),
+                         {"push", "workflow_dispatch"})
+        self.assertEqual(conform.triggers("on: [ push, 'pull_request' ]\n"), {"push", "pull_request"})
+        self.assertEqual(conform.triggers('on: "workflow_dispatch"  # by hand\n'), {"workflow_dispatch"})
+        self.assertIsNone(conform.triggers("jobs:\n  a:\n    with:\n      on: workflow_dispatch\n"), "not the workflow's own")
+        self.assertIsNone(conform.triggers("on:\n"))
+
+    def settings(self, change=None, text: str = SETTINGS) -> None:
+        """The app's .claude/settings.json, after `change` to its hooks block."""
+        data = json.loads(text)
+        if change:
+            change(data["hooks"])
+        self.write(".claude/settings.json", json.dumps(data, indent=2) + "\n")
+
+    def test_the_hooks_block_is_lachings(self):
+        self.write(".claude/hooks/hook.py", HOOK_WRAPPER)
+        self.write("scripts/setup-linux.sh", SETUP_LINUX)
+        self.settings()
+        self.assertEqual(self.problems(), [], "Laching's hooks, and permissions of the app's own")
+        # The block the README shows is the one conform asks for.
+        shown = re.search(r'```json\n( *"hooks": \{.*?)\n *```', (TOOLS / "README.md").read_text("utf-8"), re.S)
+        self.write(".claude/settings.json", "{" + shown.group(1) + "}\n")
+        self.assertEqual(len(conform.hook_calls(json.loads("{" + shown.group(1) + "}"))), len(conform.HOOKS) + 1)
+        self.assertEqual(self.problems(), [])
+        self.settings()
+
+        # Hooks, events and keys of the app's own are the app's.
+        def own(hooks):
+            hooks["PreToolUse"].insert(0, {"matcher": "Bash", "hooks": [{"type": "command", "command": "scripts/own.sh"}]})
+            hooks["PreToolUse"][1]["hooks"].append({"type": "command", "command": "scripts/also.sh", "timeout": 5})
+            hooks["Stop"][0]["hooks"][0]["statusMessage"] = "Checking"
+            hooks["Notification"] = [{"hooks": [{"type": "command", "command": "scripts/notify.sh"}]}]
+        self.settings(own)
+        self.assertEqual(self.problems(), [])
+
+        pre = (".claude/settings.json: hooks.PreToolUse lacks Laching's hook (the matcher, the command and the timeout as "
+               'here): {"matcher": "Read|Edit|MultiEdit|Write|NotebookEdit|Grep|Bash", "hooks": [{"type": "command", '
+               '"command": "python3 \\"$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py\\" pre", "timeout": 10}]}')
+        self.settings(lambda hooks: hooks.pop("PreToolUse"))
+        self.assertEqual(self.problems(), [pre])
+        self.assertEqual(json.loads(pre.split("here): ")[1])["hooks"][0]["timeout"], 10, "the line holds what to paste")
+        for change in (lambda hooks: hooks["PreToolUse"][0].update(matcher="Edit|Write"),
+                       lambda hooks: hooks["PreToolUse"][0]["hooks"][0].update(timeout=30),
+                       lambda hooks: hooks["PreToolUse"][0]["hooks"][0].update(type="prompt"),
+                       lambda hooks: hooks["PreToolUse"][0]["hooks"][0].update(command="python3 .claude/hooks/hook.py pre"),
+                       lambda hooks: hooks.update(PreToolUse={"matcher": "Bash"}),
+                       lambda hooks: hooks.update(PreToolUse=["hook.py", {"matcher": ["Bash"], "hooks": "hook.py"}])):
+            self.settings(change)
+            self.assertEqual(self.problems(), [pre])
+
+        def other_events(hooks):
+            hooks["Stop"][0]["matcher"] = "*"
+            hooks["SessionStart"] = hooks["SessionStart"][1:]
+            hooks["PostToolUse"][0]["hooks"][0]["timeout"] = 600
+        self.settings(other_events)
+        found = self.problems()
+        self.assertEqual(len(found), 3, found)
+        self.assertEqual([p.split(" lacks ")[0] for p in found], [f".claude/settings.json: hooks.{event}" for event in (
+            "PostToolUse", "Stop", "SessionStart")])
+        self.assertIn('{"matcher": "startup", "hooks": [{"type": "command", "command": "[ \\"$CLAUDE_CODE_REMOTE\\" != true ] '
+                      '|| \\"$CLAUDE_PROJECT_DIR/scripts/setup-linux.sh\\"", "timeout": 600}]}', found[2])
+        self.assertIn('hooks.Stop lacks Laching\'s hook (the matcher, the command and the timeout as here): {"hooks": [{"type": '
+                      '"command", "command": "python3 \\"$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py\\" stop", "timeout": 180}]}',
+                      found[1], "Stop has no matcher")
+        # The cloud session's setup is asked of an app that has one.
+        (self.root / "scripts/setup-linux.sh").unlink()
+        self.assertEqual(len(self.problems()), 2)
+
+        # A settings.json without hooks lacks them all; one that isn't JSON says so; none at all has nothing to check.
+        self.write(".claude/settings.json", '{"permissions": {"allow": []}}\n')
+        self.assertEqual([p.split(" lacks ")[0].split(".")[-1] for p in self.problems()],
+                         ["SessionStart", "PreToolUse", "PostToolUse", "Stop"])
+        self.write(".claude/settings.json", '{"hooks": {\n')
+        found = self.problems()
+        self.assertEqual(len(found), 1, found)
+        self.assertRegex(found[0], r"^\.claude/settings\.json: not JSON \(.+\): its hooks block can't be checked$")
+        self.edit_config(lambda data: data.update(conform={"allow": [{"path": ".claude/settings.json",
+                                                                      "why": "hooks of the app's own"}]}))
+        self.assertEqual(self.problems(), [])
+        self.edit_config(lambda data: data.pop("conform"))
+        (self.root / ".claude/settings.json").unlink()
+        (self.root / ".claude/hooks/hook.py").unlink()
+        self.assertEqual(self.problems(), [])
+
+    def test_every_agents_hooks_call_the_apps_wrapper(self):
+        direct = SETTINGS.replace("$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py", "$CLAUDE_PROJECT_DIR/laching/tools/hooks/hook.py")
+        said = ("calls laching/tools/hooks/hook.py itself ({} hook(s)): call the app's wrapper, .claude/hooks/hook.py, which "
+                "hands the hook the app's root (COMPANION_ROOT), as every agent's hooks do")
+        wrapper = (".claude/hooks/hook.py: missing: the wrapper of laching/tools/hooks/hook.py the agents' hooks call (the "
+                   "Python template in laching/tools/README.md, *Staying on Laching's tools*, with ../.. for the app's root)")
+        self.settings(text=direct)
+        self.assertEqual(self.problems(), [f".claude/settings.json: {said.format(4)}", wrapper],
+                         "one line for the form, none for each hook the block then lacks; a permission isn't a call")
+        self.settings()
+        self.assertEqual(self.problems(), [wrapper])
+        self.write(".claude/hooks/hook.py", HOOK_WRAPPER)
+        self.assertEqual(self.problems(), [])
+
+        # Codex's and Copilot's hooks call the same wrapper.
+        codex = ("# The guardrails Claude Code runs: .claude/hooks/hook.py, a wrapper of laching/tools/hooks/hook.py.\n"
+                 "[[hooks.PreToolUse.hooks]]\ntype = \"command\"\n"
+                 "command = 'python3 \"$(git rev-parse --show-toplevel)/{}\" pre'\ntimeout = 10\n")
+        copilot = '{{"version": 1, "hooks": {{"PreToolUse": [{{"type": "command", "bash": "python3 {} pre"}}],\n' \
+                  ' "PostToolUse": [{{"type": "command", "powershell": "python3 {} post"}}]}}}}\n'
+        self.write(".codex/config.toml", codex.format(".claude/hooks/hook.py"))
+        self.write(".github/hooks/fixture.json", copilot.format(".claude/hooks/hook.py", ".claude\\\\hooks\\\\hook.py"))
+        self.assertEqual(self.problems(), [], "a comment that names Laching's hook isn't a call")
+        self.write(".codex/config.toml", codex.format("laching/tools/hooks/hook.py"))
+        self.write(".github/hooks/fixture.json", copilot.format("laching/tools/hooks/hook.py",
+                                                                "laching\\\\tools\\\\hooks\\\\hook.py"))
+        self.assertEqual(sorted(self.problems()), [f".codex/config.toml: {said.format(1)}",
+                                                   f".github/hooks/fixture.json: {said.format(2)}"])
+        self.write(".github/hooks/fixture.json", copilot.format(*["laching/tools/hooks/hook.py"] * 2).replace("\n", ""))
+        self.assertIn(f".github/hooks/fixture.json: {said.format(2)}", self.problems(), "each call on one line counts")
+        self.write(".github/hooks/fixture.json", copilot.format("laching/tools/hooks/hook.py",
+                                                                "laching\\\\tools\\\\hooks\\\\hook.py"))
+        self.edit_config(lambda data: data.update(conform={"allow": [
+            {"path": ".codex/config.toml", "why": "tried without the wrapper"},
+            {"path": ".github/hooks/fixture.json", "why": "the same"}]}))
+        self.assertEqual(self.problems(), [])
+
+        # Wherever the app keeps Laching.
+        self.edit_config(lambda data: (data.pop("conform"), data["laching"].update(path="vendor/laching")))
+        self.write(".claude/hooks/hook.py", HOOK_WRAPPER.replace('"laching"', '"vendor", "laching"'))
+        (self.root / ".github/hooks/fixture.json").unlink()
+        self.write(".codex/config.toml", codex.format("vendor/laching/tools/hooks/hook.py"))
+        self.assertEqual(self.problems(), [".codex/config.toml: " + said.format(1).replace("laching/", "vendor/laching/")])
 
     def test_skills_link_into_laching(self):
         git(self.root, "init", "-q")

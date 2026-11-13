@@ -201,6 +201,37 @@ fail when the app drifts from the tools (each rule: `conform.py`'s docstring):
   packages, and an app with `mac` calls `macos-app.yml`. Every call of a Laching reusable workflow must name the pinned
   release. An app's `core.yml` calls `core-linux.yml`, its `regenerate-vectors.yml` calls `vectors-linux.yml`, and its
   `copilot-setup-steps.yml` runs `scripts/setup-linux.sh` ([Linux checks](#linux-checks)).
+- **A workflow only a dispatch starts doesn't cancel its runs.** With `workflow_dispatch` as its only trigger, no push
+  supersedes a run, so `cancel-in-progress: true` would only let a second dispatch on the same branch cancel a run
+  that is nearly done: it is `false` there. A workflow a push or a pull request also starts keeps its own choice, as
+  does one that decides per run with an expression.
+- **The agents' hooks.** The hooks block of the app's `.claude/settings.json` holds Laching's hooks, each with the
+  matcher, the command and the timeout below; the app's own hooks and events, its permissions and every other key are
+  the app's. A change to the block is made once, in `conform.py` (`HOOKS`), and reaches an app with its bump, where
+  `conform` asks for it:
+
+  ```json
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "startup", "hooks": [
+        { "type": "command", "command": "[ \"$CLAUDE_CODE_REMOTE\" != true ] || \"$CLAUDE_PROJECT_DIR/scripts/setup-linux.sh\"", "timeout": 600 }] },
+      { "matcher": "compact|resume", "hooks": [
+        { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py\" resume", "timeout": 10 }] }],
+    "PreToolUse": [{ "matcher": "Read|Edit|MultiEdit|Write|NotebookEdit|Grep|Bash", "hooks": [
+      { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py\" pre", "timeout": 10 }] }],
+    "PostToolUse": [{ "matcher": "Edit|MultiEdit|Write|NotebookEdit|Bash", "hooks": [
+      { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py\" post", "timeout": 60 }] }],
+    "Stop": [{ "hooks": [
+      { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py\" stop", "timeout": 180 }] }]
+  }
+  ```
+
+  (The `startup` hook is asked only of an app with a `scripts/setup-linux.sh`; an app without a
+  `.claude/settings.json` has no hooks to check.) Every agent calls the hook one way, through the app's wrapper,
+  `.claude/hooks/hook.py`: the Python template above with `"..", ".."` for the app's root and
+  `"laching", "tools", "hooks", "hook.py"` for the tool. A hook that calls `laching/tools/hooks/hook.py` itself fails,
+  in `.claude/settings.json`, in Codex's `.codex/config.toml` and in Copilot's `.github/hooks/*.json`, and so does a
+  missing wrapper.
 - **Linked skills.** A skill in `.agents/skills` named like one of `tools/skills` is a link to
   `../../laching/tools/skills/<name>`; the app's own words for it go in `.agents/notes/<name>.md`.
 - **Skill links for every agent.** With an `.agents/skills` folder, `.claude/skills/<name>` is a link to
@@ -576,7 +607,7 @@ permissions:
   contents: read
 concurrency:
   group: core-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   test:
     uses: vmihalachi/laching/.github/workflows/core-linux.yml@vX.Y.Z
