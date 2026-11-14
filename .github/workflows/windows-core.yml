@@ -43,7 +43,9 @@ jobs:
         with:
           python-version: "3.12"
       # ci-windows-core.py runs dotnet in windows.dir, where the app's windows/global.json, if any, picks the SDK:
-      # setup-dotnet installs the one it pins beside the newest .NET 11. The self-hosted runner keeps its own.
+      # setup-dotnet installs the one it pins beside the newest .NET 11. The self-hosted runner keeps its own, which
+      # tools/windows/check-sdk.py compares with that pin and the projects' target framework right after the pins:
+      # too old an SDK stops the run with "update the runner's SDK to X" before dotnet first runs.
       - name: The app's global.json
         id: app
         if: inputs.hosted
@@ -64,6 +66,9 @@ jobs:
           global-json-file: ${{ steps.app.outputs.global-json }}
       - name: Check release pins and shared tooling
         run: python3 "./$LACHING_PATH/tools/ci-windows-core.py" pins
+      - name: Check the runner's .NET SDK
+        if: ${{ !inputs.hosted }}
+        run: python3 "./$LACHING_PATH/tools/windows/check-sdk.py"
       - name: Check strings and phrase keys
         run: python3 "./$LACHING_PATH/tools/ci-windows-core.py" content
       - name: Check generated Windows strings

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Tests for tools/windows/: check-winui.py's rules, assets.py's images from the fixture app's icon, smoke-package.ps1's
-package check and the PowerShell scripts parsing (where PowerShell is installed), companion.targets as MSBuild XML,
-dotnet-sdk.ps1's answer and the workflows that run it, and the app workflows running dotnet in windows.dir."""
+"""Tests for tools/windows/: check-winui.py's rules (the collection expressions of CsWinRT1032 on a sample that
+builds), assets.py's images from the fixture app's icon, smoke-package.ps1's package check and the PowerShell scripts
+parsing (where PowerShell is installed), companion.targets as MSBuild XML, dotnet-sdk.ps1's answer and the workflows
+that run it, check-sdk.py's answer on a self-hosted runner and the workflows asking it first, the app workflows
+running dotnet in windows.dir, and screenshots.ps1's second attempt of a pass that stopped early, read as text."""
 
 from __future__ import annotations
 
@@ -23,10 +25,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "windows"))
 import assets  # noqa: E402
-from support import REPO, TOOLS, fixture_app, git, search_path  # noqa: E402
+from support import DOTNET_HOST, NO_SHEBANG, REPO, TOOLS, FixtureAppTestCase, fixture_app, git, search_path  # noqa: E402
 
 WINDOWS = TOOLS / "windows"
 CHECK_WINUI = WINDOWS / "check-winui.py"
+CHECK_SDK = WINDOWS / "check-sdk.py"
 POWERSHELL = shutil.which("pwsh") or shutil.which("powershell")
 PWSH = shutil.which("pwsh")
 """The shell of the workflows' `shell: pwsh` steps (ConvertFrom-Json -AsHashtable), which Windows PowerShell isn't."""
@@ -92,6 +95,151 @@ def icon_png(path: Path, size: int, margin: int, rgba=(200, 30, 40, 255)) -> Non
                      + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
+# Collection expressions as check-winui.py reads them: `// 1032` ends each line the Native AOT publish of a WinUI
+# project reports (CsWinRT1032), and every other line is one the rule must leave alone. The two files build as they
+# are (a net11.0 library with implicit usings, Proj referencing Lib).
+LIBRARY = """\
+namespace Lib;
+
+public sealed record Pack(string Name, IReadOnlyList<string> Moves);
+
+public static class Library
+{
+    public static void Show(int count, IReadOnlyList<string> names) { }
+    public static void Either(IReadOnlyList<string> names) { }
+    public static void Either(List<string> names) { }
+    public static bool Among(this string word, IEnumerable<string> words) => words.Contains(word);
+}
+
+public static class Formats
+{
+    public static string List(IReadOnlyList<string> items) => string.Join(", ", items);
+}
+"""
+SHAPES = """\
+using Lib;
+
+namespace Proj.Views;
+
+public sealed class Shapes
+{
+    private static readonly IReadOnlyList<int> Sizes = [20, 30]; // 1032
+    private static readonly IReadOnlyList<int> None = [];
+    private static readonly IList<int> Listed = [1, 2];
+    private static readonly ICollection<int> Gathered = [1, 2];
+    private static readonly List<int> Made = [1, 2];
+    private static readonly int[] Plain = [1, 2];
+    private readonly Dictionary<string, int[]> _byName = new() { ["a"] = [1] };
+    private IReadOnlyCollection<string> _names = new List<string>();
+    private IEnumerable<string>? _later;
+
+    public IReadOnlyList<string> Tags { get; } = ["a"]; // 1032
+    public IEnumerable<char> Letters => ['a']; // 1032
+    public IReadOnlyList<string> Same => [.. _names]; // 1032
+    public IList<string> Fine => ["a"];
+    public IReadOnlyCollection<string> Read
+    {
+        get { return ["a"]; } // 1032
+    }
+
+    public Shapes(bool dark, List<string> named, IReadOnlyList<string>? given)
+    {
+        _names = ["x", "y"]; // 1032
+        _later ??= ["z"]; // 1032
+        IReadOnlyList<string> themes = dark ? ["dark"] : ["light"]; // 1032
+        IReadOnlyList<string> kept = named.Count > 0 ? named : ["light", "dark"];
+        IReadOnlyList<string> other = given ?? ["a"];
+        Take(["a"]); // 1032
+        Take(names: ["a"], count: 2); // 1032
+        Library.Show(1, ["a"]); // 1032
+        Library.Either(["a"]);
+        _ = "a".Among(["a", "b"]); // 1032
+        Pack pack = new("Core", ["plank"]); // 1032
+        var made = new Pack("Core", ["plank"]); // 1032
+        Later(() => ["a"]); // 1032
+        var holder = new Holder { Tags = ["a"] };
+        int[] numbers = [1, 2];
+        _ = numbers[0] + Sizes[1] + None.Count + Listed.Count + Gathered.Count + Made.Count + Plain.Length + _byName.Count;
+        _names = ["quiet"]; // winui-check: ok, the debug window alone
+        _ = (themes, kept, other, pack, made, holder);
+    }
+
+    private static void Take(IReadOnlyList<string> names, int count = 1) { }
+    private static void Later(Func<IEnumerable<string>> make) { }
+
+    public IReadOnlyList<string> Pick(int kind)
+    {
+        if (kind == 0)
+        {
+            return ["zero"]; // 1032
+        }
+        try
+        {
+            return Load();
+        }
+        catch (InvalidOperationException)
+        {
+            return ["failed"]; // 1032
+        }
+    }
+
+    public IReadOnlyList<string> Kind(int kind) => kind switch
+    {
+        0 => ["zero"], // 1032
+        1 => throw new ArgumentException("one"),
+        _ => [],
+    };
+
+    public IReadOnlyList<string> Beside(int kind) => kind switch
+    {
+        0 => ["zero"],
+        _ => Load(),
+    };
+
+    public async Task<IReadOnlyList<string>> LoadAsync()
+    {
+        await Task.Yield();
+        return ["a"]; // 1032
+    }
+
+    public IEnumerable<int[]> Each()
+    {
+        yield return [1];
+    }
+
+    private List<string> Load() => ["a"];
+
+    public Shapes? Next { get; set; }
+
+    private void Add(IReadOnlyList<int> items) { }
+
+    // A method reached through its receiver's type: List<T>.Add and List<T>'s constructor are not the ones declared
+    // here, and what Make() gives isn't read.
+    private void Receivers(Shapes peer, List<int[]> arrays, IReadOnlyList<string> names)
+    {
+        arrays.Add([1, 2]);
+        _ = new List<string>([.. names]);
+        peer.Add([1]); // 1032
+        this.Add([2]); // 1032
+        Add([3]); // 1032
+        peer.Next!.Add([4]); // 1032
+        var copy = new Shapes(false, [], null);
+        copy.Next?.Add([5]); // 1032
+        Make().Add([6]);
+        _ = Formats.List(["a"]); // 1032
+    }
+
+    private static Shapes Make() => new(false, [], null);
+
+    private sealed class Holder
+    {
+        public List<string> Tags { get; set; } = [];
+    }
+}
+"""
+REFERENCE = '<Project>\n  <ItemGroup>\n    <ProjectReference Include="..\\Lib\\Lib.csproj" />\n  </ItemGroup>\n</Project>\n'
+
+
 class CheckWinUITests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -134,6 +282,56 @@ class CheckWinUITests(unittest.TestCase):
         done = self.lint(path)
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertIn("ok: 1 WinUI files", done.stdout)
+
+    def collection_expressions(self, project: str, *paths: str) -> tuple[list[int], str]:
+        """The lines of Shapes.cs that the rule reports, checking `paths` of a Proj with this project file."""
+        self.write("Lib/Lib.csproj", "<Project />\n")
+        self.write("Lib/Library.cs", LIBRARY)
+        self.write("Proj/Proj.csproj", project)
+        self.write("Proj/Views/Shapes.cs", SHAPES)
+        done = self.lint(*(self.root / path for path in paths))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        lines = [int(number) for number in re.findall(r"Shapes\.cs:(\d+): a collection expression for ", done.stdout)]
+        self.assertIn(f"\n{len(lines)} WinUI problem(s)", done.stdout)
+        return lines, done.stdout
+
+    def test_a_collection_expression_for_a_read_only_list_interface(self):
+        marked = [number for number, line in enumerate(SHAPES.splitlines(), 1) if line.endswith("// 1032")]
+        self.assertEqual(len(marked), 25)
+        for paths in (("Proj",), ("Proj/Views/Shapes.cs",)):  # the app's folder, and one changed file as verify.sh passes it
+            with self.subTest(paths=paths):
+                lines, said = self.collection_expressions(REFERENCE, *paths)
+                self.assertEqual(lines, marked)
+        for words in (
+            "Shapes.cs:7: a collection expression for IReadOnlyList<int> has no class of its own under Native AOT "
+            "(CsWinRT1032); build an array or a List\n    private static readonly IReadOnlyList<int> Sizes = [20, 30]; // 1032\n",
+            "Shapes.cs:18: a collection expression for IEnumerable<char> has",
+            "Shapes.cs:23: a collection expression for IReadOnlyCollection<string> has",
+            "Shapes.cs:83: a collection expression for Task<IReadOnlyList<string>> has",
+        ):
+            self.assertIn(words, said)
+
+    def test_an_argument_is_read_from_what_the_project_and_its_references_declare(self):
+        # Without the reference nothing says what Library.Show, Among, Pack and Formats.List take, so those calls
+        # aren't reported.
+        elsewhere = [number for number, line in enumerate(SHAPES.splitlines(), 1)
+                     if line.endswith("// 1032") and re.search(r"Library\.|\.Among\(|\bPack\b|Formats\.", line)]
+        self.assertEqual(len(elsewhere), 5)
+        with_it, _ = self.collection_expressions(REFERENCE, "Proj")
+        without, _ = self.collection_expressions("<Project />\n", "Proj")
+        self.assertEqual(sorted(set(with_it) - set(without)), elsewhere)
+        self.assertFalse(set(without) - set(with_it))
+
+    def test_a_line_is_what_ends_at_a_newline(self):
+        # A form feed in a comment ends no line for the compiler, nor for the numbers and the quoted lines
+        # (str.splitlines() breaks there).
+        done = self.lint(self.write("Odd.cs", "// a\fb c\nvar s = (Style)Application.Current.Resources[\"Card\"];\n"
+                                              "IReadOnlyList<int> sizes = [1, 2];\n"))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("Odd.cs:2: casts an untyped XAML object; use XamlCast.As<T>\n"
+                      "    var s = (Style)Application.Current.Resources[\"Card\"];\n", done.stdout)
+        self.assertIn("Odd.cs:3: a collection expression for IReadOnlyList<int> has no class of its own under Native AOT "
+                      "(CsWinRT1032); build an array or a List\n    IReadOnlyList<int> sizes = [1, 2];\n", done.stdout)
 
     def test_xaml_rules(self):
         for line, words in (
@@ -275,6 +473,106 @@ class DotnetSdkTests(unittest.TestCase):
                 self.assertNotIn("releases-index", workflow.read_text("utf8"))
 
 
+@unittest.skipIf(os.name == "nt", NO_SHEBANG)
+class CheckSdkTests(FixtureAppTestCase):
+    """check-sdk.py in the fixture app, whose one Windows project targets net11.0, on a machine whose dotnet is support's
+    DOTNET_HOST with one SDK installed."""
+
+    def setUp(self):
+        super().setUp()
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.bin = Path(temp.name)
+
+    def check(self, sdk: str | None, actions: str = "") -> subprocess.CompletedProcess:
+        """The check with this SDK as the machine's only one; None: no dotnet on PATH at all."""
+        if sdk:
+            (self.bin / "dotnet").write_text("#!/bin/sh\n" + DOTNET_HOST, "utf8")
+            (self.bin / "dotnet").chmod(0o755)
+        env = {**os.environ, "PATH": search_path(self.bin) if sdk else str(self.bin), "FAKE_SDK": sdk or "",
+               "GITHUB_ACTIONS": actions}
+        return subprocess.run([sys.executable, str(CHECK_SDK)], cwd=self.root, env=env, capture_output=True, encoding="utf8")
+
+    def test_an_sdk_as_new_as_the_target_framework_passes(self):
+        for sdk in ("11.0.100", "11.0.402", "12.0.100-preview.1.26070.3"):
+            with self.subTest(sdk=sdk):
+                done = self.check(sdk)
+                self.assertEqual((done.returncode, done.stdout, done.stderr), (0, f"ok: the .NET SDK {sdk} builds net11.0\n", ""))
+        (self.root / "windows/global.json").write_text(PIN.replace("11.0.999", "11.0.100"), "utf8")
+        done = self.check("11.0.100")
+        self.assertEqual((done.returncode, done.stdout),
+                         (0, "ok: the .NET SDK 11.0.100 builds net11.0 (windows/global.json picks it)\n"), done.stderr)
+
+    def test_an_older_sdk_fails_with_the_fix_in_the_message(self):
+        said = ("The .NET SDK here is 10.0.203 and windows/Fixture.Core/Fixture.Core.csproj targets net11.0 "
+                "(the build stops at NETSDK1045): update the runner's SDK to 11.0.")
+        done = self.check("10.0.203")
+        self.assertEqual((done.returncode, done.stdout, done.stderr), (1, "", f"error: {said}\n"))
+        done = self.check("10.0.203", actions="true")  # an annotation on the run's page
+        self.assertEqual((done.returncode, done.stdout, done.stderr), (1, f"::error::{said}\n", ""))
+
+    def test_a_pin_that_no_installed_sdk_meets_fails_with_the_pinned_version(self):
+        (self.root / "windows/global.json").write_text(PIN, "utf8")
+        done = self.check("11.0.100")
+        self.assertEqual((done.returncode, done.stdout), (1, ""))
+        self.assertEqual(done.stderr, "error: No installed .NET SDK meets windows/global.json (11.0.999, rollForward disable); "
+                                      "this machine has 11.0.100: update the runner's SDK to 11.0.999. "
+                                      "dotnet says: A compatible .NET SDK was not found.\n")
+
+    def test_no_dotnet_at_all(self):
+        done = self.check(None)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertRegex(done.stderr, r"^error: dotnet doesn't start here \(.+\): update the runner's SDK to 11\.0\.\n$")
+
+    def test_the_newest_target_framework_of_the_projects_counts(self):
+        windows = self.root / "windows"
+        (windows / "Directory.Build.props").write_text(
+            "<Project>\n  <PropertyGroup>\n    <!-- <TargetFramework>net14.0</TargetFramework> -->\n"
+            "    <TargetFramework Condition=\"'$(TargetFramework)' == ''\">net11.0</TargetFramework>\n"
+            "  </PropertyGroup>\n</Project>\n", "utf8")
+        app = windows / "Fixture.App"
+        (app / "obj").mkdir(parents=True)
+        (app / "obj/Generated.props").write_text("<Project><PropertyGroup><TargetFramework>net13.0</TargetFramework></PropertyGroup></Project>\n", "utf8")
+        (app / "Fixture.App.csproj").write_text(
+            "<Project>\n  <PropertyGroup>\n"
+            "    <TargetFrameworks>netstandard2.0; net12.0-windows10.0.26100.0;net48</TargetFrameworks>\n"
+            "  </PropertyGroup>\n</Project>\n", "utf8")
+        done = self.check("11.0.402")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("The .NET SDK here is 11.0.402 and windows/Fixture.App/Fixture.App.csproj targets net12.0 ", done.stderr)
+        self.assertIn(": update the runner's SDK to 12.0.\n", done.stderr)
+        self.assertEqual(self.check("12.0.100").returncode, 0)
+
+    def test_the_first_job_asks_on_a_self_hosted_runner_before_anything_builds(self):
+        # The first job of each workflow, and in it before the first step that runs dotnet or a tool that builds. A
+        # release's package jobs ask again, right after the checkout: each may land on another runner with the labels.
+        release = 'python "${{ inputs.laching-path }}/tools/windows/check-sdk.py"'
+        for name, job, run, builds, mentions in (
+            ("windows-app.yml", "app", 'python "${{ inputs.laching-path }}/tools/windows/check-sdk.py"', "WinUI traps", 2),
+            ("windows-core.yml", "test", 'python3 "./$LACHING_PATH/tools/windows/check-sdk.py"', "Check strings and phrase keys", 2),
+            ("windows-release.yml", "version", release, "Read the package version (and refuse one released before)", 3),
+            ("windows-release.yml", "package", release, "The app's global.json", 3),
+        ):
+            with self.subTest(workflow=name, job=job):
+                text = (REPO / ".github/workflows" / name).read_text("utf8")
+                self.assertEqual(re.search(r"^jobs:\n  ([\w-]+):$", text, re.M).group(1), "version" if job == "package" else job)
+                self.assertEqual(text.count("check-sdk.py"), mentions, "its comment and a step a job")
+                if job == "package":
+                    steps = workflow_steps(name, job)
+                    self.assertEqual(steps.index(step(steps, run=run)) - 1,
+                                     steps.index(step(steps, name="Check out ${{ inputs.laching-path }}/")))
+                steps = workflow_steps(name, job)
+                check = step(steps, run=run)
+                self.assertEqual(check["if"], "${{ !inputs.hosted }}", "setup-dotnet installs the SDK on GitHub's runners")
+                self.assertEqual(steps.index(check) + 1, steps.index(step(steps, name=builds)))
+                later = [s.get("name", s.get("uses")) for s in steps[steps.index(check):]
+                         if s is not check and re.search(r"\bdotnet (?!--version)|store-release|ci-windows-core\.py\" (?!pins)", s.get("run", ""))]
+                earlier = [s.get("name", s.get("uses")) for s in steps[:steps.index(check)]
+                           if re.search(r"^dotnet |store-release|ci-windows-core\.py\" (?!pins)", s.get("run", ""), re.M)]
+                self.assertEqual(earlier, [], "nothing builds before the check")
+                self.assertTrue(later or job == "version", "what builds comes after it")
+
+
 class AppWorkflowTests(unittest.TestCase):
     """The app workflows ask for the SDK, and run dotnet, in the app's windows.dir: the .NET host takes the SDK from the
     global.json nearest its working folder, never the project's, so there the app's windows/global.json picks it (and
@@ -337,6 +635,89 @@ class AppWorkflowTests(unittest.TestCase):
                     done = look()
                     self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
                     self.assertIn(f"::error::{said}", done.stdout)
+
+
+class ScreenshotRetryTests(unittest.TestCase):
+    """screenshots.ps1 launches a pass that stopped early once more. Read as text: the run itself needs Windows and
+    the app, so these hold the shape of it (one more launch, never a loop; what counts as stopping early; what is kept
+    and said), and test_the_scripts_parse reads the script where PowerShell is installed."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = (WINDOWS / "screenshots.ps1").read_text("utf8")
+        # The code alone: no comment line, and nothing of the help above param(.
+        cls.code = "\n".join(line for line in cls.text[cls.text.index("\nparam("):].splitlines()
+                             if not line.lstrip().startswith("#"))
+
+    def function(self, name: str) -> str:
+        """A function of the script, from its name to the closing brace in the first column."""
+        start = self.code.index(f"\nfunction {name}(")
+        return self.code[start:self.code.index("\n}", start)]
+
+    def test_a_pass_that_stopped_early_is_launched_once_more(self):
+        once = self.function("Invoke-Pass")
+        self.assertEqual(once.count("Invoke-Run "), 2, "a launch and one more")
+        first, second = (match.start() for match in re.finditer("Invoke-Run ", once))
+        fine = once.index("if (-not $why) { return $launch }")
+        self.assertTrue(first < once.index("$why = Get-EarlyStop $launch") < fine < second, "only after an early stop")
+        self.assertIn('$again = Invoke-Run "$into-retry" $languages', once,
+                      "into a folder of its own, the same languages")
+        self.assertNotRegex(once, r"\b(?:for|foreach|while|do|until|try|catch)\b", "never a loop; a hang isn't caught")
+        # Every launch of a run is a pass: nothing else starts the app.
+        self.assertEqual(len(re.findall(r"Invoke-Run\b", self.code)), 3, "its definition and Invoke-Pass's two")
+        self.assertEqual(len(re.findall(r"Invoke-Pass\b(?!es)", self.code)), 2, "its definition and Invoke-Passes's")
+        self.assertIn("Invoke-Pass (Join-Path $work", self.function("Invoke-Passes"))
+        self.assertEqual(re.findall(r'Invoke-Passes "(\w+)"', self.code), ["run", "contrast"])
+
+    def test_what_stopping_early_is(self):
+        early = self.function("Get-EarlyStop")
+        self.assertIn("$code = $launch.Run.ExitCode", early)
+        left, nothing = early.index("if ($code -ne 0) {"), early.index("elseif ($drawn.Count -eq 0) {")
+        self.assertLess(left, nothing)
+        self.assertIn('"The app stopped before the end of the run (exit code $code) after $($drawn.Count) shots$last"',
+                      early[left:nothing])
+        self.assertIn('"No screenshots were rendered (exit code 0)"', early[nothing:])
+        # A launch that hangs is killed and stops the run in Invoke-Run, which Invoke-Pass doesn't catch; so does an
+        # app that doesn't start in its package, and the help says why neither is tried again.
+        run = self.function("Invoke-Run")
+        self.assertEqual(run.count('$run.Kill(); throw "The screenshot run didn\'t finish in $minutes minutes."'), 2)
+        self.assertIn('if (-not $run) { throw "The app didn\'t start in its package." }', run)
+        help_ = " ".join(self.text[:self.text.index("\nparam(")].split())
+        self.assertIn("An app that doesn't start in its package at all (no process 30 seconds after "
+                      "Invoke-CommandInDesktopPackage) stops the run at once, as a launch that hangs until its time is "
+                      "up does: neither was among the runs that failed by chance", help_)
+
+    def test_the_second_attempt_alone_counts_and_the_first_is_kept(self):
+        once = self.function("Invoke-Pass")
+        # The pass is its second launch (its folder, its exit code), carrying why the first stopped and where it drew.
+        self.assertTrue(once.endswith("\n    $again.First = @{ Why = $why; Work = $into }\n    $again"), once)
+        # What it prints begins with why the first stopped and with the note, never with "Problems" or an indent: a
+        # capture's log is read for its last line starting with "Problems" and the indented lines after it.
+        self.assertIn('\n    Write-Host "$why$(', once, "said when it happens, and not as the function's output")
+        rest = self.code[self.code.index('\n$runs = @(Invoke-Passes "run")'):]
+        self.assertIn('Remove-Item (Join-Path $to "first-attempt.txt") -ErrorAction SilentlyContinue', rest,
+                      "a run that needed none leaves no old one")
+        kept = rest.index('$kept = Join-Path $to "first-attempt.txt"')
+        self.assertLess(rest.index("if ($target.First.Count -gt 0) {"), kept)
+        self.assertIn("}) | Set-Content $kept -Encoding UTF8", rest[kept:])
+        note = next(line.strip() for line in rest.splitlines() if line.strip().startswith("$note = "))
+        self.assertTrue(note.startswith('$note = "The screenshot run needed a second attempt'), note)
+        self.assertIn('\n        "$note What the first attempt left: $kept"\n', rest)
+        summary = ('\n        if ($env:GITHUB_STEP_SUMMARY) {\n'
+                   '            try { [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "$note`n`n") } '
+                   'catch { Write-Warning "The run\'s summary page didn\'t take the note: $_" }\n        }\n')
+        self.assertIn(summary, rest, "on the run's summary page; a page that can't be written loses the note, not the shots")
+        # The run fails as before, on what the launches in $runs left: the second ones.
+        self.assertIn("if ($stopped = @($runs | Where-Object { $_.Run.ExitCode -ne 0 })) {", rest)
+        self.assertIn('", in the second attempt too"', rest)
+
+    def test_the_workflow_runs_each_language_once(self):
+        """The retry is the script's: the step still calls it once per language and fails on the languages that
+        failed."""
+        run = step(workflow_steps("windows-app.yml", "app"), name="Open every window")["run"]
+        self.assertEqual(run.count("screenshots.ps1"), 1)
+        self.assertIn("if ($LASTEXITCODE -ne 0) { $failed += $language }", run)
+        self.assertIn('if ($failed) { throw "The screenshot run failed in: $($failed -join \', \')" }', run)
 
 
 @unittest.skipUnless(POWERSHELL, "needs PowerShell")

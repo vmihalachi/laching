@@ -80,6 +80,14 @@ jobs:
       - name: Check out ${{ inputs.laching-path }}/
         run: git submodule update --init "${{ inputs.laching-path }}"
 
+      # setup-dotnet runs on GitHub's runners only. On the self-hosted one an SDK older than a project's target
+      # framework, or one the app's windows/global.json refuses, stops the release in this first job with "update the
+      # runner's SDK to X" (tools/windows/check-sdk.py), before either package starts to publish, and each package job
+      # asks again, as it may land on another runner with the same labels.
+      - name: The runner's .NET SDK
+        if: ${{ !inputs.hosted }}
+        run: python "${{ inputs.laching-path }}/tools/windows/check-sdk.py"
+
       - name: Read the package version (and refuse one released before)
         id: read
         run: |
@@ -102,11 +110,16 @@ jobs:
       - name: Check out ${{ inputs.laching-path }}/
         run: git submodule update --init "${{ inputs.laching-path }}"
 
+      # The SDK of the runner this job landed on, as in the version job.
+      - name: The runner's .NET SDK
+        if: ${{ !inputs.hosted }}
+        run: python "${{ inputs.laching-path }}/tools/windows/check-sdk.py"
+
       # The newest .NET 11 SDK, never the image's a patch behind (tools/windows/dotnet-sdk.ps1's latitude), unless the
       # app's windows/global.json pins another: the app publishes Native AOT, so the runtime it ships is the SDK's, and
       # store-release.ps1 publishes in windows.dir, where that global.json picks the SDK (a latestFeature pin still
       # picks the newest). setup-dotnet installs both; when the image's is the newest, nothing downloads. The
-      # self-hosted runner keeps its own .NET 11 SDK, and a pin it doesn't meet fails the publish.
+      # self-hosted runner keeps its own .NET 11 SDK, which the step above checked against that pin.
       - name: The app's global.json
         id: app
         if: inputs.hosted

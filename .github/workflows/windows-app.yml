@@ -24,7 +24,7 @@ on:
         type: boolean
         default: false
       languages:
-        description: "The languages every window is opened in (comma-separated; the longest words find text that doesn't fit)"
+        description: "The languages every window is opened in (comma-separated, each a full pass; the longest words find text that doesn't fit)"
         type: string
         default: en
       screenshot-run:
@@ -100,8 +100,7 @@ jobs:
           $script = Join-Path $env:GITHUB_WORKSPACE "$env:LACHING_PATH/tools/windows/dotnet-sdk.ps1"
           if (Test-Path $script) { pwsh $script } else { "No $script in this Laching: setup-dotnet runs." }
 
-      # The self-hosted runner keeps its own .NET 11 SDK and Python 3; a windows/global.json pin its SDK doesn't meet
-      # fails the steps that run dotnet.
+      # The self-hosted runner keeps its own .NET 11 SDK and Python 3: the SDK is checked below, before anything builds.
       - uses: actions/setup-dotnet@v6
         if: inputs.hosted && steps.sdk.outputs.use != 'true'
         with:
@@ -112,6 +111,13 @@ jobs:
         if: inputs.hosted
         with:
           python-version: "3.12"
+
+      # setup-dotnet runs on GitHub's runners only. On the self-hosted one an SDK older than a project's target
+      # framework (NETSDK1045 at the first build), or one the app's windows/global.json refuses, stops the run here
+      # with "update the runner's SDK to X" (tools/windows/check-sdk.py, asked in windows.dir).
+      - name: The runner's .NET SDK
+        if: ${{ !inputs.hosted }}
+        run: python "${{ inputs.laching-path }}/tools/windows/check-sdk.py"
 
       # What builds and runs in Debug but breaks under Native AOT or in the XAML compiler.
       - name: WinUI traps
@@ -153,7 +159,10 @@ jobs:
           & "${{ inputs.laching-path }}/tools/windows/store-release.ps1" @arguments
 
       # Every language even when one fails, so one run shows them all. screenshots.ps1 renders into a folder under
-      # %TEMP%, which on the self-hosted runner outlives the job, so the step gets the job's own temp folder.
+      # %TEMP%, which on the self-hosted runner outlives the job, so the step gets the job's own temp folder. A language
+      # whose pass stopped early (the app left partway, or drew nothing) gets one more launch from screenshots.ps1,
+      # which says so on the run's summary page and keeps what the first attempt left as first-attempt.txt among the
+      # shots: the language fails only when the second attempt fails too.
       - name: Open every window
         if: matrix.platform == 'x64' && inputs.screenshot-run == 'release'
         shell: powershell
