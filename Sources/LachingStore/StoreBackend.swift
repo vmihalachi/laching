@@ -37,7 +37,11 @@
     @MainActor
     public protocol StoreBackend: AnyObject {
         func loadProducts(_ ids: [String]) async throws -> [StoreProduct]
-        /// Verified, unrevoked non-consumables the user owns. Works offline.
+        /// Verified, unrevoked non-consumables the user owns. Works offline. Never fails: StoreKit answers from the
+        /// device's own transaction record, so an empty set means nothing is owned and `PurchaseStore` applies it. On
+        /// the other ports a store can fail a read: the Windows backend then throws, and its `PurchaseStore` keeps the
+        /// last known set, while Play's backend answers its cache (the last read that worked plus purchases since), or
+        /// throws when that cache is empty.
         func entitledProductIDs() async -> Set<String>
         func purchase(_ id: String) async throws -> PurchaseOutcome
         /// Asks the App Store to re-sync transactions (Restore purchases).

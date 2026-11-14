@@ -13,6 +13,8 @@
 #   kotlin/**                           ktlint (the version kotlin.yml pins)
 #   kotlin/**, conformance/**           ./gradlew :core:test :testing:test on a JDK 17 (JAVA_HOME, else Homebrew's
 #                                       openjdk@17, else the java on PATH)
+#   kotlin/**                           ./gradlew :android:testDebugUnitTest on that JDK, with the Android SDK
+#                                       (ANDROID_HOME or ANDROID_SDK_ROOT, or sdk.dir in kotlin/local.properties)
 #   tools/**, Tests/Fixtures/**,        the tools' Python tests (with --fast, the ones that cover the changed paths:
 #   scripts/{release,verify,            tools/tests/covering.py), fixture art current
 #   fixture-art}.sh, release.yml,
@@ -33,7 +35,7 @@ while [ $# -gt 0 ]; do
     --all) all=1 ;;
     --staged) mode=staged ;;
     --version) [ $# -ge 2 ] || { echo "--version needs X.Y.Z (see --help)" >&2; exit 2; }; version="$2"; shift ;;
-    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1 (see --help)" >&2; exit 2 ;;
   esac
   shift
@@ -101,6 +103,11 @@ jdk17() {
   return 1
 }
 kotlin_tests() { (cd kotlin && JAVA_HOME="$1" ./gradlew :core:test :testing:test --console=plain); }
+# :android's unit tests (the Play store backend among them), which need the Android SDK as well.
+android_tests() { (cd kotlin && JAVA_HOME="$1" ./gradlew :android:testDebugUnitTest --console=plain); }
+android_sdk() {
+  [ -n "${ANDROID_HOME:-}${ANDROID_SDK_ROOT:-}" ] || grep -q '^sdk\.dir=' kotlin/local.properties 2>/dev/null
+}
 
 landing_check() {
   (
@@ -203,6 +210,13 @@ if [ "$fast" = 0 ]; then
   if touched "$kotlin|^conformance/"; then
     if jdk="$(jdk17)"; then check "gradlew :core:test :testing:test" kotlin_tests "$jdk"
     else skip "gradlew :core:test :testing:test: needs a JDK 17 (JAVA_HOME, or brew install openjdk@17)"; fi
+  fi
+  if touched "$kotlin"; then
+    if ! jdk="$(jdk17)"; then
+      skip "gradlew :android:testDebugUnitTest: needs a JDK 17 (JAVA_HOME, or brew install openjdk@17)"
+    elif ! android_sdk; then
+      skip "gradlew :android:testDebugUnitTest: needs the Android SDK (ANDROID_HOME or ANDROID_SDK_ROOT, or sdk.dir in kotlin/local.properties)"
+    else check "gradlew :android:testDebugUnitTest" android_tests "$jdk"; fi
   fi
   if touched "$web"; then
     if has dotnet; then

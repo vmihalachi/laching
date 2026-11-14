@@ -38,6 +38,14 @@
             return atLogin
         }
 
+        /// `launchedAtLogin(appleEvent:)` over the launch Apple Event it reads itself (`launchedAsLoginItem()`), so a
+        /// caller can't drop the event's answer by passing `false`. Call it from `applicationDidFinishLaunching`,
+        /// before anything async, and keep the answer: later the event is gone and only the login item and the
+        /// session start count. Logs as `launchedAtLogin(appleEvent:)` does.
+        public static func launchedAtLogin() -> Bool {
+            launchedAtLogin(appleEvent: launchedAsLoginItem())
+        }
+
         /// `launchedAtLogin(appleEvent:)`'s rule over what it read: the Apple Event's answer, whether the app is a
         /// login item, and the seconds from the session's start to the app's (nil when unknown).
         public static func isAtLogin(appleEvent: Bool, loginItem: Bool, sinceSessionStart: TimeInterval?) -> Bool {

@@ -7,6 +7,7 @@ import kotlinx.coroutines.test.runTest
 import laching.core.settings.InMemorySettingsStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -175,6 +176,125 @@ class PurchaseStoreTests {
             store.restore()
             assertEquals(PurchaseError.RESTORE_FAILED, store.error)
             assertFalse(store.isRestoring)
+        }
+
+    /** Offline at launch: the cached unlock stays (and stays cached), and prices still load. */
+    @Test
+    fun `a failed read at launch keeps the cached unlock`() =
+        runTest {
+            settings.setStrings("test.owned", listOf(supporter))
+            backend.failEntitlements = true
+            val store = store()
+            store.start()
+            assertTrue(store.isOwned(supporter))
+            assertEquals(listOf(supporter), settings.getStrings("test.owned"))
+            assertEquals(LoadState.LOADED, store.loadState)
+            assertNull(store.error)
+        }
+
+    /** A read that fails after a purchase, or on an update, leaves what's owned; the next read that works applies. */
+    @Test
+    fun `a failed read after a purchase keeps what is owned`() =
+        runTest {
+            val store = store()
+            store.start()
+            store.buy(supporter)
+            assertTrue(store.isOwned(supporter))
+
+            backend.failEntitlements = true
+            store.refreshEntitlements()
+            backend.send(TransactionUpdate("", isRevoked = false))
+            advanceUntilIdle()
+            assertEquals(setOf(supporter), store.owned)
+            assertEquals(listOf(supporter), settings.getStrings("test.owned"))
+
+            // Refunded: once the store answers again, that counts.
+            backend.failEntitlements = false
+            backend.owned.clear()
+            store.refreshEntitlements()
+            assertTrue(store.owned.isEmpty())
+            assertEquals(emptyList(), settings.getStrings("test.owned"))
+        }
+
+    /** An update from the store whose read fails (the observer's own re-read) leaves what's owned as it was. */
+    @Test
+    fun `an update whose read fails keeps what is owned`() =
+        runTest {
+            backend.owned += supporter
+            val store = store()
+            store.start()
+            backend.failEntitlements = true
+            backend.send(TransactionUpdate(supporter, isRevoked = true))
+            advanceUntilIdle()
+            assertTrue(store.isOwned(supporter))
+        }
+
+    /** The store took the payment; failing to read it back isn't a failed purchase. */
+    @Test
+    fun `a purchase whose read fails is not a failed purchase`() =
+        runTest {
+            val store = store()
+            store.start()
+            backend.failEntitlements = true
+            store.tip(smallTip)
+            assertNull(store.error)
+            assertTrue(store.justTipped)
+            assertNull(store.purchasing)
+            assertFalse(store.isBusy)
+        }
+
+    /**
+     * Buying a second unlockable when the read back fails keeps the one already owned, in the store and its cache:
+     * a failed read never clears what's owned. The next read that works adds the new one.
+     */
+    @Test
+    fun `a purchase whose read fails keeps what was owned`() =
+        runTest {
+            val pack = "test.pack"
+            val twoUnlockables = ProductCatalog(listOf(supporter, pack), listOf(smallTip))
+            val backend = MockStoreBackend(twoUnlockables)
+            backend.owned += pack
+            val store = PurchaseStore(twoUnlockables, backend, settings, this, "test.owned")
+            store.start()
+            assertEquals(setOf(pack), store.owned)
+
+            backend.failEntitlements = true
+            store.buy(supporter)
+            assertEquals(listOf(supporter), backend.purchased)
+            assertEquals(setOf(pack), store.owned)
+            assertEquals(listOf(pack), settings.getStrings("test.owned"))
+            assertNull(store.error)
+            assertNull(store.purchasing)
+            assertFalse(store.isBusy)
+
+            backend.failEntitlements = false
+            store.refreshEntitlements()
+            assertEquals(setOf(supporter, pack), store.owned)
+        }
+
+    /** A restore that can't read what's owned afterwards says so, and keeps what was owned. */
+    @Test
+    fun `a restore whose read fails reports restore failed`() =
+        runTest {
+            backend.owned += supporter
+            val store = store()
+            store.start()
+            backend.failEntitlements = true
+            store.restore()
+            assertEquals(1, backend.restores)
+            assertEquals(PurchaseError.RESTORE_FAILED, store.error)
+            assertFalse(store.isRestoring)
+            assertTrue(store.isOwned(supporter))
+        }
+
+    @Test
+    fun `the mock's failed read throws and later reads again`() =
+        runTest {
+            backend.owned += supporter
+            backend.failEntitlements = true
+            assertFailsWith<MockStoreBackend.Failure> { backend.entitledProductIds() }
+            backend.failEntitlements = false
+            assertEquals(setOf(supporter), backend.entitledProductIds())
         }
 
     @Test

@@ -1,8 +1,8 @@
 name: Kotlin
 
-# The Kotlin side (kotlin/): ktlint over every source, then :core's and :testing's tests (every scheduler vector among
-# them) and the :android debug build, on a hosted Ubuntu runner, whose image carries the Android SDK. release.yml calls
-# it (workflow_call) with the commit it plans to tag, and tags nothing unless it passes.
+# The Kotlin side (kotlin/): ktlint over every source, then :core's, :testing's and :android's tests (every scheduler
+# vector among them) and the :android debug build, on a hosted Ubuntu runner, whose image carries the Android SDK.
+# release.yml calls it (workflow_call) with the commit it plans to tag, and tags nothing unless it passes.
 on:
   push:
     branches:
@@ -79,4 +79,4 @@ jobs:
           "$RUNNER_TEMP/ktlint" "**/*.kt" "**/*.kts" "!**/build/**"
 
       - name: Tests and the Android build
-        run: ./gradlew :core:test :testing:test :android:assembleDebug --console=plain
+        run: ./gradlew :core:test :testing:test :android:testDebugUnitTest :android:assembleDebug --console=plain

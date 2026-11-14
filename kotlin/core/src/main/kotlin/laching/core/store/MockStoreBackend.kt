@@ -3,7 +3,8 @@ package laching.core.store
 /**
  * A [StoreBackend] for tests and previews: every product asked for is listed (priced by [priceOf], "€" plus the
  * id's length unless set), buying an unlockable makes it owned, buying a tip doesn't, and switches make loading,
- * buying or restoring fail. [send] plays a transaction update as if it came from the store. Never reaches a store.
+ * reading what's owned, buying or restoring fail. [send] plays a transaction update as if it came from the store.
+ * Never reaches a store.
  * (Kotlin ships it in `:core`, as .NET does, because apps use it in their Debug screenshot and preview modes too;
  * `laching.testing` re-exports it.)
  */
@@ -18,6 +19,12 @@ public class MockStoreBackend(
     public var failPurchase: Boolean = false
     public var failProducts: Boolean = false
     public var failRestore: Boolean = false
+
+    /**
+     * Makes [entitledProductIds] throw, as a backend does when it can't read what the user owns (an offline or failed
+     * purchases read), instead of answering an empty set.
+     */
+    public var failEntitlements: Boolean = false
 
     /** Ids [loadProducts] leaves out, as if the store didn't list them. */
     public var missingProducts: MutableSet<String> = mutableSetOf()
@@ -36,7 +43,10 @@ public class MockStoreBackend(
         return ids.filter { it !in missingProducts }.map { StoreProduct(it, priceOf(it)) }
     }
 
-    override suspend fun entitledProductIds(): Set<String> = owned.toSet()
+    override suspend fun entitledProductIds(): Set<String> {
+        if (failEntitlements) throw Failure()
+        return owned.toSet()
+    }
 
     override suspend fun purchase(id: String): PurchaseOutcome {
         if (failPurchase) throw Failure()

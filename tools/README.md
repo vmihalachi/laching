@@ -620,8 +620,8 @@ step 5.
 ## Mac apps
 
 Reusable Mac CI (`ci-macos.py`, `../.github/workflows/macos-app.yml`): project generation, formatting, release pins,
-enabled content checks, the conformance vectors, core tests, the Mac and iOS app tests and, when asked, the Release
-builds and a launch of the Release Mac app, from `companion.json`.
+enabled content checks, the conformance vectors, core tests, the Mac and iOS app tests and, unless turned off, the
+Release builds and a launch of the Release Mac app, from `companion.json`.
 
 An app can keep its `workflow_dispatch`, permissions and concurrency policy in a short workflow and call the shared
 Mac checks at the release it pins:
@@ -633,7 +633,7 @@ jobs:
     with:
       hosted: ${{ inputs.hosted }}
       submodules: "true"  # also checks out bundled recorded voices
-      release: true       # optional: the Release builds, and with hosted the launch
+      release: false      # optional: skips the Release builds (and with hosted the launch), on by default
 ```
 
 The self-hosted runner defaults to `["self-hosted","macOS"]`; `runner` accepts another JSON label list. `hosted: true`
@@ -651,8 +651,8 @@ plus the phrase bank when present. A stage the app has nothing for runs no comma
 - `ios` runs the `mac.iosScheme` tests on a simulator of its own, `<name> ci` (`ios-destination.py --own`, made on
   first use).
 - `release` builds what App Store review gets, which the tests never build: the Mac app in Release, signed ad hoc, and
-  the iOS app in Release, unsigned, when there's an `iosScheme`. The workflow runs it only with `release: true` (off by
-  default: it adds a build or two).
+  the iOS app in Release, unsigned, when there's an `iosScheme`. The workflow runs it unless `release: false` (on by
+  default: a resource that only the Release build drops shows nowhere else; it adds a build or two).
 - `smoke` launches the Release Mac app with `smoke-release.sh` and fails when it quits or leaves a crash report within
   20 s (the executable and the report are named `mac.app`). The workflow runs it only with `release` and `hosted`, and
   the script refuses to run outside CI and on a self-hosted runner: a Release build has the App Store bundle ID, so on

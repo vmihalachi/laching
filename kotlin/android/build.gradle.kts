@@ -18,6 +18,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    // JVM unit tests of the pure pieces (`testDebugUnitTest`), on JUnit 5 like the JVM modules.
+    testOptions {
+        unitTests.all { it.useJUnitPlatform() }
+    }
 }
 
 kotlin {
@@ -31,4 +36,8 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.billing)
     implementation(libs.kotlinx.coroutines.android)
+    testImplementation(platform(libs.junit.bom))
+    testImplementation(kotlin("test-junit5"))
+    testImplementation(libs.kotlinx.coroutines.test)
+    testRuntimeOnly(libs.junit.platform.launcher)
 }

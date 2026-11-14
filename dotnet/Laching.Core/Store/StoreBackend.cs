@@ -33,7 +33,10 @@ public interface IStoreBackend
     /// <summary>The listed products among <paramref name="ids"/>; throws when the store can't be reached.</summary>
     Task<IReadOnlyList<StoreProduct>> LoadProductsAsync(IReadOnlyList<string> ids);
 
-    /// <summary>Unlockables the user owns, active and not refunded. Works offline.</summary>
+    /// <summary>
+    /// Unlockables the user owns, active and not refunded. Works offline. Throws when it can't read them, never
+    /// answering an empty set for a failed read: <see cref="PurchaseStore"/> then keeps the last known set.
+    /// </summary>
     Task<IReadOnlySet<string>> EntitledProductIdsAsync();
 
     /// <summary>Shows the store's purchase dialog; throws when the purchase fails.</summary>

@@ -14,6 +14,8 @@ set -euo pipefail
 
 app="${1:?usage: smoke-release.sh <path to the Release .app> [seconds]}"
 seconds="${2:-20}"
+[[ "$seconds" =~ ^[0-9]+$ ]] || { echo "seconds must be a whole number, not $seconds" >&2; exit 2; }
+seconds=$((10#$seconds)) # decimal: bash would read 08 as a bad octal number
 if [[ -z "${CI:-}" ]]; then
   echo "smoke-release.sh runs in CI only: a Release build shares the App Store app's data." >&2
   exit 2
@@ -37,7 +39,12 @@ marker="$(mktemp)"
 log="$(mktemp)"
 "$binary" >"$log" 2>&1 &
 pid=$!
-sleep "$seconds"
+# Looks every 0.2 s for the whole window: a quit is seen at once, however late in the window it comes, and a slow
+# machine stretches the window rather than shortening it.
+for ((tick = 0; tick < seconds * 5; tick++)); do
+  kill -0 "$pid" 2>/dev/null || break
+  sleep 0.2
+done
 
 status=0
 if kill -0 "$pid" 2>/dev/null; then

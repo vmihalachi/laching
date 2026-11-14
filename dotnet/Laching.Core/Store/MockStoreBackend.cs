@@ -3,9 +3,10 @@ namespace Laching.Core.Store;
 /// <summary>
 /// An <see cref="IStoreBackend"/> for tests and previews: every product asked for is listed (priced by
 /// <see cref="PriceOf"/>, "€" plus the id's length unless set), buying an unlockable makes it owned, buying a tip
-/// doesn't, and switches make loading, buying or restoring fail. <see cref="Send"/> plays a transaction update as if
-/// it came from the store. Never reaches a store. (The Swift package has it in <c>LachingTesting</c>; .NET ships it
-/// here, like <c>InMemorySettingsStore</c>, because apps use it in their Debug screenshot and preview modes too.)
+/// doesn't, and switches make loading, reading what's owned, buying or restoring fail. <see cref="Send"/> plays a
+/// transaction update as if it came from the store. Never reaches a store. (The Swift package has it in
+/// <c>LachingTesting</c>; .NET ships it here, like <c>InMemorySettingsStore</c>, because apps use it in their Debug
+/// screenshot and preview modes too.)
 /// </summary>
 public sealed class MockStoreBackend(ProductCatalog catalog) : IStoreBackend
 {
@@ -23,6 +24,12 @@ public sealed class MockStoreBackend(ProductCatalog catalog) : IStoreBackend
     public bool FailProducts { get; set; }
 
     public bool FailRestore { get; set; }
+
+    /// <summary>
+    /// Makes <see cref="EntitledProductIdsAsync"/> throw, as a backend does when it can't read what the user owns (an
+    /// offline or failed license read), instead of answering an empty set.
+    /// </summary>
+    public bool FailEntitlements { get; set; }
 
     /// <summary>Ids <see cref="LoadProductsAsync"/> leaves out, as if the store didn't list them.</summary>
     public HashSet<string> MissingProducts { get; set; } = [];
@@ -48,7 +55,9 @@ public sealed class MockStoreBackend(ProductCatalog catalog) : IStoreBackend
     }
 
     public Task<IReadOnlySet<string>> EntitledProductIdsAsync() =>
-        Task.FromResult<IReadOnlySet<string>>(Owned.ToHashSet());
+        FailEntitlements
+            ? Task.FromException<IReadOnlySet<string>>(new Failure())
+            : Task.FromResult<IReadOnlySet<string>>(Owned.ToHashSet());
 
     public Task<PurchaseOutcome> PurchaseAsync(string id)
     {

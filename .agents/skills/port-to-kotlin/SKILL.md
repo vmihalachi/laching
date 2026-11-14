@@ -56,10 +56,12 @@ Foundation's), and `ResourceNames.kt` mirrors the names `tools/l10n.py` writes. 
 ```sh
 cd kotlin && ktlint "**/*.kt" "**/*.kts" "!**/build/**"   # the version kotlin.yml pins (KTLINT_VERSION); ktlint -F fixes
 cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@17 ./gradlew :core:test :testing:test   # a JDK 17; replays conformance/scheduler
-cd kotlin && ./gradlew :android:assembleDebug   # needs the Android SDK (ANDROID_HOME); otherwise kotlin.yml builds it
+cd kotlin && ./gradlew :android:testDebugUnitTest :android:assembleDebug   # needs the Android SDK (ANDROID_HOME); otherwise kotlin.yml runs them
 ```
 
 The style is `kotlin/.editorconfig` (`ktlint_official`, 120 columns). `scripts/verify.sh` runs ktlint when `kotlin/`
 changed (and skips it for any version but the one `kotlin.yml` pins), and, without `--fast`, the `:core` and
 `:testing` tests when `kotlin/` or `conformance/` changed, on a JDK 17 from `JAVA_HOME`, else Homebrew's
-`openjdk@17`, else the `java` on `PATH`.
+`openjdk@17`, else the `java` on `PATH`; the `:android` tests too when `kotlin/` changed and the Android SDK is there
+(`ANDROID_HOME` or `ANDROID_SDK_ROOT`, or `sdk.dir` in `kotlin/local.properties`). `kotlin.yml` runs ktlint, the
+`:core`, `:testing` and `:android` tests and the `:android` debug build on hosted Ubuntu.

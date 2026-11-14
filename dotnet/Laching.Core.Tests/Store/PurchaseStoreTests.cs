@@ -172,6 +172,111 @@ public sealed class PurchaseStoreTests
         Assert.False(store.IsRestoring);
     }
 
+    /// <summary>
+    /// Offline at launch, the store can't say what's owned: the cached unlock stays (and stays cached), and prices
+    /// still load.
+    /// </summary>
+    [Fact]
+    public async Task AFailedReadAtLaunchKeepsTheCachedUnlock()
+    {
+        var settings = new InMemorySettingsStore();
+        settings.SetStrings("test.owned", [Supporter]);
+        var backend = MakeBackend();
+        backend.FailEntitlements = true;
+        var store = MakeStore(backend, settings);
+        await store.StartAsync();
+        Assert.True(store.IsOwned(Supporter));
+        Assert.Equal([Supporter], settings.GetStrings("test.owned"));
+        Assert.Equal(LoadState.Loaded, store.LoadState);
+        Assert.Null(store.Error);
+    }
+
+    /// <summary>A read that fails after a purchase leaves what's owned as it was; the next read that works applies.</summary>
+    [Fact]
+    public async Task AFailedReadAfterAPurchaseKeepsWhatIsOwned()
+    {
+        var settings = new InMemorySettingsStore();
+        var backend = MakeBackend();
+        var store = MakeStore(backend, settings);
+        await store.StartAsync();
+        await store.BuyAsync(Supporter);
+        Assert.True(store.IsOwned(Supporter));
+
+        backend.FailEntitlements = true;
+        await store.RefreshEntitlementsAsync();
+        backend.Send(new TransactionUpdate("", IsRevoked: false));
+        await Task.Yield();
+        Assert.Equal([Supporter], store.Owned);
+        Assert.Equal([Supporter], settings.GetStrings("test.owned"));
+
+        // Refunded: once the store answers again, that counts.
+        backend.FailEntitlements = false;
+        backend.Owned = [];
+        await store.RefreshEntitlementsAsync();
+        Assert.Empty(store.Owned);
+        Assert.Empty(settings.GetStrings("test.owned") ?? []);
+    }
+
+    /// <summary>The store took the payment; failing to read it back isn't a failed purchase.</summary>
+    [Fact]
+    public async Task APurchaseWhoseReadFailsIsNotAFailedPurchase()
+    {
+        var backend = MakeBackend();
+        var store = MakeStore(backend);
+        await store.StartAsync();
+        backend.FailEntitlements = true;
+        await store.TipAsync(SmallTip);
+        Assert.Null(store.Error);
+        Assert.True(store.JustTipped);
+        Assert.Null(store.Purchasing);
+        Assert.False(store.IsBusy);
+    }
+
+    /// <summary>
+    /// Buying a second unlockable when the read back fails keeps the one already owned, in the store and its cache:
+    /// a failed read never clears what's owned. The next read that works adds the new one.
+    /// </summary>
+    [Fact]
+    public async Task APurchaseWhoseReadFailsKeepsWhatWasOwned()
+    {
+        const string pack = "test.pack";
+        var catalog = new ProductCatalog([Supporter, pack], [SmallTip]);
+        var settings = new InMemorySettingsStore();
+        var backend = new MockStoreBackend(catalog) { Owned = [pack] };
+        var store = new PurchaseStore(catalog, backend, settings, cacheKey: "test.owned");
+        await store.StartAsync();
+        Assert.Equal([pack], store.Owned);
+
+        backend.FailEntitlements = true;
+        await store.BuyAsync(Supporter);
+        Assert.Equal([Supporter], backend.Purchased);
+        Assert.Equal([pack], store.Owned);
+        Assert.Equal([pack], settings.GetStrings("test.owned"));
+        Assert.Null(store.Error);
+        Assert.Null(store.Purchasing);
+        Assert.False(store.IsBusy);
+
+        backend.FailEntitlements = false;
+        await store.RefreshEntitlementsAsync();
+        Assert.Equal([pack, Supporter], store.Owned.Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>A restore that can't read what's owned afterwards says so, and keeps what was owned.</summary>
+    [Fact]
+    public async Task ARestoreWhoseReadFailsReportsRestoreFailed()
+    {
+        var backend = MakeBackend();
+        backend.Owned = [Supporter];
+        var store = MakeStore(backend);
+        await store.StartAsync();
+        backend.FailEntitlements = true;
+        await store.RestoreAsync();
+        Assert.Equal(1, backend.Restores);
+        Assert.Equal(PurchaseError.RestoreFailed, store.Error);
+        Assert.False(store.IsRestoring);
+        Assert.True(store.IsOwned(Supporter));
+    }
+
     [Fact]
     public async Task MissingProductsLeavePricesEmpty()
     {
