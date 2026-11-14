@@ -76,16 +76,20 @@ The package ships no strings, product ids or window lists: the app passes them i
   and a content provider; `NotificationPoster(categories:)` (also on iOS) takes action ids with already localized
   titles and reports `onAction(categoryID, actionID)`, or `onAnswer` with the request and its `userInfo`; for an app the
   system ends between reminders, `replacePending(prefix:with:)` schedules `ScheduledNotification`s ahead; `LoginItem` and
-  `LaunchContext.launchedAtLogin(appleEvent:)` cover start-at-login. `FloatingWindow(content:size:anchor:)` floats SwiftUI
-  content above other windows on every Space (not full-screen ones) without activating the app: click, drag, right-click
-  menu and pinch callbacks, fades, a window riding along beside it (a speech bubble), and `FloatingPlacement` for the
-  math (kept on a screen when displays change, a side facing the middle, a platform-neutral top-left origin).
+  `LaunchContext.launchedAtLogin()` (from `applicationDidFinishLaunching`; `launchedAtLogin(appleEvent:)` with
+  `launchedAsLoginItem()`'s answer read earlier) cover start-at-login. `FloatingWindow(content:size:anchor:)` floats
+  SwiftUI content above other windows on every Space (not full-screen ones) without activating the app: click, drag,
+  right-click menu and pinch callbacks, fades, a window riding along beside it (a speech bubble), and
+  `FloatingPlacement` for the math (kept on a screen when displays change, a side facing the middle, a platform-neutral
+  top-left origin).
 - **Store.** `PurchaseStore(catalog: ProductCatalog(unlockables:tips:))`, `@Observable` (hold it in `@State` or your
   model); `owned`, `isOwned(_:)`, `buy`, `tip`, `restore`; `error: PurchaseError?` is for the app to put into words.
   Tests use `MockStoreBackend`. On Windows the same store (`Laching.Core.Store`) runs over
   `StoreContextBackend(dispatcher, windowHandle)`, which matches add-ons by their Partner Center Product ID and reports
-  consumables fulfilled so tips can be bought again; `MockStoreBackend` ships in `Laching.Core` there, for tests and an
-  app's preview modes.
+  consumables fulfilled so tips can be bought again. A license it can't read, or an app license that isn't active,
+  throws, so `PurchaseStore` keeps the last known ownership rather than locking what was bought (on Android,
+  `PlayBillingBackend` answers its cache of what was owned when Play can't be read, and throws when that is empty).
+  `MockStoreBackend` ships in `Laching.Core` on Windows, for tests and an app's preview modes.
 - **Feedback and reviews.** `ReviewLifecycle(store:days:)` (LachingStore, `@Observable`) counts use, by
   `countDay(_:calendar:)` each time the app is opened or `countUses(_:minimum:calendar:)` over a history it keeps, and
   is `isDue` until `stop()` (dismissed, or reviewed from the app's link) or `beginAttempt()` (the one native request);

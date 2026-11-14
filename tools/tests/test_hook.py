@@ -14,7 +14,7 @@ import sys
 import tempfile
 import time
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -50,8 +50,10 @@ class HookTestCase(FixtureAppTestCase):
         super().setUp()
         self.tmp = tempfile.mkdtemp()
 
-    def run_hook(self, mode, event, payload=None):
-        env = {**os.environ, "CLAUDE_PROJECT_DIR": str(self.root), "TMPDIR": self.tmp}
+    def run_hook(self, mode, event, payload=None, **overrides):
+        """The hook as an agent runs it; `overrides` set environment variables, a None one unsets it."""
+        env = {**os.environ, "CLAUDE_PROJECT_DIR": str(self.root), "TMPDIR": self.tmp, **overrides}
+        env = {key: value for key, value in env.items() if value is not None}
         return subprocess.run([sys.executable, str(HOOK), mode], input=payload if payload is not None else json.dumps(event),
                               encoding="utf8", capture_output=True, env=env, timeout=60)
 
@@ -170,6 +172,63 @@ class PreToolUse(HookTestCase):
                                      "tool_input": json.dumps({"command": f"cat {xcstrings}"})})
         self.assertEqual(done.returncode, 2)
         self.assertEqual(json.loads(done.stdout)["permissionDecision"], "deny")
+
+    def test_copilot_camel_case_events_take_the_runtimes_names(self):
+        """Copilot's camelCase events (`preToolUse`) send `toolName`/`toolArgs` with the runtime's own tool names, the
+        arguments as a JSON string or an object: they guard as the PascalCase ones do, and record under `sessionId`."""
+        xcstrings = str(self.root / "macos/Fixture/Resources/Localizable.xcstrings")
+        phrases = str(self.root / "conformance/phrases.json")
+        (self.root / "macos/Fixture/Views").mkdir(parents=True, exist_ok=True)
+        big = self.root / "macos/Fixture/Views/Big.swift"
+        big.write_text("func f() {}\n" * 700, "utf8")
+
+        def answer(tool, args, mode="pre"):
+            done = self.run_hook(mode, {"sessionId": "camel", "toolName": tool, "toolArgs": args, "cwd": str(self.root)})
+            self.assertIn(done.returncode, (0, 2), done.stderr)
+            return done.returncode == 2
+
+        self.assertTrue(answer("view", json.dumps({"path": xcstrings})))
+        self.assertFalse(answer("view", {"path": phrases}), "guarded for edits only")
+        self.assertTrue(answer("view", {"path": str(big)}))
+        self.assertFalse(answer("view", {"path": str(big), "view_range": [1, 50]}))
+        self.assertTrue(answer("edit", json.dumps({"path": phrases, "old_str": "a", "new_str": "b"})))
+        self.assertTrue(answer("create", {"path": phrases, "file_text": "{}"}))
+        self.assertTrue(answer("str_replace_editor", {"command": "view", "path": xcstrings}))
+        self.assertFalse(answer("str_replace_editor", {"command": "view", "path": phrases}), "a view is a read")
+        self.assertTrue(answer("str_replace_editor", {"command": "create", "path": phrases}))
+        self.assertTrue(answer("str_replace_editor", {"command": "str_replace", "path": phrases}))
+        self.assertTrue(answer("bash", json.dumps({"command": f"cat {xcstrings}"})))
+        self.assertTrue(answer("powershell", {"command": f"cat {xcstrings}"}))
+        self.assertFalse(answer("bash", {"command": "ls"}))
+        self.assertTrue(answer("apply_patch", "*** Begin Patch\n*** Update File: conformance/phrases.json\n*** End Patch"))
+        notes = self.root / "notes.md"
+        notes.write_text("a note\n", "utf8")
+        self.assertFalse(answer("edit", json.dumps({"path": str(notes)}), mode="post"))
+        log = Path(self.tmp) / "fixture-agent" / "camel.log"
+        self.assertIn("\tedit\tnotes.md", log.read_text("utf8"), "recorded under sessionId")
+
+    def test_copilot_pascal_case_events_take_the_runtimes_names_too(self):
+        """Copilot documents Claude's tool names for `PreToolUse` only: a PascalCase event with the runtime's own (`edit`,
+        `create`, `bash`) guards and records as Claude's do, and an Edit that carries a patch records each file in it."""
+        phrases = str(self.root / "conformance/phrases.json")
+        self.assertTrue(self.blocked("edit", path=phrases, old_str="a", new_str="b"))
+        self.assertTrue(self.blocked("create", path=phrases, file_text="{}"))
+        notes, made = self.root / "notes.md", self.root / "made.md"
+        notes.write_text("a note\n", "utf8")
+        made.write_text("made\n", "utf8")
+
+        def post(tool, args):
+            done = self.run_hook("post", {"session_id": "pascal", "tool_name": tool, "tool_input": args,
+                                          "cwd": str(self.root)})
+            self.assertEqual((done.returncode, done.stdout), (0, ""), done.stderr)
+
+        post("edit", json.dumps({"path": str(notes), "old_str": "a", "new_str": "b"}))
+        post("create", {"path": str(made), "file_text": "made\n"})
+        post("bash", {"command": "ls"})
+        post("Edit", {"input": "*** Begin Patch\n*** Update File: README.md\n*** End Patch"})
+        log = (Path(self.tmp) / "fixture-agent" / "pascal.log").read_text("utf8")
+        for line in ("\tedit\tnotes.md", "\tedit\tmade.md", "\tbash-end\t", "\tedit\tREADME.md"):
+            self.assertIn(line, log)
 
     def test_app_guards_name_their_reason_and_may_block_reads(self):
         self.configure(guards=[
@@ -622,8 +681,9 @@ class StopAndParity(HookTestCase):
         self.assertEqual(said[0], "Not run since your last edit:")
         self.assertEqual(len(said), 3, "the checks one file asks for share a line")
         self.assertRegex(said[1], rf"^- Windows Core tests, WinUI app build \(.+\), for {core}$")
-        self.assertEqual(said[2], f"Run `scripts/verify.sh -- {core}` (it runs only what applies), "
-                                  "or tell the user why you're skipping it.")
+        self.assertEqual(said[2], f"Run `scripts/verify.sh -- {core}` (it runs only what applies), or tell the user why "
+                                  "you're skipping it, one line per check: `skipped <check>: <reason>`, the check one "
+                                  "of dotnet-test, winui-build.")
         # Each check with the files it waits on, and one command for them all. A file the check ran after is none of
         # them, and neither is one no check is for.
         later = "windows/Fixture.Core/B.cs"
@@ -634,7 +694,8 @@ class StopAndParity(HookTestCase):
                                    "in the Parallels VM": f"{core} {later}"})
         self.assertEqual([line.split(", for ")[-1] for line in said[1:-1] if "core package tests" in line], [swift])
         self.assertEqual(said[-1], f"Run `scripts/verify.sh -- {swift} {core} {later}` (it runs only what applies), "
-                                   "or tell the user why you're skipping it.")
+                                   "or tell the user why you're skipping it, one line per check: `skipped <check>: "
+                                   "<reason>`, the check one of conformance, swift-test, dotnet-test, winui-build.")
         self.assertNotIn("notes.md", "\n".join(said))
 
     def test_a_slow_check_counts_once_verify_noted_that_it_passed(self):
@@ -1181,13 +1242,14 @@ class WhatACommandRan(HookTestCase):
 
         command = "swift test --package-path macos/FixtureCore"
         self.assertNotIn("core package tests", reminder_after({"command": command}, {"stdout": "", "interrupted": False}))
-        # Started in the background, or moved there when it ran too long: the hook heard it start, not how it ended.
+        # Started in the background, or moved there when it ran too long: the hook heard it start, not how it ended, so
+        # the check is still asked for, named as running there.
         for tool_input, response in (({"command": command, "run_in_background": True}, {"backgroundTaskId": "b1"}),
                                      ({"command": command}, {"backgroundTaskId": "b2"}),
                                      ({"command": command}, {"timedOutAfterMs": 120000}),
                                      ({"command": command}, {"backgroundedToDeliverMessage": True})):
-            self.assertIn("core package tests (swift test --package-path macos/FixtureCore) [it ran, but that run "
-                          "doesn't count: in the background", reminder_after(tool_input, response), response)
+            self.assertIn("core package tests (swift test --package-path macos/FixtureCore) [running in the background "
+                          "since", reminder_after(tool_input, response), response)
 
     def test_a_command_is_split_where_the_shell_splits_it(self):
         parts = self.hook.shell_parts('cd a && X=1 time make -j4 2>&1 | tee "my log"; echo "$(date +%s)" > out.txt &')
@@ -1526,6 +1588,8 @@ class VerifyNotesWhatRan(HookTestCase):
         self.bin.mkdir()
         self.calls = self.root / "calls.log"
         self.fake(self.bin / "java", "exit 0\n")
+        # ktlint on every machine: without one (a hosted Linux runner has none) its own skip would join each run's notes.
+        self.fake(self.bin / "ktlint", "exit 0\n")
         self.fake(self.bin / "dotnet", f'echo "dotnet $*" >> "{self.calls}"\n')
         (self.root / "android").mkdir()
         self.fake(self.root / "android" / "gradlew", f'echo "gradlew $*" >> "{self.calls}"\n'
@@ -1559,11 +1623,15 @@ class VerifyNotesWhatRan(HookTestCase):
         return [label for label in ("Kotlin core tests", "Android app build", "Windows app model tests", "WinUI app build")
                 if label in said]
 
+    def lines(self, first=None):
+        """The lines verify.sh's log holds, split at tabs: those of a pass (a start time first), or those whose first
+        field is `first` (`skip`, `ok`)."""
+        lines = self.log.read_text("utf8").splitlines() if self.log.exists() else []
+        return [line.split("\t") for line in lines if (line.split("\t")[0] == first if first else line[:1].isdigit())]
+
     def noted(self):
-        """The kinds column of each line verify.sh left, in order."""
-        if not self.log.exists():
-            return []
-        return [line.split("\t")[1] for line in self.log.read_text("utf8").splitlines()]
+        """The kinds column of each pass line verify.sh left, in order."""
+        return [line[1] for line in self.lines()]
 
     def test_only_a_check_that_ran_and_passed_is_noted(self):
         self.edit("android", self.CORE, self.APP)
@@ -1639,9 +1707,7 @@ class VerifyNotesWhatRan(HookTestCase):
         failing = {"DOTNET_FAILS": "1", "GRADLE_FAILS": ":core:test"}
         beside = run(MEET="1", **failing)
         self.assertEqual(beside.returncode, 1, beside.stdout + beside.stderr)
-        # ktlint's line is "ok" or "skip" as the machine has it or not (a hosted Linux runner doesn't), so it's left out.
-        self.assertEqual([line for line in beside.stdout.splitlines()
-                          if not line.startswith(" ") and "ktlint" not in line][-5:], [
+        self.assertEqual([line for line in beside.stdout.splitlines() if not line.startswith(" ")][-5:], [
             "FAIL  dotnet test (Fixture.App.Tests)", "FAIL  gradlew :core:test", "ok    the APK builds",
             "skip  WinUI app: builds on Windows or in the Parallels VM (left alone: --no-vm); push the branch and run "
             "the Windows workflow", "2 check(s) failed."], beside.stderr)
@@ -1711,6 +1777,8 @@ esac
         self.assertIn("skip  WinUI app: builds on Windows or in the Parallels VM (left alone: --no-vm)", done.stdout)
         self.assertEqual(self.noted(), ["dotnet-app-test"], "a skipped check isn't one that ran")
         self.assertEqual(self.named("windows"), ["WinUI app build"])
+        self.assertEqual(self.skipped(), [("winui-build", "left alone: --no-vm", [view])], "an open skip, by its kind")
+        self.assertIn("[skipped before: left alone: --no-vm]", self.run_hook("stop", {"session_id": "windows"}).stderr)
 
     def test_an_app_check_that_exits_77_skipped_itself(self):
         """A machine without the toolchain: the app's own check says why and exits 77, which is neither a failure nor
@@ -1731,6 +1799,10 @@ esac
         self.assertNotIn("FAIL", done.stdout)
         self.assertEqual(self.noted(), [], "a check that skipped itself isn't one that ran")
         self.assertEqual(self.named("sdk"), ["Android app build"], "so the hook still asks for it")
+        # verify.sh's by name, in the order they ran; then the Stop hook's, by its kind: the stop said nothing of it.
+        self.assertEqual(self.skipped(), [("the manifest", "skipped: needs aapt", [self.APP]),
+                                          ("the APK builds", "skipped: needs the Android SDK", [self.APP]),
+                                          ("android-build", self.hook.STOP_NO_SAY, [self.APP])])
 
         # Only the app's own checks skip themselves this way, and any other status is still a failure.
         data["verify"]["checks"][0]["run"] = "echo 'no SDK'; exit 78"
@@ -1760,6 +1832,483 @@ esac
         self.assertIn("ok    gradlew :core:test", done.stdout)
         self.assertEqual(self.noted(), ["gradle-core-test"])
         self.assertEqual(self.named("catalog"), [])
+
+    def skipped(self):
+        """The open skips of verify.sh's log (`hook.py skips`) as (check, reason, paths)."""
+        return [(skip["check"], skip["reason"], skip["paths"]) for skip in self.hook.open_skips()]
+
+    def test_a_missing_tool_is_an_open_skip_until_the_check_passes(self):
+        gradlew = self.root / "android" / "gradlew"
+        body = gradlew.read_text("utf8")
+        gradlew.unlink()
+        done = self.verify("--", self.CORE)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("skip  gradlew :core:test: needs android/gradlew and a JDK 17", done.stdout)
+        self.assertEqual(self.skipped(), [("gradle-core-test", "needs android/gradlew and a JDK 17", [self.CORE])])
+        self.fake(gradlew, body.removeprefix("#!/bin/sh\n"))
+        done = self.verify("--", self.CORE)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.skipped(), [], "its pass closes it")
+
+    def test_a_check_past_its_time_is_an_open_skip_and_a_failure(self):
+        self.fake(self.root / "android" / "gradlew", "sleep 30\n")
+        done = self.verify("--", self.CORE, LACHING_CHECK_SECONDS="3", LACHING_PROGRESS_SECONDS="10")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("FAIL  gradlew :core:test: stopped after 3 s", done.stdout)
+        self.assertEqual(self.skipped(), [("gradle-core-test", "stopped after 3 s (LACHING_CHECK_SECONDS=3)", [self.CORE])])
+
+    def test_an_app_check_that_skipped_itself_is_closed_by_its_pass(self):
+        config = self.root / "companion.json"
+        data = json.loads(config.read_text("utf8"))
+        data["verify"]["checks"].append({"name": "the manifest", "paths": "^android/app/", "run": "echo 'needs aapt'; exit 77"})
+        config.write_text(json.dumps(data), "utf8")
+        self.verify("--fast", "--", self.APP)
+        self.assertEqual(self.skipped(), [("the manifest", "needs aapt", [self.APP])])
+        data["verify"]["checks"][-1]["run"] = "true"
+        config.write_text(json.dumps(data), "utf8")
+        done = self.verify("--fast", "--", self.APP)
+        self.assertIn("ok    the manifest", done.stdout)
+        self.assertEqual(self.skipped(), [])
+        self.assertEqual(len(self.lines("ok")), 1, "an ok line, for the skip it closed")
+
+    def test_a_passing_run_closes_the_hooks_fast_check_skip_over_its_paths(self):
+        self.hook.note_skip("verify.sh --fast", "didn't finish in 170 s", [self.CORE, self.APP])
+        done = self.verify("--fast", "--", self.CORE)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.skipped(), [("verify.sh --fast", "didn't finish in 170 s", [self.APP])])
+        failed = self.verify("--", self.APP, GRADLE_FAILS=":app:assembleDebug")
+        self.assertEqual(failed.returncode, 1, failed.stdout + failed.stderr)
+        self.assertEqual(self.skipped(), [("verify.sh --fast", "didn't finish in 170 s", [self.APP])], "a failed run")
+        done = self.verify("--", self.APP)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.skipped(), [], "a full run passes the fast checks too")
+
+    def test_an_app_checks_lock_serializes_it(self):
+        config = self.root / "companion.json"
+        data = json.loads(config.read_text("utf8"))
+        data["verify"]["checks"][0]["lock"] = "apk"
+        config.write_text(json.dumps(data), "utf8")
+        locks = self.root / "locks"
+        done = self.verify("--", self.APP, LACHING_VERIFY_LOCK_DIR=str(locks))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("ok    the APK builds", done.stdout)
+        self.assertTrue((locks / "apk.lock").exists(), "the build held its lock")
+
+    def test_regenerated_vectors_ask_for_the_checks_that_read_them(self):
+        """A run that finds the vectors stale regenerates them; the checks that read them run in the same run, over the
+        new vectors, though no path the run was given asks for them."""
+        self.fake(self.bin / "uname", "echo Darwin\n")
+        for tool in ("xcodegen", "xcodebuild"):
+            self.fake(self.bin / tool, "exit 0\n")
+        self.fake(self.bin / "swift", '[ -z "${FIXTURE_WRITE_CONFORMANCE:-}" ] || echo "{}" > conformance/regenerated.json\n')
+        done = self.verify("--no-vm", "--", "macos/FixtureCore/Sources/FixtureCore/Rules.swift")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("FAIL  conformance vectors current", done.stdout)
+        self.assertIn("The vectors were stale and have been regenerated.", done.stdout)
+        self.assertIn("ok    gradlew :core:test", done.stdout, "the Kotlin core replays them")
+        self.assertIn("ok    xcodebuild test", done.stdout, "and the app's tests read them")
+
+    def test_the_trimmed_log_keeps_the_skips_still_open(self):
+        """Past 400 lines the log keeps its last 200, after a line for each skip open before them: one closed before
+        them stays closed."""
+        older = ["skip\t100\tgradle-core-test\tneeds a JDK 17\t" + self.CORE, "skip\t101\tdotnet-test\tneeds the SDK\t",
+                 "102\tdotnet-test\tdotnet test"]
+        self.log.write_text("\n".join(older + [f"{200 + n}\tswift-test\tswift test" for n in range(400)]) + "\n", "utf8")
+        done = self.verify("--fast", "--", "README.md")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(len(self.log.read_text("utf8").splitlines()), 201)
+        self.assertEqual(self.skipped(), [("gradle-core-test", "needs a JDK 17", [self.CORE])])
+
+    def test_the_trim_keeps_the_skip_lines_when_hook_py_cant_list_them(self):
+        """A `hook.py skips` that can't run (here one that dies as it starts): the trimmed log keeps the skip and ok lines
+        of the part it drops, so no open skip is lost."""
+        shadow = self.root / "shadow"
+        shadow.mkdir()
+        (shadow / "sitecustomize.py").write_text(
+            "import os, sys\nif sys.argv[0].endswith('hook.py') and sys.argv[1:2] == ['skips']:\n    os._exit(1)\n", "utf8")
+        older = ["skip\t100\tgradle-core-test\tneeds a JDK 17\t" + self.CORE, "ok\t101\tgradle-core-test",
+                 "102\tdotnet-test\tdotnet test", "skip\t103\tdotnet-test\tneeds the SDK\t"]
+        self.log.write_text("\n".join(older + [f"{200 + n}\tswift-test\tswift test" for n in range(400)]) + "\n", "utf8")
+        done = self.verify("--fast", "--", "README.md", PYTHONPATH=str(shadow))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(len(self.log.read_text("utf8").splitlines()), 203)
+        self.assertEqual(self.skipped(), [("dotnet-test", "needs the SDK", [])])
+
+    def test_a_whole_run_that_fails_nothing_closes_the_cloud_hooks_skip(self):
+        self.hook.note_skip("verify.sh", "didn't finish in 1500 s")
+        done = self.verify("--", self.CORE)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.skipped(), [("verify.sh", "didn't finish in 1500 s", [])], "a run over some files")
+        for args in (["add", "."], ["commit", "-qm", "fixture app", "--no-verify"]):
+            git(self.root, *args)
+        done = self.verify("--fast")
+        self.assertEqual(self.skipped(), [("verify.sh", "didn't finish in 1500 s", [])], "a run of the fast checks")
+        done = self.verify()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.skipped(), [])
+
+
+@unittest.skipIf(BASH is None, NO_SHELL)
+class LoudSkips(HookTestCase):
+    """What the harness skips is said, not swallowed: fast checks past their time are a stop problem and an open skip in
+    verify.sh's log, `hook.py skips` lists the open ones, a blocked stop logs what came of each check, a crash is a
+    message to the user, a startup without the Git hooks is warned of, and files a shell command changed are named."""
+
+    def setUp(self):
+        super().setUp()
+        git(self.root, "init", "-q")
+        patch = mock.patch.dict(os.environ, {"TMPDIR": self.tmp})
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.hook = load_hook()
+        self.hook.setup(self.root)
+        self.event = {"session_id": "loud"}
+        self.log = self.root / ".git" / self.hook.SLOW_LOG
+
+    def open_skips(self):
+        return [(skip["check"], skip["reason"], skip["paths"]) for skip in self.hook.open_skips()]
+
+    def test_fast_checks_past_their_time_are_a_stop_problem_and_an_open_skip(self):
+        # The check starts a child that holds the pipes, as a test runner's worker would, and writes its pid. The
+        # check's time starts once the pid is there: on a loaded machine, 1 s can run out before the shell gets there.
+        child = (Path(self.tmp) / "child.pid").as_posix()
+        fake_verify(self.root, f"sleep 60 &\necho $! > '{child}.new' && mv '{child}.new' '{child}'\nwait\n")
+        self.hook.record(self.event, "edit", "notes.md")
+        ready = []
+
+        class Started(subprocess.Popen):
+            """The fake check, handed back once its child is up."""
+
+            def __init__(self, argv, *args, **kwargs):
+                super().__init__(argv, *args, **kwargs)
+                if any("verify.sh" in str(word) for word in argv):
+                    for _ in range(1200):  # 60 s at most
+                        if os.path.exists(child):
+                            break
+                        time.sleep(0.05)
+                    ready.append(time.monotonic())
+
+        with mock.patch.object(self.hook, "FAST_SECONDS", 1, create=True), \
+                mock.patch.object(self.hook.subprocess, "Popen", Started):
+            problems = self.hook.stop_problems(self.event)
+        # FAST_SECONDS, then the kill with its bounded drain (KILL_SECONDS) at most. fast_state's Git ran before the
+        # check started, so STATE_SECONDS is only room for a loaded machine. The drain gives up after 5 s, so the time
+        # alone can't tell a child left running: its state does.
+        self.assertLess(time.monotonic() - ready[0], 1 + self.hook.STATE_SECONDS + self.hook.KILL_SECONDS)
+        self.assertTrue(os.path.exists(child), "the check started its child")
+        if os.name != "nt":  # Git Bash's $! isn't a Windows pid
+            pid = Path(child).read_text("utf8").strip()
+            self.addCleanup(subprocess.run, ["kill", "-9", pid], capture_output=True)
+            state = subprocess.run(["ps", "-o", "stat=", "-p", pid], capture_output=True, text=True).stdout.strip()
+            self.assertIn(state[:1], ("", "Z"), "the check's own child stops with it")
+        said = "\n".join(problems)
+        self.assertIn("Fast checks on the files you edited didn't finish in 1 s", said)
+        self.assertIn("`skipped verify.sh --fast: <reason>`", said)
+        self.assertNotIn("\tpassed\t", self.hook.state_file(self.event).read_text("utf8"))
+        self.assertEqual(self.open_skips(), [("verify.sh --fast", "didn't finish in 1 s", ["notes.md"])])
+        self.assertIn('\tblock\t{"verify.sh --fast": ["notes.md"]}', self.hook.state_file(self.event).read_text("utf8"))
+        with redirect_stdout(io.StringIO()):
+            self.hook.stop({**self.event, "stop_hook_active": True,
+                            "last_assistant_message": "skipped verify.sh --fast: the suite takes minutes here"})
+        self.assertIn('\toutcome\t{"verify.sh --fast": "skipped: the suite takes minutes here"}',
+                      self.hook.state_file(self.event).read_text("utf8"), "the agent's line is read")
+        self.assertEqual(self.open_skips(), [("verify.sh --fast", "the suite takes minutes here", ["notes.md"])])
+        fake_verify(self.root, "exit 0\n")
+        self.assertEqual(self.hook.stop_problems(self.event), [])
+        self.assertEqual(self.open_skips(), [], "a pass over the same files closes it")
+
+    def test_the_fast_runs_time_leaves_the_stop_room_under_its_timeout(self):
+        import conform
+        timeout = next(seconds for event, _, _, seconds in conform.HOOKS if event == "Stop")
+        self.assertLessEqual(self.hook.FAST_SECONDS + self.hook.STATE_SECONDS + self.hook.KILL_SECONDS + 5, timeout)
+
+    def test_a_stop_without_bash_is_an_open_skip_of_the_fast_checks(self):
+        self.hook.record(self.event, "edit", "notes.md")
+        with mock.patch.object(self.hook.companion, "shell_command", return_value=None):
+            self.assertIn("there's no Git for Windows bash here", "\n".join(self.hook.stop_problems(self.event)))
+        self.assertEqual(self.open_skips(), [("verify.sh --fast", "no bash to run verify.sh", ["notes.md"])])
+
+    def test_a_skip_said_again_adds_no_line(self):
+        self.hook.note_skip("dotnet-test", "no SDK", ["a.cs", "b.cs"])
+        self.hook.note_skip("dotnet-test", "no SDK", ["a.cs"])
+        self.hook.note_skip("dotnet-test", self.hook.STOP_NO_SAY, ["b.cs"])
+        self.assertEqual(len(self.log.read_text("utf8").splitlines()), 1)
+        self.hook.note_skip("dotnet-test", "no SDK", ["c.cs"])
+        self.hook.note_skip("dotnet-test", "no VM", ["a.cs"])
+        self.assertEqual(len(self.log.read_text("utf8").splitlines()), 3, "new files, or a new reason")
+        self.assertEqual(self.open_skips(), [("dotnet-test", "no VM", ["a.cs", "b.cs", "c.cs"])])
+
+    def test_what_a_passing_fast_run_skipped_is_said_to_the_user(self):
+        fake_verify(self.root, "echo 'ok    a check'\necho 'skip  ktlint: not installed'\n")
+        self.hook.record(self.event, "edit", "notes.md")
+        done = self.run_hook("stop", self.event)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("ktlint: not installed", json.loads(done.stdout)["systemMessage"])
+
+    def test_skips_lists_the_checks_skipped_and_not_passed_since(self):
+        self.log.write_text("skip\t100\twinui-build\tleft alone: --no-vm\twindows/A.cs,windows/B.cs\n"
+                            "skip\t101\tktlint\tnot installed\tandroid/x.kt\n"
+                            "skip\t102\tdotnet-test\tno dotnet\twindows/A.cs\n"
+                            "103\tdotnet-test\tcd windows && dotnet test\n"  # a pass, as verify.sh notes one
+                            "ok\t104\tktlint\n"
+                            "ok\t105\twinui-build\twindows/A.cs\n"
+                            "skip\t106\tconformance\tno Xcode\tcore/a.swift\n"
+                            "skip\t107\tconformance\tstopped after 900 s\tcore/b.swift\n"
+                            "skip\t108\tverify.sh --fast\tdidn't finish in 170 s\t\n", "utf8")
+        env = {key: value for key, value in os.environ.items() if key != "CLAUDE_PROJECT_DIR"}
+        done = subprocess.run([sys.executable, str(HOOK), "skips"], cwd=self.root, env=env, stdin=subprocess.DEVNULL,
+                              capture_output=True, encoding="utf8", timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.splitlines(), ["winui-build\tleft alone: --no-vm\twindows/B.cs",
+                                                    "conformance\tstopped after 900 s\tcore/a.swift,core/b.swift",
+                                                    "verify.sh --fast\tdidn't finish in 170 s\t"])
+        done = subprocess.run([sys.executable, str(HOOK), "skips", "--json"], cwd=self.root, env=env,
+                              stdin=subprocess.DEVNULL, capture_output=True, encoding="utf8", timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(json.loads(done.stdout)[1], {"check": "conformance", "reason": "stopped after 900 s",
+                                                      "paths": ["core/a.swift", "core/b.swift"], "at": 107})
+        self.log.unlink()
+        done = subprocess.run([sys.executable, str(HOOK), "skips", "--json"], cwd=self.root, env=env,
+                              stdin=subprocess.DEVNULL, capture_output=True, encoding="utf8", timeout=60)
+        self.assertEqual((done.returncode, json.loads(done.stdout)), (0, []))
+
+    def blocked_stop(self):
+        """A stop the stale reminder blocks: windows/Fixture.Core asks for the Windows Core tests and the WinUI build."""
+        fake_verify(self.root, "exit 0\n")
+        self.hook.record(self.event, "edit", "windows/Fixture.Core/Config.cs")
+        return "\n".join(self.hook.stop_problems(self.event))
+
+    def test_the_stale_reminder_asks_for_a_line_per_skipped_check(self):
+        said = self.blocked_stop()
+        self.assertIn("one line per check: `skipped <check>: <reason>`, the check one of dotnet-test, winui-build", said)
+        self.assertIn('\tblock\t{"dotnet-test": ["windows/Fixture.Core/Config.cs"], "winui-build": '
+                      '["windows/Fixture.Core/Config.cs"]}', self.hook.state_file(self.event).read_text("utf8"))
+        self.log.write_text("skip\t1\twinui-build\tleft alone: --no-vm\twindows/Fixture.Core/Config.cs\n", "utf8")
+        self.assertIn("or dotnet build on Windows) [skipped before: left alone: --no-vm]", self.blocked_stop())
+
+    def test_the_next_stop_logs_what_came_of_each_blocked_check(self):
+        self.blocked_stop()
+        self.hook.record(self.event, "ran", "dotnet-test")
+        with redirect_stderr(io.StringIO()):
+            self.hook.stop({**self.event, "stop_hook_active": True,
+                            "last_assistant_message": "Done.\n\n- skipped `winui-build`: no VM on this machine"})
+        self.assertEqual(self.open_skips(), [("winui-build", "no VM on this machine", ["windows/Fixture.Core/Config.cs"])])
+        log = self.hook.state_file(self.event).read_text("utf8")
+        self.assertIn('\toutcome\t{"dotnet-test": "ran", "winui-build": "skipped: no VM on this machine"}', log)
+        self.hook.stop({**self.event, "stop_hook_active": True, "last_assistant_message": "skipped winui-build: again"})
+        self.assertEqual(self.hook.state_file(self.event).read_text("utf8").count("\toutcome\t"), 1, "once per block")
+
+    def test_a_stop_that_says_nothing_of_a_blocked_check_is_a_skip_too(self):
+        self.blocked_stop()
+        self.hook.stop({**self.event, "stop_hook_active": True, "last_assistant_message": "All done."})
+        self.assertEqual(sorted(check for check, _, _ in self.open_skips()), ["dotnet-test", "winui-build"])
+        self.assertEqual({reason for _, reason, _ in self.open_skips()}, {"stopped without running it or saying why"})
+
+    def background(self, command):
+        """`command` as the agent sends it to the background: its pre and post hooks."""
+        bash = {**self.event, "tool_name": "Bash", "cwd": str(self.root),
+                "tool_input": {"command": command, "run_in_background": True}}
+        for mode in ("pre", "post"):
+            done = self.run_hook(mode, bash)
+            self.assertEqual(done.returncode, 0, done.stderr)
+
+    def outcome(self):
+        """What the session's last stop logged of its block."""
+        lines = self.hook.state_file(self.event).read_text("utf8").splitlines()
+        return json.loads([line for line in lines if "\toutcome\t" in line][-1].split("\t", 2)[2])
+
+    def test_a_blocked_check_sent_to_the_background_is_running_not_skipped(self):
+        self.blocked_stop()
+        self.background("scripts/verify.sh --fast")
+        with redirect_stdout(io.StringIO()):
+            self.hook.stop({**self.event, "stop_hook_active": True, "last_assistant_message": "Started the checks."})
+        self.assertEqual(set(self.outcome().values()), {"skipped: " + self.hook.STOP_NO_SAY}, "--fast runs no slow check")
+        self.log.unlink()
+        for command in ("scripts/verify.sh -- windows/Fixture.Core/Config.cs", "bash scripts/verify.sh --no-vm",
+                        "cd windows && dotnet test"):
+            self.blocked_stop()
+            self.background(command + " > checks.log 2>&1")
+            with redirect_stdout(io.StringIO()):
+                self.hook.stop({**self.event, "stop_hook_active": True, "last_assistant_message": "Started the checks."})
+            running = {kind for kind, what in self.outcome().items() if what == "running in the background"}
+            self.assertEqual(running, {"dotnet-test"} if "dotnet" in command else {"dotnet-test", "winui-build"}, command)
+            self.assertEqual([check for check, _, _ in self.open_skips()], [] if running == {"dotnet-test", "winui-build"}
+                             else ["winui-build"], command)
+            if self.log.exists():
+                self.log.unlink()
+        self.blocked_stop()
+        self.background("scripts/verify.sh -- notes.md")
+        with redirect_stdout(io.StringIO()):
+            self.hook.stop({**self.event, "stop_hook_active": True, "last_assistant_message": "Started the checks."})
+        self.assertNotIn("running in the background", self.outcome().values(), "a run over other files")
+
+    def retry(self, said):
+        """The stop that retries a block, the agent's last message `said`."""
+        with redirect_stdout(io.StringIO()):
+            self.hook.stop({**self.event, "stop_hook_active": True, "last_assistant_message": said})
+
+    def test_a_check_sent_to_the_background_before_the_block_is_running_not_skipped(self):
+        fake_verify(self.root, "exit 0\n")
+        self.hook.record(self.event, "edit", "windows/Fixture.Core/Config.cs")
+        self.background("scripts/verify.sh -- windows/Fixture.Core/Config.cs > checks.log 2>&1")
+        self.hook.stop_problems(self.event)  # verify.sh notes its run when it ends: the stop blocks
+        self.retry("verify.sh is already running in the background.")
+        self.assertEqual(self.outcome(), {"dotnet-test": "running in the background",
+                                          "winui-build": "running in the background"})
+        self.assertEqual(self.open_skips(), [], "a run started before the block isn't a skip")
+        self.background("cd windows && dotnet test > ../tests.log 2>&1")
+        self.blocked_stop()  # an edit after it: that run doesn't check it
+        self.retry("Started nothing.")
+        self.assertEqual(self.outcome(), {"dotnet-test": "skipped: " + self.hook.STOP_NO_SAY,
+                                          "winui-build": "skipped: " + self.hook.STOP_NO_SAY})
+        self.blocked_stop()
+        self.background("cd windows && dotnet test > ../tests.log 2>&1")
+        self.retry("skipped dotnet-test: flaky here\nskipped winui-build: no VM")
+        self.assertEqual(self.outcome(), {"dotnet-test": "skipped: flaky here", "winui-build": "skipped: no VM"},
+                         "the agent's own line says more than a command in the background")
+
+    def test_the_stop_names_a_check_running_in_the_background_and_asks_for_it_no_more(self):
+        fake_verify(self.root, "exit 0\n")
+        self.hook.record(self.event, "edit", "windows/Fixture.Core/Config.cs")
+        self.background("scripts/verify.sh -- windows/Fixture.Core/Config.cs > checks.log 2>&1")
+        said = "\n".join(self.hook.stop_problems(self.event))
+        self.assertIn("Windows Core tests [running in the background since", said)
+        self.assertIn("Don't start them again: wait for their result, or tell the user they're still running.", said)
+        self.assertNotIn("Run `", said)
+        self.assertNotIn("[it ran, but that run doesn't count", said)
+        self.retry("verify.sh is already running in the background.")
+        said = self.blocked_stop()
+        self.assertNotIn("running in the background since", said, "it counts until the stop after it, no longer")
+        self.assertIn("the check one of dotnet-test, winui-build.", said)
+        self.background("cd windows && dotnet test > ../tests.log 2>&1")
+        said = "\n".join(self.hook.stop_problems(self.event))
+        self.assertIn("Windows Core tests [running in the background since", said)
+        self.assertIn("(it runs only what applies; what's running in the background needn't start again), or tell the "
+                      "user why you're skipping it, one line per check: `skipped <check>: <reason>`, the check one of "
+                      "winui-build.", said)
+        with mock.patch.object(self.hook, "BACKGROUND_SECONDS", 0):
+            self.assertNotIn("running in the background since", "\n".join(self.hook.stop_problems(self.event)),
+                             "never past BACKGROUND_SECONDS")
+
+    def test_a_background_command_counts_until_the_next_stop(self):
+        fake_verify(self.root, "exit 0\n")
+        for args in (["add", "."], ["commit", "-qm", "fixture app", "--no-verify"]):
+            git(self.root, *args)
+        self.background("./build-things.sh")
+        (self.root / "made.txt").write_text("made in the background\n", "utf8")
+        done = self.run_hook("stop", self.event)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        said = json.loads(done.stdout)["systemMessage"]
+        self.assertIn("Changed while a command of this session ran in the background, by it or by another session", said)
+        self.assertIn("made.txt", said)
+        (self.root / "theirs.txt").write_text("another session's, after the stop\n", "utf8")
+        done = self.run_hook("stop", self.event)
+        self.assertEqual((done.returncode, done.stdout), (0, ""), "the span ended at the stop after it")
+        self.background("./build-more.sh")
+        (self.root / "late.txt").write_text("long after it started\n", "utf8")
+        with mock.patch.object(self.hook, "BACKGROUND_SECONDS", 0):
+            self.assertIsNone(self.hook.bash_changes(self.event), "never past BACKGROUND_SECONDS")
+
+    def test_a_blocked_stops_notes_reach_the_user_at_the_next(self):
+        fake_verify(self.root, "echo 'ok    a check'\necho 'skip  ktlint: not installed'\n")
+        for args in (["add", "."], ["commit", "-qm", "fixture app", "--no-verify"]):
+            git(self.root, *args)
+        bash = {**self.event, "tool_name": "Bash", "tool_input": {"command": "./make-things.sh"}}
+        self.assertEqual(self.run_hook("pre", bash).returncode, 0)
+        (self.root / "made.txt").write_text("made by a command\n", "utf8")
+        self.assertEqual(self.run_hook("post", bash).returncode, 0)
+        self.hook.record(self.event, "edit", "windows/Fixture.Core/Config.cs")
+        blocked = self.run_hook("stop", self.event)
+        self.assertEqual(blocked.returncode, 2, blocked.stdout)
+        for note in ("made.txt", "ktlint: not installed"):
+            self.assertIn(note, blocked.stderr)
+        retry = self.run_hook("stop", {**self.event, "stop_hook_active": True,
+                                       "last_assistant_message": "skipped dotnet-test: no SDK\nskipped winui-build: no VM"})
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        said = json.loads(retry.stdout)["systemMessage"]
+        for note in ("made.txt", "ktlint: not installed"):
+            self.assertIn(note, said, "the user hears what only the agent heard")
+        self.assertEqual(self.run_hook("stop", {**self.event, "stop_hook_active": True}).stdout, "", "once")
+
+    def cloud_stop(self, event, seconds=1):
+        """`cloud-stop`'s answer to `event` (as main hands it over) under GitHub Actions, CLOUD_SECONDS `seconds`. Each
+        verify.sh run it starts is counted in `cloud_runs`, as the hook starts it: a run stopped after 1 s on a loaded
+        machine may not have got as far as printing a thing."""
+        out = io.StringIO()
+        bounded = mock.Mock(wraps=self.hook.run_bounded)
+        with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}), redirect_stdout(out), \
+                mock.patch.object(self.hook, "CLOUD_SECONDS", seconds), \
+                mock.patch.object(self.hook, "run_bounded", bounded):
+            self.hook.cloud_stop(self.hook.with_session({**self.event, **event}))
+        self.started = getattr(self, "started", 0) + bounded.call_count
+        return json.loads(out.getvalue())
+
+    def cloud_runs(self):
+        """How many times the cloud stop started verify.sh."""
+        return getattr(self, "started", 0)
+
+    def test_a_cloud_run_past_its_time_blocks_once_and_is_an_open_skip(self):
+        fake_verify(self.root, "sleep 5\n")
+        self.assertEqual((self.cloud_stop({"stopHookActive": True}), self.cloud_runs()), ({}, 0), "Copilot's own name")
+        answer = self.cloud_stop({})
+        self.assertEqual(answer["decision"], "block")
+        self.assertIn("didn't finish in 1 s, so nothing checked this branch's changes: say so in the pull request",
+                      answer["reason"])
+        self.assertEqual(self.open_skips(), [("verify.sh", "didn't finish in 1 s", [])])
+        self.assertEqual((self.cloud_stop({"stop_hook_active": True}), self.cloud_runs()), ({}, 1), "once")
+        # A stop that says nothing of a retry: the open skip is young, so nothing runs (with the real time, the 5 s run
+        # would start and pass), and nothing blocks.
+        self.assertEqual((self.cloud_stop({}, seconds=1500), self.cloud_runs()), ({}, 1), "once, whatever the stop sends")
+        self.log.write_text(f"skip\t{int(time.time()) - 60}\tverify.sh\tdidn't finish in 1 s\t\n", "utf8")
+        self.assertEqual(self.cloud_stop({})["decision"], "block", "an old skip: the run is tried again")
+        self.assertEqual(self.cloud_runs(), 2)
+        self.assertGreaterEqual(self.hook.open_skips()[0]["at"], int(time.time()) - 5, "the skip is written afresh")
+
+    def test_a_bad_companion_json_is_said_to_the_user_and_fails_open(self):
+        (self.root / "companion.json").write_text("{", "utf8")
+        done = self.run_hook("pre", {**self.event, "tool_name": "Bash", "tool_input": {"command": "ls"}})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("hook.py pre failed open: companion:", json.loads(done.stdout)["systemMessage"])
+
+    def test_a_crash_is_said_to_the_user_and_fails_open(self):
+        done = self.run_hook("post", {"session_id": 5, "tool_name": "Edit", "tool_input": {"file_path": "notes.md"}})
+        self.assertEqual((done.returncode, done.stderr), (0, ""))
+        self.assertIn("hook.py post failed open: TypeError", json.loads(done.stdout)["systemMessage"])
+
+    def test_startup_warns_when_the_git_hooks_are_off(self):
+        (self.root / ".githooks").mkdir()
+        (self.root / ".githooks" / "pre-commit").write_text("#!/bin/sh\n", "utf8")
+        startup = {"session_id": "new", "source": "startup"}
+        done = self.run_hook("resume", startup, CI=None)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("git config core.hooksPath .githooks", json.loads(done.stdout)["systemMessage"])
+        self.assertEqual(self.run_hook("resume", startup, CI="true").stdout, "", "silent under CI")
+        git(self.root, "config", "core.hooksPath", ".githooks")
+        self.assertEqual(self.run_hook("resume", startup, CI=None).stdout, "")
+        git(self.root, "config", "--unset", "core.hooksPath")
+        (self.root / ".githooks" / "pre-commit").unlink()
+        (self.root / ".githooks").rmdir()
+        self.assertEqual(self.run_hook("resume", startup, CI=None).stdout, "", "an app without Git hooks")
+
+    def test_files_a_command_changed_are_named_at_stop_unless_an_edit_claims_them(self):
+        fake_verify(self.root, "exit 0\n")
+        for args in (["add", "."], ["commit", "-qm", "fixture app", "--no-verify"]):
+            git(self.root, *args)
+        bash = {**self.event, "tool_name": "Bash", "tool_input": {"command": "./make-things.sh notes.md"}}
+        self.assertEqual(self.run_hook("pre", bash).returncode, 0)
+        for name in ("notes.md", "made.txt", "claimed.txt"):
+            (self.root / name).write_text("made by a command\n", "utf8")
+        self.assertEqual(self.run_hook("post", bash).returncode, 0)
+        self.hook.record({"session_id": "other"}, "edit", "claimed.txt")  # another session's Edit of it
+        (self.root / "later.txt").write_text("made after the command\n", "utf8")
+        done = self.run_hook("stop", self.event)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        said = json.loads(done.stdout)["systemMessage"]
+        self.assertIn("made.txt", said)
+        self.assertIn("notes.md", said)
+        self.assertNotIn("claimed.txt", said)
+        self.assertNotIn("later.txt", said)
+        self.assertEqual(self.run_hook("stop", self.event).stdout, "", "named once")
 
 
 class Resume(HookTestCase):

@@ -116,8 +116,26 @@ public class PurchaseStore(
         loadProducts()
     }
 
+    /**
+     * Rereads what the user owns. When the store can't say (offline, a failed purchases read), logs it and keeps the
+     * last known [owned], so a failed read never locks what was bought; throws only a cancellation.
+     */
     public suspend fun refreshEntitlements() {
-        val entitled = backend.entitledProductIds().filter(catalog::isUnlockable).toSet()
+        tryRefreshEntitlements()
+    }
+
+    /** [refreshEntitlements], answering whether the store said what's owned. */
+    private suspend fun tryRefreshEntitlements(): Boolean {
+        val read =
+            try {
+                backend.entitledProductIds()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log("Reading what's owned failed, keeping the last known: ${e::class.simpleName} ${e.message}")
+                return false
+            }
+        val entitled = read.filter(catalog::isUnlockable).toSet()
         log("Owned: ${entitled.sorted().joinToString(", ")}")
         var changed = false
         if ((entitled - owned).isNotEmpty() && isPending) {
@@ -129,6 +147,7 @@ public class PurchaseStore(
             changed = true
         }
         if (changed) changed()
+        return true
     }
 
     public suspend fun buy(id: String): Unit = purchase(id)
@@ -151,7 +170,11 @@ public class PurchaseStore(
             isRestoring = false
             changed()
         }
-        refreshEntitlements()
+        // A restore that can't read back what's owned didn't re-sync anything the user can see.
+        if (!tryRefreshEntitlements() && error == null) {
+            error = PurchaseError.RESTORE_FAILED
+            changed()
+        }
     }
 
     public fun acknowledgeTip() {

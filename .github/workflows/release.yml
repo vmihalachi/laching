@@ -11,12 +11,12 @@ name: Release
 #
 # Nothing remote is written until everything that ships has been tested and packed: the plan job bumps in its runner and
 # checks the version strings (scripts/verify.sh --version); core, windows, web and landing test and pack that same
-# bumped tree; swift and kotlin run swift.yml and kotlin.yml on every release, on the planned commit (the bump edits
-# only version strings); only then does the tag job push the "X.Y.Z: release" commit and its vX.Y.Z tag, in one atomic
-# push onto the master that was planned (when master moved meanwhile it pushes nothing: dispatch again). After the push,
-# npm publishes @laching/landing and publish pushes the packages to NuGet.org, makes the GitHub release and waits until
-# NuGet.org lists the packages, so a green run means the apps can bump; both are re-runnable on their own. NuGet
-# through Trusted Publishing (OIDC: no stored key; nuget.org → your account → Trusted
+# bumped tree; swift, kotlin and tools run swift.yml, kotlin.yml and tools.yml on every release, on the planned commit
+# (the bump edits only version strings); only then does the tag job push the "X.Y.Z: release" commit and its vX.Y.Z
+# tag, in one atomic push onto the master that was planned (when master moved meanwhile it pushes nothing: dispatch
+# again). After the push, npm publishes @laching/landing and publish pushes the packages to NuGet.org, makes the GitHub
+# release and waits until NuGet.org lists the packages, so a green run means the apps can bump; both are re-runnable on
+# their own. NuGet through Trusted Publishing (OIDC: no stored key; nuget.org → your account → Trusted
 # Publishing → a policy for repository vmihalachi/laching and workflow release.yml, plus the NUGET_USER repository
 # variable set to your nuget.org username). The release notes are generated from the merged pull requests' titles
 # (grouped by .github/release.yml) with what shipped below them. Tags pushed with the workflow's token start no other
@@ -327,12 +327,22 @@ jobs:
     with:
       commit: ${{ needs.plan.outputs.base }}
 
+  # The apps run the tools from the submodule pinned to the tag (bump-apps.sh, the hooks, conform, the release gate),
+  # so every release tests them too, tools.yml on the planned commit. Never skipped on a release: tag needs it green.
+  tools:
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
+    uses: ./.github/workflows/tools.yml
+    with:
+      commit: ${{ needs.plan.outputs.base }}
+
   # The first remote write, once everything that ships has been tested and packed: the release commit and its tag.
   tag:
-    needs: [plan, core, windows, web, landing, swift, kotlin]
+    needs: [plan, core, windows, web, landing, swift, kotlin, tools]
     if: >-
       !cancelled() && needs.plan.outputs.release == 'true' &&
       needs.swift.result == 'success' && needs.kotlin.result == 'success' &&
+      needs.tools.result == 'success' &&
       (needs.core.result == 'success' || needs.core.result == 'skipped') &&
       (needs.windows.result == 'success' || needs.windows.result == 'skipped') &&
       (needs.web.result == 'success' || needs.web.result == 'skipped') &&

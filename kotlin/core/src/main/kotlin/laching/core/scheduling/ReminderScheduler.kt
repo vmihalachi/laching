@@ -76,8 +76,19 @@ public class ReminderScheduler(
             return SchedulerStatus.Scheduled(nextFireDate ?: now.plusSeconds(config.intervalSeconds))
         }
 
-    /** Local midnight that ends the current day, for "pause until the end of today". */
-    public val endOfToday: Instant get() = addLocalDays(startOfDay(clock.now), 1)
+    /**
+     * The first instant of the next local day, for "pause until the end of today": 01:00 where daylight saving skips
+     * midnight, the first 00:00 where it repeats. Taken from tomorrow's date, not today's start plus a day: where
+     * daylight saving skips midnight, today starts at 01:00.
+     */
+    public val endOfToday: Instant get() =
+        atLocal(
+            clock.now
+                .atZone(timeZone)
+                .toLocalDate()
+                .plusDays(1)
+                .atStartOfDay(),
+        )
 
     /** A new configuration; a changed interval restarts the timer, a kept one leaves the next reminder where it was. */
     public fun update(config: SchedulerConfig) {
@@ -326,11 +337,4 @@ public class ReminderScheduler(
         val offset = rules.getValidOffsets(candidate).maxBy { it.totalSeconds }
         return candidate.toInstant(offset)
     }
-
-    private fun startOfDay(date: Instant): Instant = atLocal(date.atZone(timeZone).toLocalDate().atStartOfDay())
-
-    private fun addLocalDays(
-        date: Instant,
-        days: Long,
-    ): Instant = atLocal(date.atZone(timeZone).toLocalDateTime().plusDays(days))
 }

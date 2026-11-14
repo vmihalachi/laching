@@ -2,7 +2,9 @@ name: Tools
 
 # Tests the Python tools in tools/ (standard library only; the image tests also need Pillow, which they skip without),
 # scripts/release.sh with release.yml's plan step, that the NuGet packages' READMEs link only absolutely, and the
-# @laching/landing package (tools/landing, Node 24).
+# @laching/landing package (tools/landing, Node 24). release.yml calls it (workflow_call) with the commit it plans to
+# tag, and tags nothing unless the tools pass: the apps run them from the submodule. Called, only the tools job runs:
+# release.yml's own landing job tests and packs @laching/landing.
 on:
   push:
     branches:
@@ -14,7 +16,12 @@ on:
       - "scripts/release.sh"
       - "scripts/verify.sh"
       - ".github/workflows/release.yml"
+      - ".github/workflows/windows-app.yml"
+      - ".github/workflows/windows-core.yml"
+      - ".github/workflows/windows-release.yml"
       - ".github/workflows/tools.yml"
+      - ".github/hooks/laching.json"
+      - ".githooks/**"
       - "dotnet/README.md"
       - "dotnet/Directory.Build.targets"
       - "web/README.md"
@@ -27,26 +34,51 @@ on:
       - "scripts/release.sh"
       - "scripts/verify.sh"
       - ".github/workflows/release.yml"
+      - ".github/workflows/windows-app.yml"
+      - ".github/workflows/windows-core.yml"
+      - ".github/workflows/windows-release.yml"
       - ".github/workflows/tools.yml"
+      - ".github/hooks/laching.json"
+      - ".githooks/**"
       - "dotnet/README.md"
       - "dotnet/Directory.Build.targets"
       - "web/README.md"
       - "web/Directory.Build.targets"
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      commit:
+        description: "The commit the caller will tag: the run tests the branch's tip, which must be it"
+        type: string
+        required: true
 
 permissions:
   contents: read
 
+# Called, github.workflow and github.ref are the caller's ("Release", master): a call gets a group of its own, which
+# no push or other call cancels, and cancels nothing.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: >-
+    ${{ inputs.commit && format('tools-call-{0}', inputs.commit)
+    || format('{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: ${{ !inputs.commit }}
 
 jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # Called, the branch's tip as it is now (as release.yml's plan job checks it out), else the default.
       - uses: actions/checkout@v7
+        id: checkout
+        with:
+          ref: ${{ inputs.commit && github.ref || '' }}
+
+      - name: The branch's tip is the commit the caller planned
+        if: inputs.commit && steps.checkout.outputs.commit != inputs.commit
+        run: |
+          echo "$GITHUB_REF moved since the plan"
+          exit 1
 
       # For store-screenshots.py's tests and the other image ones, which would skip. The runner's python3 is the
       # system's (PEP 668), so into the user's site-packages.
@@ -60,6 +92,7 @@ jobs:
         run: scripts/fixture-art.sh --check
 
   landing:
+    if: ${{ !inputs.commit }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:

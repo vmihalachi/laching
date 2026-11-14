@@ -299,12 +299,15 @@ class ReleaseTests(unittest.TestCase):
         # Nothing before the tag job writes to the repository, and the tag job waits for every build to pass.
         jobs = WORKFLOW.read_text("utf8").split("\n  tag:\n")
         self.assertNotIn("contents: write", jobs[0])
-        self.assertIn("needs: [plan, core, windows, web, landing, swift, kotlin]", jobs[1].split("\n  npm:\n")[0])
+        tag = jobs[1].split("\n  npm:\n")[0]
+        self.assertIn("needs: [plan, core, windows, web, landing, swift, kotlin, tools]", tag)
         for job in ("core", "windows", "web", "landing"):
             self.assertIn(f"(needs.{job}.result == 'success' || needs.{job}.result == 'skipped')", jobs[1])
-        # The Swift package and the Kotlin build take every tag: both run on every release, and skipped never tags.
+        # The Swift package and the Kotlin build take every tag, and so do the tools the apps run from the submodule:
+        # all three run on every release, and skipped never tags.
         self.assertIn("needs.swift.result == 'success' && needs.kotlin.result == 'success'", jobs[1])
-        for job in ("swift", "kotlin"):
+        self.assertIn("needs.tools.result == 'success'", jobs[1])
+        for job in ("swift", "kotlin", "tools"):
             self.assertNotIn(f"needs.{job}.result == 'skipped'", jobs[1])
             self.assertIn(f"  {job}:\n    needs: plan\n    if: needs.plan.outputs.release == 'true'\n"
                           f"    uses: ./.github/workflows/{job}.yml\n    with:\n      commit: ${{{{ needs.plan.outputs.base }}}}\n",

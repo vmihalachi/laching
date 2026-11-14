@@ -82,8 +82,11 @@ public sealed class ReminderScheduler
         }
     }
 
-    /// <summary>Start of the next calendar day in <see cref="TimeZone"/>, for "Pause for the rest of today".</summary>
-    public DateTimeOffset EndOfToday => AddLocalDays(StartOfDay(clock.Now), 1);
+    /// <summary>
+    /// Start of the next calendar day in <see cref="TimeZone"/>, for "Pause for the rest of today". Taken from
+    /// tomorrow's date, not today's start plus a day: where daylight saving skips midnight, today starts at 01:00.
+    /// </summary>
+    public DateTimeOffset EndOfToday => AtLocal(LocalDateTime(clock.Now).Date.AddDays(1));
 
     public void Update(SchedulerConfig config)
     {
@@ -280,8 +283,8 @@ public sealed class ReminderScheduler
     private DateTime LocalDateTime(DateTimeOffset instant) => TimeZoneInfo.ConvertTime(instant, TimeZone).DateTime;
 
     /// <summary>
-    /// The instant at a local wall-clock time; a time skipped by DST moves forward, an ambiguous one takes the
-    /// earlier offset.
+    /// The first instant <see cref="LocalDateTime"/> reads as <paramref name="local"/> or later: a time skipped by
+    /// DST moves forward, an ambiguous one takes the earlier offset.
     /// </summary>
     private DateTimeOffset AtLocal(DateTime local)
     {
@@ -290,11 +293,15 @@ public sealed class ReminderScheduler
         var offset = TimeZone.IsAmbiguousTime(local)
             ? TimeZone.GetAmbiguousTimeOffsets(local).Max()
             : TimeZone.GetUtcOffset(local);
-        return new DateTimeOffset(DateTime.SpecifyKind(local, DateTimeKind.Unspecified), offset);
+        var instant = new DateTimeOffset(DateTime.SpecifyKind(local, DateTimeKind.Unspecified), offset);
+        // .NET's two directions can disagree where one year's rules hand over to the next. With Windows' data for
+        // Morocco, GetUtcOffset puts 00:00 on 1 January 2026 at +01:00, but ConvertTime reads that instant as 23:00
+        // on 31 December at +00:00 and the next hour as 01:00. The clock is read with ConvertTime, so the day ends
+        // where it does, or "the rest of today" would end an hour before now.
+        while (LocalDateTime(instant) < local)
+            instant = instant.AddMinutes(1);
+        while (LocalDateTime(instant.AddMinutes(-1)) >= local)
+            instant = instant.AddMinutes(-1);
+        return instant;
     }
-
-    private DateTimeOffset StartOfDay(DateTimeOffset instant) => AtLocal(LocalDateTime(instant).Date);
-
-    private DateTimeOffset AddLocalDays(DateTimeOffset instant, int days) =>
-        AtLocal(LocalDateTime(instant).AddDays(days));
 }

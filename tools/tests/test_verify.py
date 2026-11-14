@@ -313,6 +313,28 @@ class VerifyTests(unittest.TestCase):
         self.assertRegex(out, r"^\.\.\.   stuck, running 0 min [12] s \(since \d\d:\d\d\)\n")
         self.assertIn("FAIL  stuck: stopped after 2 s (LACHING_CHECK_SECONDS=2); the end of its log:\nok    next\n", out)
 
+    def test_the_caller_hears_why_a_check_skipped_or_stopped(self):
+        # What verify.sh logs as an open skip: a check past its time (a failure too) and one that skipped itself, with
+        # why, queued (queue_result, queue_why) or run here (verify_checked).
+        body = ('heard() { echo "${queue_name[$1]}: ${queue_result[$1]}: ${queue_why[$1]}" >> heard; }\n'
+                'here() { echo "$1: $2: $3" >> heard; }\nqueue_after=heard verify_checked=here\n'
+                'verify_skip_status=77\ncheck "skips here" bash -c \'echo needs a tool; exit 77\'\n'
+                'queue a "skips" bash -c \'echo needs another; exit 77\'\nverify_skip_status=""\n'
+                'queue b "stuck" sleep 30\nqueue a "passes" true\nrun_queued\ncheck "stuck here" sleep 30\n'
+                'check "passes here" true\nfinish')
+        for serial in ("0", "1"):
+            with self.subTest(serial=serial):
+                (self.root / "heard").unlink(missing_ok=True)
+                status, out, err = self.run_verify(body, env={**self.QUIET, "LACHING_CHECK_SECONDS": "2",
+                                                              "LACHING_VERIFY_SERIAL": serial})
+                self.assertEqual((status, err), (1, ""), out)
+                self.assertEqual((self.root / "heard").read_text().splitlines(), [
+                    "skips here: skip: needs a tool", "skips: skip: needs another",
+                    "stuck: timeout: stopped after 2 s (LACHING_CHECK_SECONDS=2)", "passes: ok: ",
+                    "stuck here: timeout: stopped after 2 s (LACHING_CHECK_SECONDS=2)", "passes here: ok: "])
+                self.assertEqual(out.count("FAIL  "), 2, out)
+                self.assertIn("2 check(s) failed.", out)
+
     @unittest.skipIf(WINDOWS, "Windows runs the queued checks in sequence")
     def test_queued_checks_share_a_named_lock_with_another_verifier(self):
         body = self.WORK + 'queue a "build" locked shared work "$1"\nqueue b "beside" true\nrun_queued\nfinish'

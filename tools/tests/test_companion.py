@@ -55,6 +55,28 @@ class SchemaTests(unittest.TestCase):
         names = companion.derived(companion.Config(data, FIXTURE_APP))
         self.assertEqual((names["MAC_CORE"], names["RE_PURE"], names["RE_COREPKG"]), ("", "^$a", "^$a"))
 
+    def test_a_packages_ceiling_is_a_number_of_mb(self):
+        # windows.release.maxMB, which store-release.ps1, the Windows workflows and vm.sh smoke pass to
+        # smoke-package.ps1 -CheckOnly -MaxMB; 0 is none, below 0 is refused here and by those tools.
+        data = json.loads((FIXTURE_APP / "companion.json").read_text("utf8"))
+        for good in (40, 40.5, 0):
+            data["windows"]["release"] = {"maxMB": good}
+            self.assertEqual(companion.validate(data), [], good)
+        for bad in ("40", True, [40]):
+            data["windows"]["release"] = {"maxMB": bad}
+            self.assertEqual(companion.validate(data),
+                             [f"windows.release.maxMB: expected number, got {type(bad).__name__}"])
+        for below in (-1, -0.5):
+            data["windows"]["release"] = {"maxMB": below}
+            self.assertEqual(companion.validate(data), [f"windows.release.maxMB: {below} is below the minimum 0"])
+
+    def test_a_minimum_and_an_items_ceiling_hold(self):
+        schema = {"type": "array", "items": {"type": "integer", "minimum": 1}, "minItems": 1, "maxItems": 2}
+        self.assertEqual(companion.validate([1, 2], schema), [])
+        self.assertEqual(companion.validate([0], schema), ["[0]: 0 is below the minimum 1"])
+        self.assertEqual(companion.validate([1, 2, 3], schema), ["(root): takes at most 2 items"])
+        self.assertEqual(companion.validate([], schema), ["(root): needs at least 1 items"])
+
     def test_problems_are_named(self):
         data = json.loads((FIXTURE_APP / "companion.json").read_text("utf8"))
         data["mac"]["scheme"] = 5

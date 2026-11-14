@@ -4,11 +4,13 @@ running only the covering tests."""
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from fnmatch import fnmatchcase
 from pathlib import Path
 from unittest import mock
 
@@ -64,6 +66,24 @@ class CoveringTests(unittest.TestCase):
             self.assertTrue(path.is_file(), name)
             if case:
                 self.assertIn(f"class {case}(", path.read_text("utf8"), name)
+
+    def test_every_file_mapped_outside_tools_reaches_the_tools_tests(self):
+        # Whether the tools tests run at all is up to verify.sh's tools= pattern and tools.yml's paths: a COVERS entry
+        # outside tools/ that either one leaves out is never reached.
+        script = (REPO / "scripts/verify.sh").read_text("utf8")
+        pattern = re.compile("".join(re.findall(r"^tools\+?='([^']*)'$", script, re.M)))
+        self.assertTrue(pattern.pattern.startswith("^tools/"), "verify.sh's tools= lines, as this test reads them")
+        workflow = (REPO / ".github/workflows/tools.yml").read_text("utf8").split("\n  workflow_dispatch:")[0]
+        push, pull_request = workflow.split("\n  pull_request:\n", 1)
+        for mapped in covering.COVERS:
+            if mapped.startswith("tools/"):
+                continue
+            path = mapped.replace("*", "x")
+            with self.subTest(path=path):
+                self.assertRegex(path, pattern, "verify.sh's tools= pattern")
+                for name, paths in (("push", push), ("pull_request", pull_request)):
+                    globs = re.findall(r'^      - "([^"]+)"$', paths, re.M)
+                    self.assertTrue(any(fnmatchcase(path, glob) for glob in globs), f"tools.yml's {name} paths")
 
 
 class PythonTests(unittest.TestCase):

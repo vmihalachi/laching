@@ -5,14 +5,17 @@ first launch while Debug runs were fine). Run it on every package before uploadi
 Everything app-specific comes from the package's own manifest (its identity, its executable), so it works for any app.
 
 Usage: laching/tools/windows/smoke-package.ps1 -Package <path to .msix> [-Seconds 20] [-Hold 5] [-SideBySide] [-Keep]
-       laching/tools/windows/smoke-package.ps1 -Package <path to .msix> -CheckOnly
+       laching/tools/windows/smoke-package.ps1 -Package <path to .msix> -CheckOnly [-MaxMB 40]
        laching/tools/windows/smoke-package.ps1 -Package <.msix published with -p:ScreenshotMode=true> -Screenshots <folder>
                                                [-Language fr] [-ScreenshotNames all] [-SideBySide]
 
 -CheckOnly installs nothing: it fails unless the package holds its executable, no runtimeconfig.json and no .NET
 runtime (a Native AOT package needs none; a runtimeconfig.json means the packaging took the JIT build's files, and
 coreclr.dll or System.Private.CoreLib.dll beside the executable that it packed the runtime and the assemblies the
-executable already holds, which starts fine at two and a half times the size).
+executable already holds, which starts fine at two and a half times the size), and with -MaxMB unless the package is at
+most that many MB (1 MB = 1048576 bytes, as the size it prints; store-release.ps1 and vm.sh smoke pass companion.json's
+windows.release.maxMB), so whatever else grows a package (a folder of assets, a dependency's files) fails before an
+app moves to it, not after an upload. No ceiling without it (or with 0).
 Plain mode launches the app from Start, waits up to -Seconds for its window (onboarding, on a fresh install), then
 -Hold seconds more, and fails unless it is still running with that window open and Windows logged no crash. Needs Developer Mode (the package is unsigned). Installs the Windows App
 Runtime packages found next to the .msix (Dependencies\<arch>) when they're missing. Removes the test install afterwards
@@ -36,12 +39,14 @@ param(
     [switch]$SideBySide,
     [switch]$Keep,
     [switch]$CheckOnly,
+    [double]$MaxMB = 0,
     [string]$Screenshots,
     [string]$Language = 'en',
     [string]$ScreenshotNames = 'all'
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+if ($MaxMB -lt 0) { throw "-MaxMB $MaxMB`: a package's ceiling in MB, or 0 for none." }
 $Package = (Resolve-Path $Package).Path
 if ($Screenshots) {
     $Screenshots = [IO.Path]::GetFullPath($Screenshots)
@@ -71,7 +76,13 @@ if ($CheckOnly) {
     if ($names -notcontains $exeName) { throw "$(Split-Path $Package -Leaf) has no $exeName." }
     $runtime = @($names | Where-Object { (Split-Path $_ -Leaf) -in 'coreclr.dll', 'clrjit.dll', 'hostfxr.dll', 'hostpolicy.dll', 'System.Private.CoreLib.dll' })
     if ($runtime) { throw "$(Split-Path $Package -Leaf) carries the .NET runtime beside its native executable ($($runtime -join ', ')): the packaging didn't leave out what the executable already holds." }
-    "$(Split-Path $Package -Leaf): native, $($names.Count) files, $([math]::Round((Get-Item $Package).Length / 1MB, 1)) MB"
+    $bytes = (Get-Item $Package).Length
+    if ($MaxMB -gt 0 -and $bytes -gt $MaxMB * 1MB) {
+        # The bytes too: a package a few bytes over rounds to the ceiling's MB.
+        $limit = [long][math]::Floor($MaxMB * 1MB)
+        throw "$(Split-Path $Package -Leaf) is $([math]::Round($bytes / 1MB, 2)) MB ($bytes bytes), over its ceiling of $MaxMB MB ($limit bytes; -MaxMB, which a release takes from windows.release.maxMB): find what it gained before raising the ceiling."
+    }
+    "$(Split-Path $Package -Leaf): native, $($names.Count) files, $([math]::Round($bytes / 1MB, 1)) MB$(if ($MaxMB -gt 0) { " (ceiling $MaxMB MB)" })"
     return
 }
 

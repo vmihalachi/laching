@@ -234,8 +234,48 @@ class BodyTests(FixtureAppTestCase):
         self.assertTrue(lines[publish].endswith(" } finally { Pop-Location } }"), lines[publish])
         self.assertEqual(lines[smoke], r"Invoke-Step 'smoke (windows\scripts\smoke-package.ps1)' { "
                                        r"& 'windows\scripts\smoke-package.ps1' -Package $msix.FullName -SideBySide }")
+        # The package checked (native, no runtime) before it is installed, as store-release.ps1 does, and nothing
+        # installed when it fails; ARGS go to the smoke only. No ceiling without windows.release.maxMB.
+        check = next(i for i, line in enumerate(lines) if line.startswith("Invoke-Step 'package check"))
+        self.assertLess(publish, check)
+        self.assertLess(check, smoke)
+        self.assertEqual(lines[check], r"Invoke-Step 'package check (windows\scripts\smoke-package.ps1 -CheckOnly)' { "
+                                       r"& 'windows\scripts\smoke-package.ps1' -Package $msix.FullName -CheckOnly }")
+        self.assertEqual(lines[check + 1], "if ($global:VmFailures.Count) { Exit-Steps }")
         self.assertEqual("".join(lines).count("Push-Location"), 1)
         self.assertIn("$platform = 'x64'", vm.smoke_body(self.ctx, "x64", ""))
+
+    def test_smoke_holds_the_package_to_windows_release_max_mb(self):
+        # companion.json read as vm.sh reads it (companion.load, against the schema): the check step gets -MaxMB with
+        # windows.release.maxMB as written, as store-release.ps1 passes it, and none for 0. One that isn't a ceiling
+        # (below 0, a string, true; the schema refuses the last two) is refused before anything reaches the VM, as
+        # store-release.ps1 refuses it before anything publishes.
+        import companion
+
+        file = self.root / "companion.json"
+        data = json.loads(file.read_text("utf8"))
+
+        def check_step(value, *, load: bool = True) -> str:
+            data["windows"]["release"]["maxMB"] = value
+            if load:
+                self.assertEqual(companion.validate(data), [], "companion.schema.json takes windows.release.maxMB")
+                file.write_text(json.dumps(data), "utf8")
+            config = companion.load(self.root) if load else companion.Config(data, self.root)
+            ctx = vm.Context(self.root, config, "Windows 11", vm.checkout_key(self.root), self.root / "stage")
+            return next(line for line in vm.smoke_body(ctx, "x64", "-SideBySide").splitlines()
+                        if line.startswith("Invoke-Step 'package check"))
+
+        for value, given in ((40, " -MaxMB 40"), (40.5, " -MaxMB 40.5"), (40.123456, " -MaxMB 40.123456"),
+                             (1234567, " -MaxMB 1234567"), (0, "")):
+            with self.subTest(maxMB=value):
+                check = check_step(value)
+                self.assertTrue(check.endswith(f"-Package $msix.FullName -CheckOnly{given} }}"), check)
+        for value, written in ((-1, "-1"), ("40", '"40"'), (True, "true"), ([40], "[40]")):
+            with self.subTest(maxMB=value):
+                with self.assertRaises(vm.Usage) as raised:
+                    check_step(value, load=False)
+                self.assertEqual(str(raised.exception),
+                                 f"windows.release.maxMB is {written}: a package's ceiling in MB, or 0 for none")
 
     def test_the_script_loads_the_guest_functions_from_the_share(self):
         script = vm.guest_script(self.ctx, "exit 0")

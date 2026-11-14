@@ -56,6 +56,15 @@ verify_stop_runners() {
   for pid in "${verify_runners[@]+"${verify_runners[@]}"}"; do wait "$pid" 2>/dev/null || true; done
   verify_runners=()
 }
+# verify_launch <file> <command...>: a check's command, in the process group of its own it was started in, after
+# writing that group's number (this subshell's, its leader) to <file> whole. Bash 3.2 has no $BASHPID: a shell this
+# starts sees it as $PPID. A program replaces this subshell, so its parent is the runner, as with a plain `"$@" &`.
+verify_launch() {
+  sh -c 'echo "$PPID" >"$1.tmp" && mv -f "$1.tmp" "$1"' sh "$1"
+  shift
+  case "$(type -t "$1")" in file) exec "$@" ;; esac
+  "$@"
+}
 # In a runner: the verifier is gone, or was killed outright and waits as a zombie for its parent (one look a second).
 verify_orphaned() {
   kill -0 "$$" 2>/dev/null || return 0
@@ -79,12 +88,16 @@ trap 'exit 143' TERM
 # verify_skip_status: the exit status with which a check's command says it skipped itself (verify.sh sets 77 around the
 # app's own checks); empty, every status but 0 is a failure. Such a check is listed under `skip` with the last line it
 # printed, isn't a failure, and leaves verify_skipped=1 for the caller.
-verify_skip_status="" verify_skipped=0
+# Each check leaves verify_outcome (ok, fail, skip, or timeout: past LACHING_CHECK_SECONDS, a failure too) and
+# verify_why (a skip's last line, a timeout's limit). With verify_checked set, a check run here (not queued) calls
+# `$verify_checked <label> <outcome> <why>` as it ends; a queued one is the caller's through queue_after.
+verify_skip_status="" verify_skipped=0 verify_outcome="" verify_why="" verify_checked="" verify_queued=""
+verify_told() { [ -n "$verify_queued" ] || [ -z "$verify_checked" ] || "$verify_checked" "$1" "$verify_outcome" "$verify_why"; return 0; }
 check() {
   local name="$1"; shift
   local log="$logdir/$verify_tag${name//[^A-Za-z0-9]/_}.log" started=$SECONDS since status=0 next="$verify_progress"
   local ready="" lock folder launched=0 why
-  verify_skipped=0
+  verify_skipped=0 verify_outcome=fail verify_why=""
   since="$(date +%H:%M)"
   : >"$log"
   if [ "${1:-}" = locked ]; then
@@ -113,13 +126,16 @@ check() {
         break
       fi
     elif [ "$launched" = 0 ]; then
+      # Never fd 3, the verifier's own output: a descendant the check leaves behind can't hold that open.
       set -m
-      "$@" >>"$log" 2>&1 &
+      if [ -n "$verify_runner" ]; then
+        # For the verifier, should this runner be killed before it can stop its check. The check names its group
+        # before it starts: one that kills its runner at once would outrun the runner's own note of it.
+        verify_launch "$logdir/queue.${verify_tag}group" "$@" >>"$log" 2>&1 3>&- &
+      else "$@" >>"$log" 2>&1 3>&- & fi
       verify_active=$!
       set +m
       launched=1
-      # For the verifier, should this runner be killed before it can stop its check.
-      [ -z "$verify_runner" ] || echo "$verify_active" >"$logdir/queue.${verify_tag}group"
     elif ! kill -0 "$verify_active" 2>/dev/null; then
       wait "$verify_active" 2>/dev/null; status=$?
       break
@@ -127,9 +143,11 @@ check() {
     if [ $((SECONDS - started)) -ge "$verify_limit" ]; then
       verify_stop
       verify_unlock
-      printf 'FAIL  %s: stopped after %d s (LACHING_CHECK_SECONDS=%d); the end of its log:\n' "$name" "$verify_limit" "$verify_limit"
+      verify_outcome=timeout verify_why="stopped after $verify_limit s (LACHING_CHECK_SECONDS=$verify_limit)"
+      printf 'FAIL  %s: %s; the end of its log:\n' "$name" "$verify_why"
       tail -n 30 "$log" | sed 's/^/      /'
       failed+=("$name")
+      verify_told "$name"
       return 0
     fi
     if [ -n "$verify_runner" ]; then
@@ -148,14 +166,16 @@ check() {
   if [ -n "$verify_skip_status" ] && [ "$status" = "$verify_skip_status" ] && [ "$launched" = 1 ]; then
     why="$(awk 'NF { sub(/^[ \t]+/, ""); line = $0 } END { print line }' "$log")"
     skip "$name${why:+: $why}"
-    verify_skipped=1
+    verify_skipped=1 verify_outcome=skip verify_why="$why"
+    verify_told "$name"
     return 0
   fi
-  if [ "$status" = 0 ]; then printf 'ok    %s' "$name"
+  if [ "$status" = 0 ]; then printf 'ok    %s' "$name"; verify_outcome=ok
   else printf 'FAIL  %s' "$name"; failed+=("$name"); fi
   if [ "${LACHING_VERIFY_TIMING:-0}" = 1 ]; then printf ' (%d s)' $((SECONDS - started)); fi
   printf '\n'
   if [ "$status" != 0 ]; then tail -n 30 "$log" | sed 's/^/      /'; fi
+  verify_told "$name"
 }
 
 skip() { notes+=("$1"); }
@@ -163,17 +183,18 @@ skip() { notes+=("$1"); }
 # --- queued checks -----------------------------------------------------------------------------
 
 # One entry per queued check: its group, label, `check` arguments (a slice of queue_args) and the verify_skip_status it
-# was queued under. run_queued fills queue_result (ok, fail or skip) and queue_started (epoch seconds), and calls
-# $queue_after <index> as each check is reported, in the order queued: where the caller notes what ran.
+# was queued under. run_queued fills queue_result (ok, fail, skip or timeout: `check`'s verify_outcome), queue_why (its
+# verify_why) and queue_started (epoch seconds), and calls $queue_after <index> as each check is reported, in the order
+# queued: where the caller notes what ran.
 queue_group=() queue_name=() queue_first=() queue_count=() queue_args=() queue_skip=()
-queue_result=() queue_started=() queue_pid=() queue_next=0 queue_after=""
+queue_result=() queue_why=() queue_started=() queue_pid=() queue_next=0 queue_after=""
 queue() {
   queue_group+=("$1"); shift
   queue_name+=("$1")
   queue_first+=("${#queue_args[@]}"); queue_count+=("$#")
   queue_args+=("$@")
   queue_skip+=("$verify_skip_status")
-  queue_result+=(""); queue_started+=("")
+  queue_result+=(""); queue_why+=(""); queue_started+=("")
 }
 
 # queue_check <index> [<its start>]: the queued check, run here with `check`, away from the verifier's input.
@@ -181,11 +202,14 @@ queue_check() {
   local i="$1" before=${#failed[@]} status="$verify_skip_status"
   verify_skip_status="${queue_skip[$i]}"
   queue_started[$i]="${2:-$(date +%s)}"
+  verify_queued=1
   check "${queue_args[@]:${queue_first[$i]}:${queue_count[$i]}}" </dev/null
-  verify_skip_status="$status"
-  if [ "$verify_skipped" = 1 ]; then queue_result[$i]=skip
-  elif [ ${#failed[@]} -gt "$before" ]; then queue_result[$i]=fail
-  else queue_result[$i]=ok; fi
+  verify_queued="" verify_skip_status="$status"
+  queue_why[$i]="$verify_why"
+  case "$verify_outcome" in
+    skip | timeout) queue_result[$i]="$verify_outcome" ;;
+    *) if [ ${#failed[@]} -gt "$before" ]; then queue_result[$i]=fail; else queue_result[$i]=ok; fi ;;
+  esac
 }
 
 # queue_runner <group> <first> <end>: that group's checks among the queued ones, in sequence, in a subshell with a
@@ -207,7 +231,7 @@ queue_runner() {
     printf '%s\n' "$stamp" >"$logdir/queue.$i.tmp" && mv -f "$logdir/queue.$i.tmp" "$logdir/queue.$i.started"
     queue_check "$i" "${stamp%% *}" >"$logdir/queue.$i.out"
     rm -f "$logdir/queue.$i.group" # the check's process group is stopped and gone: its number may be another's now
-    printf '%s\n' "${queue_result[$i]}" "${queue_started[$i]}" "${notes[@]+"${notes[@]}"}" >"$logdir/queue.$i.tmp" &&
+    printf '%s\n' "${queue_result[$i]}" "${queue_started[$i]}" "${queue_why[$i]}" "${notes[@]+"${notes[@]}"}" >"$logdir/queue.$i.tmp" &&
       mv -f "$logdir/queue.$i.tmp" "$logdir/queue.$i.done"
   done
   exit 0 # an EXIT trap doesn't run when a background function only returns (Bash 3.2)
@@ -217,7 +241,7 @@ queue_runner() {
 # and keeps its failure or its skip note. A runner that ended without the result is a failure, never a silent pass.
 queue_report() {
   local i="$1" name="${queue_name[$1]}" done="$logdir/queue.$1.done" began="" since="" next="$verify_progress"
-  local gone=0 stamp result="" started="" note="" group=""
+  local gone=0 stamp result="" started="" why="" note="" group=""
   while [ ! -f "$done" ]; do
     if [ "$gone" = 1 ]; then
       if [ -f "$logdir/queue.$i.started" ]; then
@@ -245,12 +269,12 @@ queue_report() {
     sleep 0.1
   done
   cat "$logdir/queue.$i.out" 2>/dev/null
-  { IFS= read -r result; IFS= read -r started; IFS= read -r note; } <"$done" || true
-  queue_started[$i]="$started"
+  { IFS= read -r result; IFS= read -r started; IFS= read -r why; IFS= read -r note; } <"$done" || true
+  queue_started[$i]="$started" queue_why[$i]="$why"
   case "$result" in
     ok) ;;
     skip) notes+=("$note") ;;
-    fail) failed+=("$name") ;;
+    fail | timeout) failed+=("$name") ;;
     *) printf 'FAIL  %s: its result is unreadable\n' "$name"; result=fail; failed+=("$name") ;;
   esac
   queue_result[$i]="$result"

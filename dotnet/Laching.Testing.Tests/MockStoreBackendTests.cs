@@ -98,6 +98,18 @@ public sealed class MockStoreBackendTests
         Assert.Equal(2, backend.Restores);
     }
 
+    /// <summary>A failed read throws rather than answering an empty set, and what's owned is still there once it reads again.</summary>
+    [Fact]
+    public async Task ReadingWhatIsOwnedCanFail()
+    {
+        var backend = MakeBackend();
+        backend.Owned = [Supporter];
+        backend.FailEntitlements = true;
+        await Assert.ThrowsAsync<MockStoreBackend.Failure>(backend.EntitledProductIdsAsync);
+        backend.FailEntitlements = false;
+        Assert.Equal(new HashSet<string> { Supporter }, await backend.EntitledProductIdsAsync());
+    }
+
     /// <summary>Like Swift's value-typed set: what a caller got stays as it was when a later purchase changes the backend.</summary>
     [Fact]
     public async Task EntitledIdsAreACopy()

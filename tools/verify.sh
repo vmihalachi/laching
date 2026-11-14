@@ -55,9 +55,12 @@
 # The slow checks that share no build folder or device run side by side: the macOS tests, the iOS tests, dotnet, the VM
 # build, the Windows images, Gradle with the app's own slow checks, the landing build; those of one group in sequence.
 # Each one's lines are held back and printed in the order above, so the output and the exit status are a serial run's.
-# A run that regenerates the vectors does that (and the core package's tests) first, the others after: they read them.
+# A run that regenerates the vectors does that (and the core package's tests) first, the others after: they read them,
+# and the regenerated vectors count as changed paths, so each check that reads them runs.
 # A slow check that ran and passed is noted in the Git folder (laching-slow-checks.log: when it started, what it ran),
-# which is how the agent Stop hook knows what was run since an edit; a failed or skipped check leaves no note.
+# which is how the agent Stop hook knows what was run since an edit; a failed one leaves no note. A check skipped (a
+# missing tool, --no-vm, a busy VM, its own exit 77) or stopped past LACHING_CHECK_SECONDS leaves a skip line there,
+# open until the check passes over its paths: `python3 <laching>/tools/hooks/hook.py skips` lists the open ones.
 set -uo pipefail
 
 TOOLS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -104,6 +107,20 @@ matches() {
 }
 touched() { matches "$app_changed" "$@"; }    # the app checks: documentation left out
 touched_any() { matches "$changed" "$@"; }    # every changed path
+
+# covered <paths> <extended regex>...: those of the paths that match one of them, comma-separated: what a skip or a
+# pass of a check covers in the log. Nothing (all of it) with --all, past 200 paths, or when a path has a comma in it.
+covered() {
+  local list="$1" re live=()
+  shift
+  [ "$all" = 0 ] || return 0
+  for re in "$@"; do [ -n "$re" ] && [ "$re" != "$RE_NEVER" ] && live+=("$re"); done
+  [ ${#live[@]} -gt 0 ] || return 0
+  local IFS='|'
+  printf '%s\n' "$list" | grep -E "${live[*]}" |
+    awk 'length($0) { n++; out = out (n > 1 ? "," : "") $0; if (index($0, ",")) bad = 1 }
+      END { if (!bad && n <= 200) printf "%s", out }'
+}
 
 darwin=0; [ "$(uname)" = Darwin ] && darwin=1
 windows=0; case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) windows=1 ;; esac
@@ -206,16 +223,23 @@ xcode_split() {
   [ "$xcode_mac$xcode_ios" != 00 ] || xcode_mac=1 xcode_ios=1 # something asked for them: never neither
 }
 
+# vectors_snapshot: a fingerprint of the vectors' changes in the work tree, which a regeneration that wrote any alters.
+# vectors_changed: the vectors' changed and new paths, one a line.
+vectors_snapshot() { { git diff -- "$CONFORMANCE_DIR"; git ls-files --others --exclude-standard -- "$CONFORMANCE_DIR"; } | shasum; }
+vectors_changed() {
+  { git -c core.quotepath=false diff --name-only HEAD -- "$CONFORMANCE_DIR"
+    git -c core.quotepath=false ls-files --others --exclude-standard -- "$CONFORMANCE_DIR"; } 2>/dev/null
+}
+
 conformance_current() {
   local before after
-  snapshot() { { git diff -- "$CONFORMANCE_DIR"; git ls-files --others --exclude-standard -- "$CONFORMANCE_DIR"; } | shasum; }
-  before="$(snapshot)"
+  before="$(vectors_snapshot)"
   "$TOOLS/conformance.sh" || return 1
-  after="$(snapshot)"
+  after="$(vectors_snapshot)"
   if [ "$before" != "$after" ]; then
     git status --short -- "$CONFORMANCE_DIR"
-    echo "The vectors were stale and have been regenerated. Commit them with your change,"
-    echo "then run the Windows Core tests to see what the port needs."
+    echo "The vectors were stale and have been regenerated. Commit them with your change; the checks that read"
+    echo "them run in this run, over the new vectors."
     return 1
   fi
   return 0
@@ -314,31 +338,102 @@ csharp_format() {
 # The agent Stop hook reminds about the slow checks not run since the last edit, and learns what ran from here, not from
 # the command line (a --help, a grep of this file and a run that failed all name the script too): each slow check that
 # ran and passed leaves a line in the Git folder, <its start, epoch seconds> TAB <the hook's kinds> TAB <its command>.
-# A check that failed or was skipped leaves none, and nothing is noted outside a Git repository.
+# A check that failed leaves none, and nothing is noted outside a Git repository.
+# A check that didn't run (a missing tool, --no-vm, a busy VM, its own exit 77) or ran past LACHING_CHECK_SECONDS leaves
+# skip TAB <epoch> TAB <check> TAB <why> TAB <the paths it was for, comma-separated; none: all of it>, its check the
+# hook's kind for a slow check of its own, else the label; it stays open until a pass line of the kind, or an
+# ok TAB <epoch> TAB <check> [TAB <paths>] line, which a passing check with an open skip leaves. `hook.py skips` lists
+# the open ones (the Stop hook's own skips are in the same log).
 ran_log="$(git rev-parse --absolute-git-dir 2>/dev/null)" && ran_log="$ran_log/laching-slow-checks.log" || ran_log=""
-ran_record() { # <started> <kinds> <command>
+ran_note() { # <field>...: one line of them, tab-separated, each made one line without tabs
   [ -n "$ran_log" ] || return 0
-  { printf '%s\t%s\t%s\n' "$1" "$2" "$(printf '%s' "$3" | tr '\n\t' '  ')" >>"$ran_log"; } 2>/dev/null || return 0
-  if [ $(($(wc -l <"$ran_log"))) -gt 400 ]; then # the hook wants the newest line of each kind: the file stays short
-    tail -n 200 "$ran_log" >"$ran_log.tmp" 2>/dev/null && mv -f "$ran_log.tmp" "$ran_log" 2>/dev/null
-  fi
+  local field line="" n=0
+  for field in "$@"; do
+    [ "$n" = 0 ] || line="$line"$'\t'
+    line="$line$(printf '%s' "$field" | tr '\n\t' '  ')" n=1
+  done
+  { printf '%s\n' "$line" >>"$ran_log"; } 2>/dev/null
   return 0
 }
+ran_record() { ran_note "$1" "$2" "$3"; } # <started> <kinds> <command>
+# The hook wants the newest pass line of each kind and the skips still open: past 400 lines the log keeps its last 200,
+# after a skip line for each skip open before them (`hook.py skips`), which replaying the 200 leaves as it was; when
+# `hook.py skips` can't say, after the skip and ok lines of the part it drops, so no open skip is lost. Lines another
+# process appends while it trims are copied over before the trimmed log replaces the old one.
+ran_trim() {
+  [ -n "$ran_log" ] && [ -f "$ran_log" ] || return 0
+  [ $(($(wc -l <"$ran_log"))) -gt 400 ] || return 0
+  CLAUDE_PROJECT_DIR="$ROOT" python3 - "$ran_log" "$TOOLS/hooks/hook.py" <<'PY' 2>/dev/null
+import json, os, subprocess, sys
+log, hook = sys.argv[1], sys.argv[2]
+with open(log, "rb") as f:
+    data = f.read()
+lines = data.splitlines(keepends=True)
+if len(lines) > 400:
+    try:
+        found = json.loads(subprocess.run([sys.executable, hook, "skips", "--json"], stdin=subprocess.DEVNULL,
+                                          capture_output=True, timeout=60).stdout)
+        head = ["\t".join(["skip", str(s["at"]), s["check"], s["reason"], ",".join(s["paths"])]).encode() + b"\n"
+                for s in found]
+    except Exception:
+        head = [line if line.endswith(b"\n") else line + b"\n"
+                for line in lines[:-200] if line.startswith((b"skip\t", b"ok\t"))]
+    with open(log + ".tmp", "wb") as f:
+        f.writelines(head + lines[-200:])
+        with open(log, "rb") as again:
+            again.seek(len(data))
+            f.write(again.read())
+    os.replace(log + ".tmp", log)
+PY
+  rm -f "$ran_log.tmp" 2>/dev/null
+  return 0
+}
+# The checks with an open skip as this run starts, a line each: a pass of one of them leaves an ok line.
+skips_open="$([ -z "$ran_log" ] || CLAUDE_PROJECT_DIR="$ROOT" python3 "$TOOLS/hooks/hook.py" skips 2>/dev/null | cut -f1)"
+was_skipped() { case $'\n'"$skips_open"$'\n' in *$'\n'"$1"$'\n'*) return 0 ;; esac; return 1; }
+
+# check_paths: the changed paths the next check is for (`covered`), for its skip line; each check uses it once. A pass
+# covers all of a check, or with check_only set (a linter of the changed files) those paths alone.
+# skipped <check> <why> <line>: a check that can't run here, listed under `skip` as <line> and noted as an open skip.
+check_paths="" check_only=""
+skipped() {
+  skip "$3"
+  ran_note skip "$(date +%s)" "$1" "$2" "$check_paths"
+  check_paths="" check_only=""
+}
+# check_noted <label> <outcome> <why>: verify-lib.sh's verify_checked, as each check run here (not queued) ends.
+check_noted() {
+  case "$2" in
+    skip | timeout) ran_note skip "$(date +%s)" "$1" "$3" "$check_paths" ;;
+    ok) ! was_skipped "$1" || ran_note ok "$(date +%s)" "$1" "${check_only:+$check_paths}" ;;
+  esac
+  check_paths="" check_only=""
+}
+verify_checked=check_noted
+
 # slow <kinds> <group> <label> [locked <name>] <command...>: a check queued for run_queued (verify-lib.sh), which runs
 # the groups side by side and the checks of one group in sequence; slow_note notes it when it passed. No kind for a
-# check the hook has no name for (the app's own): the hook reads its command.
-slow_kinds=() slow_command=() xcode_checks=() xcode_command="" xcode_kind=""
+# check the hook has no name for (the app's own): the hook reads its command. It takes check_paths for its skip line.
+slow_kinds=() slow_command=() slow_paths=() xcode_checks=() xcode_command="" xcode_kind=""
 slow() {
   local kinds="$1" i=${#queue_group[@]}; shift
   queue "$@"
   shift 2; if [ "${1:-}" = locked ]; then shift 2; fi
-  slow_kinds[$i]="$kinds" slow_command[$i]="$*"
+  slow_kinds[$i]="$kinds" slow_command[$i]="$*" slow_paths[$i]="$check_paths"
+  check_paths=""
 }
 # slow_note <index>: run_queued calls it as each check is reported, in the order queued, so the notes are a serial
 # run's. A check is noted with its own start. The Xcode test runs (xcode_checks) are one kind for the hook: noted when
-# the last of them is reported and each passed, from the start of the first, as xcode_kind.
+# the last of them is reported and each passed, from the start of the first, as xcode_kind. One that skipped or ran
+# past its time leaves a skip line, by its kind (xcodebuild-test for the Xcode runs) or else its label; an app's own
+# check (no kind) that passed with an open skip, an ok line.
 slow_note() {
-  local i="$1" j last started=""
+  local i="$1" j last started="" key="${slow_kinds[$i]-}"
+  case " ${xcode_checks[*]-} " in *" $i "*) key=xcodebuild-test ;; esac
+  case "${queue_result[$i]}" in
+    skip | timeout) ran_note skip "$(date +%s)" "${key:-${queue_name[$i]}}" "${queue_why[$i]}" "${slow_paths[$i]-}" ;;
+    ok) [ -n "$key" ] || ! was_skipped "${queue_name[$i]}" || ran_note ok "$(date +%s)" "${queue_name[$i]}" ;;
+  esac
   if [ -n "${slow_command[$i]-}" ]; then
     [ "${queue_result[$i]}" != ok ] || ran_record "${queue_started[$i]}" "${slow_kinds[$i]-}" "${slow_command[$i]}"
     return 0
@@ -355,24 +450,27 @@ slow_note() {
 }
 queue_after=slow_note
 
-# The app's own checks (verify.checks): speed, whether documentation counts, paths, name and command per line. One that
-# can't run here (a missing toolchain) exits 77: it's listed under `skip` with the last line it printed, and not noted.
-# The slow ones run in sequence in Gradle's group, after the core module's tests and beside the other groups: one that
-# builds in a folder another group's check uses must not be an app check yet.
-app_speed=() app_docs=() app_paths=() app_name=() app_run=()
-while IFS=$'	' read -r speed docs paths name run; do
+# The app's own checks (verify.checks): speed, whether documentation counts, the verify-lock.py lock it holds ("-":
+# none), paths, name and command per line. One that can't run here (a missing toolchain) exits 77: it's listed under
+# `skip` with the last line it printed, and not noted as run. The slow ones run in sequence in Gradle's group, after the
+# core module's tests and beside the other groups: one that builds in a folder another group's check uses names a lock
+# (`lock`) that check holds too, or must not be an app check yet.
+app_speed=() app_docs=() app_lock=() app_paths=() app_name=() app_run=()
+while IFS=$'	' read -r speed docs lock paths name run; do
   [ -n "$speed" ] || continue
-  app_speed+=("$speed"); app_docs+=("$docs"); app_paths+=("$paths"); app_name+=("$name"); app_run+=("$run")
+  app_speed+=("$speed"); app_docs+=("$docs"); app_lock+=("$lock"); app_paths+=("$paths"); app_name+=("$name"); app_run+=("$run")
 done <<< "$(python3 "$TOOLS/companion.py" checks)"
 app_checks() {
-  local i
+  local i list locked
   [ ${#app_speed[@]} -gt 0 ] || return 0
   for i in "${!app_speed[@]}"; do
     [ "${app_speed[$i]}" = "$1" ] || continue
-    if { [ "${app_docs[$i]}" = docs ] && touched_any "${app_paths[$i]}"; } || touched "${app_paths[$i]}"; then
-      verify_skip_status=77
-      if [ "$1" = slow ]; then slow "" gradle "${app_name[$i]}" bash -c "${app_run[$i]}"
-      else check "${app_name[$i]}" bash -c "${app_run[$i]}" </dev/null; fi
+    list="$app_changed"; [ "${app_docs[$i]}" != docs ] || list="$changed"
+    if matches "$list" "${app_paths[$i]}"; then
+      locked=(); [ "${app_lock[$i]}" = - ] || locked=(locked "${app_lock[$i]}")
+      verify_skip_status=77 check_paths="$(covered "$list" "${app_paths[$i]}")"
+      if [ "$1" = slow ]; then slow "" gradle "${app_name[$i]}" "${locked[@]+"${locked[@]}"}" bash -c "${app_run[$i]}"
+      else check "${app_name[$i]}" "${locked[@]+"${locked[@]}"}" bash -c "${app_run[$i]}" </dev/null; fi
       verify_skip_status=""
     fi
   done
@@ -399,8 +497,9 @@ check "Laching's tools, not copies (companion.py conform)" python3 "$TOOLS/compa
 
 if touched "$RE_SWIFT" "$RE_COREPKG"; then
   if [ -n "$MAC_SPEC" ]; then
+    check_paths="$(covered "$app_changed" "$RE_SWIFT" "$RE_COREPKG")"
     if [ "$darwin" = 1 ] && has xcodegen; then check "xcodegen (project.pbxproj in sync)" xcodegen_in_sync
-    else skip "xcodegen: needs macOS with xcodegen"; fi
+    else skipped "xcodegen (project.pbxproj in sync)" "needs macOS with xcodegen" "xcodegen: needs macOS with xcodegen"; fi
   fi
   if [ "$darwin" = 1 ] && [ -f "$MAC_DIR/.swift-format" ]; then check "swift-format lint" swift_format; fi
 fi
@@ -436,13 +535,15 @@ if [ -n "$ANDROID_STRINGS" ] && [ -d "$ANDROID_STRINGS" ] && touched "\.xcstring
 fi
 
 if touched "$RE_KOTLIN"; then
+  check_paths="$(covered "$app_changed" "$RE_KOTLIN")" check_only=1
   if has ktlint; then check "ktlint" kotlin_lint
-  else skip "ktlint: brew install ktlint, or setup-linux.sh"; fi
+  else skipped ktlint "needs ktlint" "ktlint: brew install ktlint, or setup-linux.sh"; fi
 fi
 
 if touched "$RE_CSHARP"; then
+  check_paths="$(covered "$app_changed" "$RE_CSHARP")" check_only=1
   if has dotnet; then check "dotnet format whitespace" csharp_format
-  else skip "dotnet format: needs the .NET SDK"; fi
+  else skipped "dotnet format whitespace" "needs the .NET SDK" "dotnet format: needs the .NET SDK"; fi
 fi
 
 if touched "$RE_WINDOWS_APP"; then
@@ -454,9 +555,10 @@ if touched_any "$RE_STORE"; then
   else skip "store listing: no $STORE_LISTING yet"; fi
 fi
 if touched "$RE_LANDING" && [ -n "$LANDING_DIR" ] && [ -d "$ROOT/$LANDING_DIR" ]; then
+  check_paths="$(covered "$app_changed" "$RE_LANDING")"
   if [ -n "$landing_tool" ] && { has "$landing_tool" || [ -x "$landing_tool" ]; }; then
     check "landing: $LANDING_TOOL check" bash -c "cd \"$LANDING_DIR\" && \"$landing_tool\" check"
-  else skip "landing: needs $LANDING_TOOL"; fi
+  else skipped "landing: $LANDING_TOOL check" "needs $LANDING_TOOL" "landing: needs $LANDING_TOOL"; fi
 fi
 
 app_checks fast
@@ -471,30 +573,41 @@ asked() { case " $slow_asked " in *" $1 "*) return 0 ;; esac; return 1; }
 if [ "$fast" = 0 ]; then
   slow_asked="$(printf '%s\n' "$changed" | python3 "$TOOLS/companion.py" slow)" || exit 2
   if [ -n "$MAC_CORE" ] && { touched "$RE_COREPKG" "${CONFORMANCE_DIR:+^$CONFORMANCE_DIR/}" "$RE_PIN" || asked swift-test; }; then
+    check_paths="$(covered "$app_changed" "$RE_COREPKG" "${CONFORMANCE_DIR:+^$CONFORMANCE_DIR/}" "$RE_PIN")"
     if has swift; then slow swift-test core "swift test ($MAC_CORE)" swift test --package-path "$MAC_CORE"
-    else skip "swift test ($MAC_CORE): needs a Swift toolchain"; fi
+    else skipped swift-test "needs a Swift toolchain" "swift test ($MAC_CORE): needs a Swift toolchain"; fi
   fi
   if touched "$RE_PURE" || asked conformance; then
+    check_paths="$(covered "$app_changed" "$RE_PURE")"
     if [ "$darwin" = 1 ]; then
       slow conformance core "conformance vectors current" conformance_current
       # The regeneration empties the vectors' folders and writes each file again, and every check below reads them
       # (the Xcode, dotnet and Gradle tests, the landing build, the copy into the VM): it ends before they start.
+      vectors_before="$(vectors_snapshot)"
       run_queued
-    else skip "conformance.sh: needs macOS + Xcode"; fi
+      # The vectors it wrote are changed paths now, so each check below that reads them runs, over the new ones.
+      if [ "$(vectors_snapshot)" != "$vectors_before" ]; then
+        changed="$(printf '%s\n%s\n' "$changed" "$(vectors_changed)" | sed '/^$/d' | sort -u)"
+        app_changed="$(printf '%s\n' "$changed" | grep -Eiv '\.(md|markdown|rst|adoc)$' || true)"
+        slow_asked="$(printf '%s\n' "$changed" | python3 "$TOOLS/companion.py" slow)" || exit 2
+      fi
+    else skipped conformance "needs macOS + Xcode" "conformance.sh: needs macOS + Xcode"; fi
   fi
   if touched "$RE_SWIFT" "${CONFORMANCE_DIR:+^$CONFORMANCE_DIR/}" || asked xcodebuild-test; then
+    check_paths="$(covered "$app_changed" "$RE_SWIFT" "${CONFORMANCE_DIR:+^$CONFORMANCE_DIR/}")"
     if [ "$darwin" = 1 ]; then
       # One kind for the hook (slow_note): noted when each of the test runs these paths ask for passed. Their build
       # folders and devices are their own (the Mac's DerivedData; the iOS one and its simulator), so they run side by side.
       xcode_split
       xcode_schemes=""
       if [ "$xcode_mac" = 1 ]; then
-        xcode_checks+=("${#queue_group[@]}") xcode_schemes="$MAC_SCHEME"
+        xcode_checks+=("${#queue_group[@]}") xcode_schemes="$MAC_SCHEME" slow_paths[${#queue_group[@]}]="$check_paths"
         queue xcode-macos "xcodebuild test" locked xcodebuild-macos bash -c "cd \"$MAC_DIR\" && xcodebuild -project \"$MAC_PROJECT\" -scheme \"$MAC_SCHEME\" \
           -destination 'platform=macOS' -derivedDataPath \"$ROOT/$DERIVED\" -quiet $XCODE_CACHE test"
       fi
       if [ "$xcode_ios" = 1 ]; then
         xcode_checks+=("${#queue_group[@]}") xcode_schemes="${xcode_schemes:+$xcode_schemes and }$MAC_IOS_SCHEME"
+        slow_paths[${#queue_group[@]}]="$check_paths"
         queue xcode-ios "xcodebuild test (iOS)" locked xcodebuild-ios ios_tests
       fi
       xcode_command="cd $MAC_DIR && xcodebuild -project $MAC_PROJECT -scheme $xcode_schemes test"
@@ -508,26 +621,31 @@ if [ "$fast" = 0 ]; then
         else xcode_kind="xcodebuild-test@${xcode_prefix}iOS/"; fi
         case "$xcode_kind" in *[[:space:]]*) xcode_kind="" ;; esac
       fi
-    else skip "xcodebuild test: needs macOS + Xcode"; fi
+      check_paths=""
+    else skipped xcodebuild-test "needs macOS + Xcode" "xcodebuild test: needs macOS + Xcode"; fi
   fi
   if { touched "$RE_WINDOWS_CORE" || asked dotnet-test; } && [ -n "$WINDOWS_CORE_TESTS" ]; then
+    check_paths="$(covered "$app_changed" "$RE_WINDOWS_CORE")"
     if has dotnet; then
       slow dotnet-test dotnet "dotnet test ($WINDOWS_CORE_TESTS)" windows_dotnet test "$WINDOWS_CORE_TESTS/$WINDOWS_CORE_TESTS.csproj" -v q --nologo
-    else skip "dotnet test: needs the .NET SDK"; fi
+    else skipped dotnet-test "needs the .NET SDK" "dotnet test: needs the .NET SDK"; fi
   fi
   if { touched "$RE_WINDOWS_APP_TESTS" || asked dotnet-app-test; } && [ -n "$WINDOWS_APP_TESTS" ]; then
+    check_paths="$(covered "$app_changed" "$RE_WINDOWS_APP_TESTS")"
     if has dotnet; then
       slow dotnet-app-test dotnet "dotnet test ($WINDOWS_APP_TESTS)" windows_dotnet test "$WINDOWS_APP_TESTS/$WINDOWS_APP_TESTS.csproj" -v q --nologo
-    else skip "dotnet test ($WINDOWS_APP_TESTS): needs the .NET SDK"; fi
+    else skipped dotnet-app-test "needs the .NET SDK" "dotnet test ($WINDOWS_APP_TESTS): needs the .NET SDK"; fi
   fi
   if touched "$RE_WINDOWS_BUILD" || asked winui-build; then
+    check_paths="$(covered "$app_changed" "$RE_WINDOWS_BUILD")"
     if [ "$windows" = 1 ] && has dotnet; then
       # Debug, unpackaged, for this machine's architecture, named for a project without companion.targets.
       case "${PROCESSOR_ARCHITECTURE:-}" in ARM64) platform=ARM64 ;; *) platform=x64 ;; esac
       slow winui-build dotnet "WinUI app builds ($WINDOWS_APP)" windows_dotnet build "$WINDOWS_APP/$WINDOWS_APP.csproj" \
         -p:Platform=$platform -v q --nologo
     elif [ -n "$novm" ]; then
-      skip "WinUI app: builds on Windows or in the Parallels VM (left alone: $novm); push the branch and run the Windows workflow"
+      skipped winui-build "left alone: $novm" \
+        "WinUI app: builds on Windows or in the Parallels VM (left alone: $novm); push the branch and run the Windows workflow"
     else
       # On a Mac with the Parallels Windows VM: this working tree, Debug, for the VM's own platform (a compile error
       # shows on either, and the app's Windows workflow builds both); --both-platforms builds x64 and ARM64. The copy
@@ -539,27 +657,46 @@ if [ "$fast" = 0 ]; then
             slow winui-build vm "WinUI app builds in the VM ($WINDOWS_APP, x64 + ARM64)" "$TOOLS/windows/vm.sh" build x64 ARM64
           else slow winui-build vm "WinUI app builds in the VM ($WINDOWS_APP)" "$TOOLS/windows/vm.sh" build; fi ;;
         4) vm="${vm#vm.sh: }"
-          skip "WinUI app build skipped: the VM is busy (${vm#*is busy with }); run this again when it's free, or push the branch and run the Windows workflow" ;;
-        *) skip "WinUI app: builds on Windows or in the Parallels VM (${vm#vm.sh: }); push the branch and run the Windows workflow" ;;
+          skipped winui-build "the VM is busy (${vm#*is busy with })" \
+            "WinUI app build skipped: the VM is busy (${vm#*is busy with }); run this again when it's free, or push the branch and run the Windows workflow" ;;
+        *) skipped winui-build "${vm#vm.sh: }" \
+          "WinUI app: builds on Windows or in the Parallels VM (${vm#vm.sh: }); push the branch and run the Windows workflow" ;;
       esac
     fi
   fi
   if touched "$RE_WINDOWS_ASSETS"; then
+    check_paths="$(covered "$app_changed" "$RE_WINDOWS_ASSETS")"
     slow "" assets "Windows images match the icon (windows/assets.py)" python3 "$TOOLS/windows/assets.py" --check
   fi
   if { touched "$RE_ANDROID_CORE" || asked gradle-core-test; } && [ -n "$ANDROID_DIR" ]; then
     # The pure Kotlin module replays the vectors; the app module needs the Android SDK, so it builds in kotlin.yml.
+    check_paths="$(covered "$app_changed" "$RE_ANDROID_CORE")"
     if [ -x "$ANDROID_DIR/gradlew" ] && { has java || [ -n "${JAVA_HOME:-}" ]; }; then
       slow gradle-core-test gradle "gradlew :$ANDROID_CORE:test" bash -c "cd \"$ANDROID_DIR\" && ./gradlew :$ANDROID_CORE:test -q --console=plain"
-    else skip "gradlew :$ANDROID_CORE:test: needs $ANDROID_DIR/gradlew and a JDK 17 (setup-linux.sh)"; fi
+    else skipped gradle-core-test "needs $ANDROID_DIR/gradlew and a JDK 17" \
+      "gradlew :$ANDROID_CORE:test: needs $ANDROID_DIR/gradlew and a JDK 17 (setup-linux.sh)"; fi
   fi
-  if { touched "$RE_LANDING" || asked landing-build; } && [ -n "$LANDING_DIR" ] && [ -d "$ROOT/$LANDING_DIR" ] && [ -n "$landing_tool" ] &&
-    { has "$landing_tool" || [ -x "$landing_tool" ]; }; then
-    slow landing-build landing "landing: $LANDING_TOOL build" bash -c "cd \"$LANDING_DIR\" && \"$landing_tool\" build"
+  if { touched "$RE_LANDING" || asked landing-build; } && [ -n "$LANDING_DIR" ] && [ -d "$ROOT/$LANDING_DIR" ]; then
+    check_paths="$(covered "$app_changed" "$RE_LANDING")"
+    if [ -n "$landing_tool" ] && { has "$landing_tool" || [ -x "$landing_tool" ]; }; then
+      slow landing-build landing "landing: $LANDING_TOOL build" bash -c "cd \"$LANDING_DIR\" && \"$landing_tool\" build"
+    else skipped landing-build "needs $LANDING_TOOL" "landing: $LANDING_TOOL build: needs $LANDING_TOOL"; fi
   fi
   app_checks slow
   run_queued
 fi
 
+# A run that failed nothing passed the fast checks over its paths: it closes the Stop hook's skip of them (fast checks
+# past their time) over those paths. A whole run that failed nothing closes the cloud Stop hook's skip of verify.sh (a
+# run that didn't start or finish), over everything unless it was given paths.
+if [ ${#failed[@]} -eq 0 ] && was_skipped "verify.sh --fast"; then
+  check_paths="$(covered "$changed" .)"
+  [ "$all" = 1 ] || [ -n "$check_paths" ] && ran_note ok "$(date +%s)" "verify.sh --fast" "$check_paths"
+fi
+if [ ${#failed[@]} -eq 0 ] && [ "$fast" = 0 ] && was_skipped verify.sh; then
+  if [ "$mode" = paths ]; then check_paths="$(covered "$changed" .)"; else check_paths=""; fi
+  [ "$mode" != paths ] || [ -n "$check_paths" ] && ran_note ok "$(date +%s)" verify.sh "$check_paths"
+fi
+ran_trim
 summary
 finish

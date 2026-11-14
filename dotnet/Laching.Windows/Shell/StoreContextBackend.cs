@@ -10,7 +10,8 @@ namespace Laching.Windows.Shell;
 /// matched by their Partner Center Product ID (<c>InAppOfferToken</c>), so store ids never appear in an app. Needs
 /// package identity and the add-ons in Partner Center; without them loading fails and nothing is owned. Needs no
 /// manifest capability: the Store broker does the network, not the app. Shows no UI except the Store's purchase
-/// dialog, which it parents to <c>windowHandle()</c>.
+/// dialog, which it parents to <c>windowHandle()</c>. A license it can't read, or an app license that isn't active,
+/// throws, so <see cref="PurchaseStore"/> keeps the last known ownership rather than locking what was bought.
 /// <para>
 /// Consumables (tips) are reported fulfilled right after they're bought, so they can be bought again. Windows has
 /// no Ask to Buy, so a purchase is never <see cref="PurchaseOutcome.Pending"/>, and no restore call: licenses sync
@@ -62,18 +63,15 @@ public sealed class StoreContextBackend : IStoreBackend, IDisposable
 
     public async Task<IReadOnlySet<string>> EntitledProductIdsAsync()
     {
+        // A license it can't read throws, never answers an empty set that would lock what was bought; PurchaseStore
+        // logs it and keeps the last known ownership. An inactive app license carries no add-ons to trust either.
+        var license = await Context.GetAppLicenseAsync();
+        if (!license.IsActive)
+            throw new InvalidOperationException("The app's Store license isn't active.");
         var owned = new HashSet<string>();
-        try
-        {
-            var license = await Context.GetAppLicenseAsync();
-            foreach (var pair in license.AddOnLicenses)
-                if (pair.Value.IsActive && !string.IsNullOrEmpty(pair.Value.InAppOfferToken))
-                    owned.Add(pair.Value.InAppOfferToken);
-        }
-        catch (Exception e)
-        {
-            log($"Reading the license failed: {e.GetType().Name} {e.Message}");
-        }
+        foreach (var pair in license.AddOnLicenses)
+            if (pair.Value.IsActive && !string.IsNullOrEmpty(pair.Value.InAppOfferToken))
+                owned.Add(pair.Value.InAppOfferToken);
         return owned;
     }
 

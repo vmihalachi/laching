@@ -226,6 +226,66 @@ public sealed class ReminderSchedulerTests
         Assert.Equal(new DateTimeOffset(2026, 9, 30, 0, 0, 0, TimeSpan.FromHours(3)), scheduler.EndOfToday);
     }
 
+    /// <summary>
+    /// In the Azores, daylight saving skips midnight on 2026-03-29 (00:00 becomes 01:00, UTC-1 becomes UTC+0). That
+    /// day starts at 01:00, and the rest of it still ends at midnight, not at 01:00 the next day.
+    /// </summary>
+    [Fact]
+    public void TestEndOfTodayWhereMidnightIsSkipped()
+    {
+        var azores = TimeZoneInfo.FindSystemTimeZoneById("Atlantic/Azores");
+        clock = new MockClock(new DateTimeOffset(2026, 3, 29, 12, 0, 0, TimeSpan.Zero));
+        var scheduler = new ReminderScheduler(new SchedulerConfig(), clock, new MockIdle(), new MockBusy(), azores);
+        Assert.Equal(new DateTimeOffset(2026, 3, 30, 0, 0, 0, TimeSpan.Zero), scheduler.EndOfToday);
+        clock.Now = new DateTimeOffset(2026, 3, 28, 12, 0, 0, TimeSpan.FromHours(-1));
+        Assert.Equal(new DateTimeOffset(2026, 3, 29, 1, 0, 0, TimeSpan.Zero), scheduler.EndOfToday);
+    }
+
+    /// <summary>
+    /// In the Azores, daylight saving ends at 01:00 on 2026-10-25 (back to 00:00), so midnight happens twice: the day
+    /// before ends at the first one, and 2026-10-25, 25 hours long, ends at midnight on 2026-10-26.
+    /// </summary>
+    [Fact]
+    public void TestEndOfTodayWhereMidnightRepeats()
+    {
+        var azores = TimeZoneInfo.FindSystemTimeZoneById("Atlantic/Azores");
+        clock = new MockClock(new DateTimeOffset(2026, 10, 24, 12, 0, 0, TimeSpan.Zero));
+        var scheduler = new ReminderScheduler(new SchedulerConfig(), clock, new MockIdle(), new MockBusy(), azores);
+        Assert.Equal(new DateTimeOffset(2026, 10, 25, 0, 0, 0, TimeSpan.Zero), scheduler.EndOfToday);
+        clock.Now = new DateTimeOffset(2026, 10, 25, 0, 30, 0, TimeSpan.FromHours(-1)); // the second 00:30
+        Assert.Equal(new DateTimeOffset(2026, 10, 26, 0, 0, 0, TimeSpan.FromHours(-1)), scheduler.EndOfToday);
+    }
+
+    /// <summary>
+    /// Windows' data for Morocco at New Year 2026, as .NET reads it: GetUtcOffset puts 00:00 on 1 January at +01:00,
+    /// while ConvertTime reads that instant as 23:00 on 31 December at +00:00 and the next hour as 01:00. The rest of
+    /// 31 December ends where ConvertTime reaches 1 January, never before now. Built from rules here, so every
+    /// machine runs it.
+    /// </summary>
+    [Fact]
+    public void TestEndOfTodayWhereDotNetsTwoDirectionsDisagree()
+    {
+        static TimeZoneInfo.TransitionTime At(int month, int day, int hour, int minute = 0, int second = 0, int ms = 0) =>
+            TimeZoneInfo.TransitionTime.CreateFixedDateRule(new DateTime(1, 1, 1, hour, minute, second, ms), month, day);
+        TimeZoneInfo.AdjustmentRule[] rules =
+        [
+            TimeZoneInfo.AdjustmentRule.CreateAdjustmentRule(
+                new DateTime(2025, 1, 1), new DateTime(2025, 12, 31), TimeSpan.FromHours(1),
+                At(4, 6, 2), At(12, 31, 23, 59, 59, 999)),
+            TimeZoneInfo.AdjustmentRule.CreateAdjustmentRule(
+                new DateTime(2026, 1, 1), new DateTime(2026, 12, 31), TimeSpan.FromHours(-1),
+                At(2, 15, 3), At(3, 22, 2), TimeSpan.FromHours(1)),
+        ];
+        var zone = TimeZoneInfo.CreateCustomTimeZone("Split New Year", TimeSpan.Zero, "Split New Year", "Standard", "Summer", rules);
+        clock = new MockClock(new DateTimeOffset(2025, 12, 31, 23, 30, 0, TimeSpan.Zero)); // 23:30 on 31 December
+        var scheduler = new ReminderScheduler(new SchedulerConfig(), clock, new MockIdle(), new MockBusy(), zone);
+        Assert.Equal(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero), scheduler.EndOfToday);
+        scheduler.PauseUntil(scheduler.EndOfToday);
+        Assert.IsType<SchedulerStatus.Paused>(scheduler.Status);
+        clock.Now = new DateTimeOffset(2026, 1, 1, 0, 30, 0, TimeSpan.Zero); // 01:30 on 1 January
+        Assert.Equal(new DateTimeOffset(2026, 1, 2, 0, 0, 0, TimeSpan.FromHours(1)), scheduler.EndOfToday);
+    }
+
     [Fact]
     public void TestSessionCompletedResetsInterval()
     {

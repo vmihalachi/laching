@@ -18,6 +18,7 @@
     python3 laching/tools/companion.py unlink               # back to the pinned release, byte for byte
     python3 laching/tools/companion.py conform              # the app uses Laching's tools, not copies (exit 1 on drift)
     python3 laching/tools/companion.py checks               # the app's own verify.sh checks (verify.checks), tab-separated
+                                                            # columns: speed, docs, lock (- for none), paths, name, run
     python3 laching/tools/companion.py slow [PATH…]         # the Stop hook's own slow checks hooks.slow asks for after a
                                                             # change to these paths (or the ones on standard input)
     python3 laching/tools/companion.py apps [APP…]          # the apps next to this checkout: their pins and conform (exit 1
@@ -1352,6 +1353,8 @@ def validate(data, schema: dict | None = None, where: str = "") -> list[str]:
         problems.append(f"{label}: {data!r} is not one of {schema['enum']}")
     if isinstance(data, str) and "pattern" in schema and not re.search(schema["pattern"], data):
         problems.append(f"{label}: {data!r} doesn't match {schema['pattern']}")
+    if _is(data, "number") and "minimum" in schema and data < schema["minimum"]:
+        problems.append(f"{label}: {data!r} is below the minimum {schema['minimum']}")
     if isinstance(data, dict):
         for key in schema.get("required", []):
             if key not in data:
@@ -1369,6 +1372,8 @@ def validate(data, schema: dict | None = None, where: str = "") -> list[str]:
     if isinstance(data, list):
         if len(data) < schema.get("minItems", 0):
             problems.append(f"{label}: needs at least {schema['minItems']} items")
+        if "maxItems" in schema and len(data) > schema["maxItems"]:
+            problems.append(f"{label}: takes at most {schema['maxItems']} items")
         if "items" in schema:
             for index, item in enumerate(data):
                 problems += validate(item, schema["items"], f"{where}[{index}]")
@@ -1492,7 +1497,7 @@ def main(argv: list[str]) -> int:
     elif command == "checks":
         for entry in config.get("verify.checks", []):
             print("	".join(["slow" if entry.get("slow") else "fast", "docs" if entry.get("docs") else "code",
-                             entry["paths"], entry["name"], entry["run"]]))
+                             entry.get("lock") or "-", entry["paths"], entry["name"], entry["run"]]))
     elif command == "slow":
         print(" ".join(slow_asked(config, rest or sys.stdin.read().splitlines())))
     elif (command, len(rest)) in (("bump", 1), ("link", 0), ("link", 1), ("unlink", 0)):

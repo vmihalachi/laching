@@ -2,6 +2,7 @@ package laching.android
 
 import android.app.Activity
 import android.content.Context
+import android.content.SharedPreferences
 import com.android.billingclient.api.AcknowledgePurchaseParams
 import com.android.billingclient.api.BillingClient
 import com.android.billingclient.api.BillingClientStateListener
@@ -11,6 +12,7 @@ import com.android.billingclient.api.ConsumeParams
 import com.android.billingclient.api.PendingPurchasesParams
 import com.android.billingclient.api.ProductDetails
 import com.android.billingclient.api.Purchase
+import com.android.billingclient.api.PurchasesUpdatedListener
 import com.android.billingclient.api.QueryProductDetailsParams
 import com.android.billingclient.api.QueryPurchasesParams
 import kotlinx.coroutines.CompletableDeferred
@@ -27,23 +29,51 @@ import laching.core.store.TransactionUpdate
 /**
  * [StoreBackend] over Google Play Billing: connects on first use (and reconnects by itself), lists the catalog's
  * one-time products, runs the purchase flow from the app's current [activity], acknowledges unlockables and consumes
- * tips, and keeps what the user owns in SharedPreferences so [entitledProductIds] answers offline. Purchases that
- * finish outside [purchase] (a pending approval, a refund, another device) reach [observeTransactions]. The only
- * part of a Laching Android app that talks to Play; shows nothing but Play's own sheet.
+ * tips, and keeps what the user owns in SharedPreferences so [entitledProductIds] answers offline: when Play can't be
+ * read it answers that cache (the last read that worked plus purchases since). When the cache is empty (no read has
+ * worked yet, or the last one found nothing) it throws instead, so `PurchaseStore` keeps the set it last knew and a
+ * reinstall that kept the app's settings doesn't lock a supporter out offline. A purchase that finishes outside
+ * [purchase] while the app runs (a pending approval) reaches [observeTransactions]; a refund or a purchase on another
+ * device shows at the next [entitledProductIds] (launch, Restore, any update). The only part of a Laching Android app
+ * that talks to Play; shows nothing but Play's own sheet.
  */
-public class PlayBillingBackend(
-    context: Context,
+public class PlayBillingBackend internal constructor(
+    private val preferences: SharedPreferences,
     private val catalog: ProductCatalog,
     private val activity: () -> Activity?,
-    private val log: (String) -> Unit = {},
+    private val log: (String) -> Unit,
+    newClient: (PurchasesUpdatedListener) -> BillingClient,
 ) : StoreBackend {
+    /**
+     * Play Billing for [context]'s app, selling [catalog]'s products from [activity] (the one in front, or null), with
+     * what fails reported to [log]. Keeps what the user owns in the app's `laching.billing` preferences.
+     */
+    public constructor(
+        context: Context,
+        catalog: ProductCatalog,
+        activity: () -> Activity?,
+        log: (String) -> Unit = {},
+    ) : this(
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE),
+        catalog,
+        activity,
+        log,
+        { listener ->
+            BillingClient
+                .newBuilder(context)
+                .setListener(listener)
+                .enablePendingPurchases(PendingPurchasesParams.newBuilder().enableOneTimeProducts().build())
+                .enableAutoServiceReconnection()
+                .build()
+        },
+    )
+
     /** Play refused or failed; [code] is a `BillingClient.BillingResponseCode`. */
     public class BillingException(
         public val code: Int,
         message: String,
     ) : Exception("$message (code $code)")
 
-    private val preferences = context.getSharedPreferences("laching.billing", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val details = HashMap<String, ProductDetails>()
     private var onUpdate: ((TransactionUpdate) -> Unit)? = null
@@ -51,12 +81,7 @@ public class PlayBillingBackend(
     private var connecting: CompletableDeferred<Unit>? = null
 
     private val client: BillingClient =
-        BillingClient
-            .newBuilder(context)
-            .setListener { result, purchases -> onPurchasesUpdated(result, purchases) }
-            .enablePendingPurchases(PendingPurchasesParams.newBuilder().enableOneTimeProducts().build())
-            .enableAutoServiceReconnection()
-            .build()
+        newClient { result, purchases -> onPurchasesUpdated(result, purchases) }
 
     override suspend fun loadProducts(ids: List<String>): List<StoreProduct> {
         connect()
@@ -93,8 +118,11 @@ public class PlayBillingBackend(
                 connect()
                 queryPurchases()
             } catch (e: BillingException) {
+                // An empty cache knows nothing: answering it would drop what PurchaseStore still knows.
+                val cached = cachedOwned()
+                if (cached.isEmpty()) throw e
                 log("Reading purchases failed, using the cache: ${e.message}")
-                return cachedOwned()
+                return cached
             }
         return syncOwned(purchases)
     }
@@ -292,6 +320,7 @@ public class PlayBillingBackend(
         BillingException(responseCode, "$what: ${debugMessage.ifEmpty { "no details" }}")
 
     private companion object {
+        const val PREFERENCES = "laching.billing"
         const val OWNED_KEY = "owned"
     }
 }

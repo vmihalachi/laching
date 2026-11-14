@@ -1,0 +1,217 @@
+{
+  "config" : {
+    "activeEndMinute" : 1440,
+    "activeStartMinute" : 0,
+    "activeWeekdays" : [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "afterCallFallbackSeconds" : 900,
+    "busyGraceSeconds" : 30,
+    "idleThresholdSeconds" : 300,
+    "intervalSeconds" : 2700,
+    "postponeDuringCalls" : true,
+    "postponeDuringFullScreen" : true,
+    "quietHours" : [
+
+    ]
+  },
+  "description" : "Daylight saving skips midnight in the Azores on 2026-03-29: that day starts at 01:00 and ends at midnight.",
+  "initialState" : {
+    "endOfToday" : "2026-03-29T01:00:00Z",
+    "isAway" : false,
+    "isHolding" : false,
+    "isWaitingForCall" : false,
+    "nextFireDate" : "2026-03-28T12:45:00-01:00",
+    "now" : "2026-03-28T12:00:00-01:00",
+    "pausedUntil" : null,
+    "status" : {
+      "date" : "2026-03-28T12:45:00-01:00",
+      "type" : "scheduled"
+    }
+  },
+  "name" : "end-of-today-skipped-midnight",
+  "start" : "2026-03-28T12:00:00-01:00",
+  "steps" : [
+    {
+      "expect" : {
+        "state" : {
+          "endOfToday" : "2026-03-29T01:00:00Z",
+          "isAway" : false,
+          "isHolding" : false,
+          "isWaitingForCall" : false,
+          "nextFireDate" : null,
+          "now" : "2026-03-28T12:00:00-01:00",
+          "pausedUntil" : "2026-03-29T01:00:00Z",
+          "status" : {
+            "date" : "2026-03-29T01:00:00Z",
+            "type" : "paused"
+          }
+        }
+      },
+      "op" : "pauseUntilEndOfToday"
+    },
+    {
+      "expect" : {
+        "state" : {
+          "endOfToday" : "2026-03-30T00:00:00Z",
+          "isAway" : false,
+          "isHolding" : false,
+          "isWaitingForCall" : false,
+          "nextFireDate" : null,
+          "now" : "2026-03-29T12:00:00Z",
+          "pausedUntil" : "2026-03-29T01:00:00Z",
+          "status" : {
+            "date" : "2026-03-29T12:45:00Z",
+            "type" : "scheduled"
+          }
+        }
+      },
+      "op" : "setTime",
+      "time" : "2026-03-29T12:00:00Z"
+    },
+    {
+      "busy" : [
+
+      ],
+      "count" : 1,
+      "everySeconds" : 0,
+      "expect" : {
+        "decisions" : [
+
+        ],
+        "state" : {
+          "endOfToday" : "2026-03-30T00:00:00Z",
+          "isAway" : false,
+          "isHolding" : false,
+          "isWaitingForCall" : false,
+          "nextFireDate" : "2026-03-29T12:45:00Z",
+          "now" : "2026-03-29T12:00:00Z",
+          "pausedUntil" : null,
+          "status" : {
+            "date" : "2026-03-29T12:45:00Z",
+            "type" : "scheduled"
+          }
+        }
+      },
+      "idleSeconds" : 0,
+      "op" : "ticks"
+    },
+    {
+      "expect" : {
+        "state" : {
+          "endOfToday" : "2026-03-30T00:00:00Z",
+          "isAway" : false,
+          "isHolding" : false,
+          "isWaitingForCall" : false,
+          "nextFireDate" : null,
+          "now" : "2026-03-29T12:00:00Z",
+          "pausedUntil" : "2026-03-30T00:00:00Z",
+          "status" : {
+            "date" : "2026-03-30T00:00:00Z",
+            "type" : "paused"
+          }
+        }
+      },
+      "op" : "pauseUntilEndOfToday"
+    },
+    {
+      "expect" : {
+        "state" : {
+          "endOfToday" : "2026-03-30T00:00:00Z",
+          "isAway" : false,
+          "isHolding" : false,
+          "isWaitingForCall" : false,
+          "nextFireDate" : null,
+          "now" : "2026-03-29T23:59:00Z",
+          "pausedUntil" : "2026-03-30T00:00:00Z",
+          "status" : {
+            "date" : "2026-03-30T00:00:00Z",
+            "type" : "paused"
+          }
+        }
+      },
+      "op" : "setTime",
+      "time" : "2026-03-29T23:59:00Z"
+    },
+    {
+      "busy" : [
+
+      ],
+      "count" : 1,
+      "everySeconds" : 0,
+      "expect" : {
+        "decisions" : [
+
+        ],
+        "state" : {
+          "endOfToday" : "2026-03-30T00:00:00Z",
+          "isAway" : false,
+          "isHolding" : false,
+          "isWaitingForCall" : false,
+          "nextFireDate" : null,
+          "now" : "2026-03-29T23:59:00Z",
+          "pausedUntil" : "2026-03-30T00:00:00Z",
+          "status" : {
+            "date" : "2026-03-30T00:00:00Z",
+            "type" : "paused"
+          }
+        }
+      },
+      "idleSeconds" : 0,
+      "op" : "ticks"
+    },
+    {
+      "expect" : {
+        "state" : {
+          "endOfToday" : "2026-03-31T00:00:00Z",
+          "isAway" : false,
+          "isHolding" : false,
+          "isWaitingForCall" : false,
+          "nextFireDate" : null,
+          "now" : "2026-03-30T00:00:00Z",
+          "pausedUntil" : "2026-03-30T00:00:00Z",
+          "status" : {
+            "date" : "2026-03-30T00:45:00Z",
+            "type" : "scheduled"
+          }
+        }
+      },
+      "op" : "setTime",
+      "time" : "2026-03-30T00:00:00Z"
+    },
+    {
+      "busy" : [
+
+      ],
+      "count" : 1,
+      "everySeconds" : 0,
+      "expect" : {
+        "decisions" : [
+
+        ],
+        "state" : {
+          "endOfToday" : "2026-03-31T00:00:00Z",
+          "isAway" : false,
+          "isHolding" : false,
+          "isWaitingForCall" : false,
+          "nextFireDate" : "2026-03-30T00:45:00Z",
+          "now" : "2026-03-30T00:00:00Z",
+          "pausedUntil" : null,
+          "status" : {
+            "date" : "2026-03-30T00:45:00Z",
+            "type" : "scheduled"
+          }
+        }
+      },
+      "idleSeconds" : 0,
+      "op" : "ticks"
+    }
+  ],
+  "timeZone" : "Atlantic/Azores"
+}

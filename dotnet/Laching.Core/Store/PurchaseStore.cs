@@ -163,9 +163,26 @@ public sealed class PurchaseStore
         await LoadProductsAsync();
     }
 
-    public async Task RefreshEntitlementsAsync()
+    /// <summary>
+    /// Rereads what the user owns. When the store can't say (offline, a failed license read), logs it and keeps the
+    /// last known <see cref="Owned"/>, so a failed read never locks what was bought; never throws.
+    /// </summary>
+    public Task RefreshEntitlementsAsync() => TryRefreshEntitlementsAsync();
+
+    /// <summary><see cref="RefreshEntitlementsAsync"/>, answering whether the store said what's owned.</summary>
+    private async Task<bool> TryRefreshEntitlementsAsync()
     {
-        var entitled = (await backend.EntitledProductIdsAsync()).Where(Catalog.IsUnlockable).ToHashSet();
+        IReadOnlySet<string> read;
+        try
+        {
+            read = await backend.EntitledProductIdsAsync();
+        }
+        catch (Exception e)
+        {
+            log($"Reading what's owned failed, keeping the last known: {e.GetType().Name} {e.Message}");
+            return false;
+        }
+        var entitled = read.Where(Catalog.IsUnlockable).ToHashSet();
         log($"Owned: {string.Join(", ", entitled.Order(StringComparer.Ordinal))}");
         var changed = false;
         if (entitled.Except(owned).Any() && IsPending)
@@ -180,6 +197,7 @@ public sealed class PurchaseStore
         }
         if (changed)
             Changed?.Invoke();
+        return true;
     }
 
     /// <summary>Buys an unlockable; <see cref="Owned"/> updates once the store confirms it.</summary>
@@ -209,7 +227,12 @@ public sealed class PurchaseStore
             IsRestoring = false;
             Changed?.Invoke();
         }
-        await RefreshEntitlementsAsync();
+        // A restore that can't read back what's owned didn't re-sync anything the user can see.
+        if (!await TryRefreshEntitlementsAsync() && Error is null)
+        {
+            Error = PurchaseError.RestoreFailed;
+            Changed?.Invoke();
+        }
     }
 
     public void AcknowledgeTip()

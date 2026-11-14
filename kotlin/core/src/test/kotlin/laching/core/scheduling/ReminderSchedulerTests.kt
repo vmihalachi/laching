@@ -7,13 +7,17 @@ import laching.testing.MockClock
 import laching.testing.MockIdle
 import java.time.Instant
 import java.time.LocalDateTime
+import java.time.OffsetDateTime
 import java.time.ZoneId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.fail
 
-/** When [ReminderScheduler] reads its random source, as `ReminderSchedulerTests.swift` and `.cs` check it. */
+/**
+ * What `ReminderSchedulerTests.swift` and `.cs` check beside the vectors: when [ReminderScheduler] reads its random
+ * source, and where today ends when daylight saving moves midnight.
+ */
 class ReminderSchedulerTests {
     private val zone = ZoneId.of("UTC")
     private lateinit var clock: MockClock
@@ -68,5 +72,35 @@ class ReminderSchedulerTests {
         assertEquals(0, random.reads)
         assertEquals(SchedulerDecision.NONE, s.tick())
         assertEquals(1, random.reads)
+    }
+
+    private fun at(iso: String): Instant = OffsetDateTime.parse(iso).toInstant()
+
+    /**
+     * In the Azores, daylight saving skips midnight on 2026-03-29 (00:00 becomes 01:00, UTC-1 becomes UTC+0). That day
+     * starts at 01:00, and the rest of it still ends at midnight, not at 01:00 the next day.
+     */
+    @Test
+    fun `end of today where midnight is skipped`() {
+        val clock = MockClock(at("2026-03-29T12:00:00+00:00"))
+        val s =
+            ReminderScheduler(SchedulerConfig(), clock, MockIdle(), MockBusy(), timeZone = ZoneId.of("Atlantic/Azores"))
+        assertEquals(at("2026-03-30T00:00:00+00:00"), s.endOfToday)
+        clock.now = at("2026-03-28T12:00:00-01:00")
+        assertEquals(at("2026-03-29T01:00:00+00:00"), s.endOfToday)
+    }
+
+    /**
+     * In the Azores, daylight saving ends at 01:00 on 2026-10-25 (back to 00:00), so midnight happens twice: the day
+     * before ends at the first one, and 2026-10-25, 25 hours long, ends at midnight on 2026-10-26.
+     */
+    @Test
+    fun `end of today where midnight repeats`() {
+        val clock = MockClock(at("2026-10-24T12:00:00+00:00"))
+        val s =
+            ReminderScheduler(SchedulerConfig(), clock, MockIdle(), MockBusy(), timeZone = ZoneId.of("Atlantic/Azores"))
+        assertEquals(at("2026-10-25T00:00:00+00:00"), s.endOfToday)
+        clock.now = at("2026-10-25T00:30:00-01:00") // the second 00:30
+        assertEquals(at("2026-10-26T00:00:00-01:00"), s.endOfToday)
     }
 }

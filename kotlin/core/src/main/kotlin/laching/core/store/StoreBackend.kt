@@ -38,7 +38,12 @@ public interface StoreBackend {
     /** The listed products among [ids]; throws when the store can't be reached. */
     public suspend fun loadProducts(ids: List<String>): List<StoreProduct>
 
-    /** Unlockables the user owns, active and not refunded. Works offline. */
+    /**
+     * Unlockables the user owns, active and not refunded. Works offline. A backend that can't read the store either
+     * throws, and [PurchaseStore] keeps the last known set, or answers what it last knew, as `PlayBillingBackend`
+     * does from its cache: the last read that worked plus purchases since. [PurchaseStore] applies whatever is
+     * answered, so a backend whose cache is empty throws rather than answer it: an empty set means nothing is owned.
+     */
     public suspend fun entitledProductIds(): Set<String>
 
     /** Shows the store's purchase dialog; throws when the purchase fails. */

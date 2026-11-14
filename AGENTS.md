@@ -65,20 +65,21 @@ scripts/fixture-screenshots.ps1 [-Only home]   # Windows only: the fixture's win
 python3 tools/windows/check-winui.py dotnet/Fixture.App dotnet/Laching.Windows.Companion   # the WinUI traps under Native AOT
 dotnet format whitespace dotnet --folder       # C# style (dotnet/.editorconfig)
 cd kotlin && ./gradlew :core:test :testing:test   # a JDK 17, anywhere; replays the scheduler vectors
-cd kotlin && ./gradlew :android:assembleDebug     # needs the Android SDK
+cd kotlin && ./gradlew :android:testDebugUnitTest :android:assembleDebug   # needs the Android SDK
 cd kotlin && ktlint "**/*.kt" "**/*.kts" "!**/build/**"   # Kotlin style (kotlin/.editorconfig; kotlin.yml pins ktlint)
 python3 tools/tests/run.py [l10n] [--jobs N]  # the tools' tests, side by side (one process per CPU; a word filters by file name)
 cd web && dotnet test Laching.Web.sln          # the web packages; Jobs tests need PostgreSQL (LACHING_WEB_TEST_POSTGRES, or localhost:5432)
 web/scripts/tailwind-sample.sh                 # packs Laching.Web.Tailwind and builds the sample with it
 scripts/verify.sh                              # runs what applies to your changes; --all for everything
+git config core.hooksPath .githooks            # once per clone: the pre-commit hook runs scripts/verify.sh --fast --staged
 # a Stop hook runs scripts/verify.sh --fast on the files you edited; fix what it reports before ending
 ```
 
-In a Linux container only the .NET side and the Kotlin side's `:core` and `:testing` run (a JDK 17; the `:android` build
-needs the SDK, so `kotlin.yml` builds it). Verify Swift through `swift.yml` (push a branch, dispatch the workflow,
-read the failed job's log). Vectors need the Swift code to regenerate: without a Mac, dispatch `regenerate-vectors.yml`
-on your branch and pull the commit it pushes. It refuses the default branch (its first step fails there), so a vector
-change reaches `master` only through a pull request.
+In a Linux container only the .NET side and the Kotlin side's `:core` and `:testing` run (a JDK 17; the `:android` tests
+and build need the SDK, so `kotlin.yml` runs them). Verify Swift through `swift.yml` (push a branch, dispatch the
+workflow, read the failed job's log). Vectors need the Swift code to regenerate: without a Mac, dispatch
+`regenerate-vectors.yml` on your branch and pull the commit it pushes. It refuses the default branch (its first step
+fails there), so a vector change reaches `master` only through a pull request.
 
 ## Planned work
 

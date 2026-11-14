@@ -640,6 +640,46 @@ enum SchedulerVectors {
             }, start: { ConformanceSupport.local($0.calendar, 2026, 10, 25, 2) }
         ) { s in s.run(minutes: 240) },
         Case(
+            name: "end-of-today-skipped-midnight",
+            description: "Daylight saving skips midnight in the Azores on 2026-03-29: that day starts at 01:00 and ends at midnight.",
+            timeZone: "Atlantic/Azores",
+            config: config {
+                $0.activeStartMinute = 0
+                $0.activeEndMinute = 24 * 60
+                $0.activeWeekdays = Set(1...7)
+            }, start: { ConformanceSupport.local($0.calendar, 2026, 3, 28, 12) }
+        ) { s in
+            s.pauseUntilEndOfToday()  // 01:00 on the 29th, its first minute
+            s.setTime(ConformanceSupport.local(s.calendar, 2026, 3, 29, 12))
+            s.tickNow()
+            s.pauseUntilEndOfToday()  // midnight, not 01:00 on the 30th
+            s.setTime(ConformanceSupport.local(s.calendar, 2026, 3, 29, 23, 59))
+            s.tickNow()
+            s.setTime(ConformanceSupport.local(s.calendar, 2026, 3, 30))
+            s.tickNow()
+        },
+        Case(
+            name: "end-of-today-repeated-midnight",
+            description: "Midnight happens twice in the Azores on 2026-10-25: the 24th ends at the first; the 25th lasts 25 hours.",
+            timeZone: "Atlantic/Azores",
+            config: config {
+                $0.activeStartMinute = 0
+                $0.activeEndMinute = 24 * 60
+                $0.activeWeekdays = Set(1...7)
+            }, start: { ConformanceSupport.local($0.calendar, 2026, 10, 24, 12) }
+        ) { s in
+            let firstMidnight = ConformanceSupport.local(s.calendar, 2026, 10, 24, 23).addingTimeInterval(3600)
+            s.pauseUntilEndOfToday()
+            s.setTime(firstMidnight.addingTimeInterval(-60))
+            s.tickNow()
+            s.setTime(firstMidnight)
+            s.tickNow()
+            s.setTime(firstMidnight.addingTimeInterval(90 * 60))  // 00:30 the second time
+            s.pauseUntilEndOfToday()
+            s.setTime(ConformanceSupport.local(s.calendar, 2026, 10, 26))
+            s.tickNow()
+        },
+        Case(
             name: "jitter-seeded",
             description: "A ±10 minute jitter on a 30 minute interval, drawn from the seeded SplitMix64 source in whole seconds.",
             config: config {

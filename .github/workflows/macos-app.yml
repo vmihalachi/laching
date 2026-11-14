@@ -22,9 +22,9 @@ on:
         type: string
         default: "true"
       release:
-        description: "Also build the Release apps (the Mac app signed ad hoc, the iOS app unsigned); with hosted, launch the Mac one"
+        description: "Also build the Release apps (the Mac app signed ad hoc, the iOS app unsigned), the configuration the apps ship; with hosted, launch the Mac one"
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read

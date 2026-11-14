@@ -18,11 +18,12 @@ in review.
 ## Go-ahead
 
 Running this skill is the owner's go-ahead for the whole release: upload, apply the store push (`push.py --apply`),
-update the review notes, push the release commits and tag, and run the hosted smoke workflow without stopping to ask.
-Read each dry run and stop only when it shows something unexpected (another platform's version, screenshots being
-replaced, a version in an unexpected state). Still the owner's: new store screenshots (ask first), credentials (never
-handle them), and submitting for review. When another session's unpushed commits sit on top, push only the release's
-own: `git push origin <sha>:refs/heads/master`.
+update the review notes, push the release commits and tag, and start the release gate's run
+(`release-gate.py --dispatch`, the Gate step of section 3) without stopping to ask. Read each dry run and stop only when
+it shows something unexpected (another platform's version, screenshots being replaced, a version in an unexpected
+state); a gate that refuses stops the release until it passes, never to be worked around. Still the owner's: new store
+screenshots (ask first), credentials (never handle them), and submitting for review. When another session's unpushed
+commits sit on top, push only the release's own: `git push origin <sha>:refs/heads/master`.
 
 ## 1. Decide the version
 
@@ -53,13 +54,30 @@ only where the app's rules allow.
 
 1. Edit the iOS version in the XcodeGen spec, run `xcodegen generate` in `mac.dir`, commit the spec and the regenerated
    project with the work (`Release iOS 1.0 (2)`).
-2. Archive (Release signs automatically with the team in the notes):
+2. **Gate** the release commit: push it (only the release's own, see *Go-ahead*), then
+   ```sh
+   python3 laching/tools/release-gate.py ios --dispatch   # --commit <sha> when other commits sit on top of it
+   ```
+   It passes (exit 0) only when the app's `macos-app.yml` caller (which runs the iPhone and iPad tests too) passed on
+   that exact commit (`gh run list --commit <sha>`) and no check the agent hook recorded as skipped
+   (`hook.py skips --json`) covers a path that ships; the hosted Release launch is the Mac's, not needed here, so a run
+   on the self-hosted runner counts. A dispatch runs a branch's tip, so it runs the origin branch whose tip is the
+   commit; when none is (others' commits were pushed on top), the gate says how to push it to a branch of its own. With
+   no such run it starts one and exits 3: start the `gh run watch <id> --exit-status` it prints in the background, carry
+   on with the archive and upload, and run the gate again when the watch ends. A refusal (exit 1) says what clears it: a
+   failed run (fix it in a new commit, or `gh run rerun <id> --failed` for a flake), a skip over a path that ships,
+   whatever platform its check tests (an Android replay skipped over `conformance/` holds this release too: run that
+   check until it passes, as `scripts/verify.sh` routes it). Archive from a tree with no uncommitted shipped changes:
+   the gate names them, since the archive builds the working tree and the run never saw them. When the Mac ships from
+   the same commit, gate the Mac first (`release-mac`): its hosted run clears this gate too, while this gate's own run,
+   on the self-hosted runner, would leave the Mac's gate to start a second, hosted one.
+3. Archive (Release signs automatically with the team in the notes):
    ```sh
    cd <mac.dir>
    xcodebuild archive -project <mac.project> -scheme <mac.iosScheme> -configuration Release \
      -destination 'generic/platform=iOS' -archivePath build/release.noindex/<mac.iosScheme>.xcarchive -allowProvisioningUpdates
    ```
-3. Upload with an export-options plist (method `app-store-connect`, destination `upload`, the team ID, signingStyle
+4. Upload with an export-options plist (method `app-store-connect`, destination `upload`, the team ID, signingStyle
    `automatic`):
    ```sh
    xcodebuild -exportArchive -archivePath build/release.noindex/<mac.iosScheme>.xcarchive \
@@ -112,13 +130,16 @@ only where the app's rules allow.
    the iPhone and iPad privacy answers (the same as the Mac's), and the age rating confirmed. The in-app purchases go
    in the first iOS submission.
 6. **Before submitting** (the owner), install the processed build from TestFlight on an iPhone and an iPad and run the
-   checks from step 2. A build that fails here never goes to review: fix it and upload a new build number.
-7. **Submit** (the owner: **Add for Review**, or **Resubmit**). The release follows `store.apple.releaseType`:
+   checks from section 2 (*Preflight*). A build that fails here never goes to review: fix it and upload a new build
+   number.
+7. **Submit** (the owner: **Add for Review**, or **Resubmit**) once `release-gate.py ios` exits 0 for the build's
+   commit; while it refuses or waits, tell the owner not to. The release follows `store.apple.releaseType`:
    `AFTER_APPROVAL` goes live on its own once Apple approves; `MANUAL` (or unset) waits for the owner's **Release**.
    Change it in `companion.json`, never by hand in App Store Connect, so the next push doesn't flip it back.
 
 ## 5. Wrap up
 
-- Tag `ios-<version>-<build>` (for example `ios-1.0.0-1`) on the release commit and push the release's commits and
-  the tag (only the release's own, see *Go-ahead*).
+- Tag `ios-<version>-<build>` (for example `ios-1.0.0-1`) on the release commit once
+  `python3 laching/tools/release-gate.py ios` (with `--commit <sha>` when needed) exits 0, never while it refuses, and
+  push the release's commits and the tag (only the release's own, see *Go-ahead*).
 - Record the iOS build number and review status where the app's notes say.

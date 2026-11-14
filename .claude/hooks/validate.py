@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Record what a session edits, check it before the session ends, and say where the session was after a compaction.
+"""Record what a session edits, check it before the session ends, and say where the session was when it starts,
+resumes or is compacted.
 
 scaffold.sh installs this file as <repo>/.claude/hooks/validate.py and wires it three times:
 
   .claude/settings.json       Claude Code: PostToolUse on Edit|Write|MultiEdit -> record,
-                              Stop -> check, SessionStart on compact|resume -> resume (Claude only)
+                              Stop -> check, SessionStart on compact|resume -> resume (Claude only;
+                              Laching's own settings add startup)
   .codex/config.toml          Codex: PostToolUse on apply_patch -> record, Stop -> check
   .github/hooks/<repo>.json   Copilot: postToolUse -> record, agentStop -> check
 

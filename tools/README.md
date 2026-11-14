@@ -10,6 +10,7 @@ or `$COMPANION_ROOT`); the schema is [`companion.schema.json`](companion.schema.
 | [`companion.py`](#companionpy) | Loads and validates `companion.json`; the Laching pins, moved, linked and checked. |
 | [`conform.py`](#staying-on-lachings-tools) | `companion.py conform` and `apps`: the app stays on these tools, not copies. |
 | [`bump-apps.sh`](#bump-appssh) | `companion.py bump` in every app checked out next to this Laching checkout. |
+| [`release-gate.py`](#release-gatepy) | The Mac and iOS release gate: a green run on the exact commit, no open skip. |
 | [`l10n.py`](#l10npy) | String Catalog gaps, work files for translators, `.resw`/`.po` exports. |
 | [`phrases.py`](#phrasespy) | Keeps the catalog's `phrase.<id>` keys in step with `phrases.json`. |
 | [`voice.py`, `voice-review.html`](#voicepy-and-voice-reviewhtml) | Records, reviews and publishes the character's voices with ElevenLabs. |
@@ -54,12 +55,15 @@ or `$COMPANION_ROOT`); the schema is [`companion.schema.json`](companion.schema.
 | [`windows/dotnet-sdk.ps1`](#windowsdotnet-sdkps1) | In CI, whether the runner image's .NET SDK will do, so a job skips `setup-dotnet`. |
 | [`windows/check-sdk.py`](#windowscheck-sdkpy) | On a self-hosted runner, whether its .NET SDK builds the app's Windows projects, asked before anything builds. |
 | [`windows/vm.sh`](#windowsvmsh) | On a Mac, the WinUI app built and checked in a Parallels Windows VM. |
+| [`windows/ci-package.ps1`](#windows-releaseyml-and-windows-appyml) | In CI, one platform's package built and given the launch check its runner can run, the step both Windows workflows share. |
 | [`windows-release.yml`, `windows-app.yml`](#windows-releaseyml-and-windows-appyml) | Reusable workflows: the Store release and the WinUI build check. |
 
 Tests: `python3 tools/tests/run.py` (over `tools/tests/fixture-app`, a minimal app, the files side by side, `--jobs N`
 at once; `tools.yml` runs them; Python 3.10 or later, which an older `python3` finds and re-runs under), and for the
 landing package `npx vp test run` in `tools/landing`. `scripts/verify.sh --fast` runs only the tests that cover the
 changed files, from the map in `tools/tests/covering.py`: a new tool or test file goes in it (`test_covering` says so).
+In a Laching clone, `git config core.hooksPath .githooks` once makes `.githooks/pre-commit` run
+`scripts/verify.sh --fast --staged` before each commit (`git commit --no-verify` skips it once).
 
 An app without a phrase bank or a character (a reminder app, say) leaves `character` and `conformance` out of
 `companion.json`: `l10n.py`, the store tools, `verify.sh` and the hook work as usual; `phrases.py`, `voice.py`,
@@ -234,7 +238,7 @@ fail when the app drifts from the tools (each rule: `conform.py`'s docstring):
     "SessionStart": [
       { "matcher": "startup", "hooks": [
         { "type": "command", "command": "[ \"$CLAUDE_CODE_REMOTE\" != true ] || \"$CLAUDE_PROJECT_DIR/scripts/setup-linux.sh\"", "timeout": 600 }] },
-      { "matcher": "compact|resume", "hooks": [
+      { "matcher": "startup|compact|resume", "hooks": [
         { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py\" resume", "timeout": 10 }] }],
     "PreToolUse": [{ "matcher": "Read|Edit|MultiEdit|Write|NotebookEdit|Grep|Bash", "hooks": [
       { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py\" pre", "timeout": 10 }] }],
@@ -250,7 +254,10 @@ fail when the app drifts from the tools (each rule: `conform.py`'s docstring):
   `.claude/hooks/hook.py`: the Python template above with `"..", ".."` for the app's root and
   `"laching", "tools", "hooks", "hook.py"` for the tool. A hook that calls `laching/tools/hooks/hook.py` itself fails,
   in `.claude/settings.json`, in Codex's `.codex/config.toml` and in Copilot's `.github/hooks/*.json`, and so does a
-  missing wrapper.
+  missing wrapper. So does a Copilot hook that runs `hook.py` under the camelCase `preToolUse` or `postToolUse`: for
+  those Copilot sends `toolName` and `toolArgs`, for `PreToolUse` and `PostToolUse` the `tool_name` and `tool_input`
+  the hook reads (`agentStop` keeps its name). Only `PreToolUse` is documented to send Claude Code's tool names, so
+  the hook maps Copilot's own in either shape ([the hook](#hookshookpy)).
 - **Linked skills.** A skill in `.agents/skills` named like one of `tools/skills` is a link to
   `../../laching/tools/skills/<name>`; the app's own words for it go in `.agents/notes/<name>.md`.
 - **Skill links for every agent.** With an `.agents/skills` folder, `.claude/skills/<name>` is a link to
@@ -266,12 +273,49 @@ releases, or one is behind, linked or pinned to more than one release.
 ## `bump-apps.sh`
 
 `companion.py bump` in every app checked out next to this Laching checkout (or the ones named), then each one's
-`verify.sh --fast`; commits nothing. Before any app moves it waits once for NuGet.org to list every package their
-bumps pin (`companion.py bump --wait-only`), so 15 minutes is the longest a release NuGet.org never lists holds it up,
-not 15 per app, and when that wait gives up no app has moved. `--no-wait`, anywhere among the arguments, skips that
-wait and is passed on to each `bump`. `--report` prints `companion.py apps`: each app's pin against the releases, and
-whether it conforms. `bump-apps.sh` runs the Laching checkout's `companion.py`, so it moves an app whose submodule
-predates `bump` (the example: [*Moving to a release, or trying one first*](#moving-to-a-release-or-trying-one-first)).
+`verify.sh --fast`; commits nothing. Each moved app's pure suites (`swift test` on `mac.core`, `dotnet test` on
+`windows.coreTests`, Gradle's `:<android.core>:test`: those this machine has the tools for; unlocked, as
+`scripts/verify.sh` runs them) start in the background, each in its own process group so a run stopped (an interrupt, a
+TERM, its terminal hanging up) stops them too, as it moves; the run waits for them, names each that failed and keeps its
+log. Then `companion.py apps` reports, and its drift (an app behind this checkout's newest tag, linked, pins
+disagreeing, apps on different releases) fails the run; last, each moved app's slow-checks command
+(`cd <app> && scripts/verify.sh`), to start in the background. One run moves an app at a time: each takes a lock in the
+app's Git folder (`laching-bump-apps.lock`, the run's pid inside), a second run on that app exits 2 naming the first,
+and a lock whose run has ended (its pid gone, or no longer a `bump-apps.sh`) is taken over, under a second lock
+(`<lock>.takeover`) so that of two runs finding it so, one does. The report places a release by this checkout's tags, so
+before any lock a vX.Y.Z it lacks is fetched from its origin (the Release run tags on GitHub), and one the origin lacks
+too refuses the run, exit 2, as a version that isn't X.Y.Z does at once. Before any app moves it waits once for
+NuGet.org to list every package their bumps pin (`companion.py bump --wait-only`), so 15 minutes is the longest a
+release NuGet.org never lists holds it up, not 15 per app, and when that wait gives up no app has moved. `--no-wait`,
+anywhere among the arguments, skips that wait and is passed on to each `bump`. `--report` prints `companion.py apps`:
+each app's pin against the releases, and whether it conforms. `bump-apps.sh` runs the Laching checkout's `companion.py`,
+so it moves an app whose submodule predates `bump` (the example:
+[*Moving to a release, or trying one first*](#moving-to-a-release-or-trying-one-first)).
+
+## `release-gate.py`
+
+The `release-mac` and `release-ios` skills' gate before submitting and tagging: the app's workflow that calls
+[`macos-app.yml`](#mac-apps) must have passed on the exact commit the tag names (`gh run list --commit <sha>`), and no
+check the agent hook recorded as skipped (`hooks/hook.py skips --json`) may cover a path that ships (anything outside
+`windows.dir`, `android.dir` and `landing.dir`). For the Mac, a calling job that forwards `hosted` and doesn't set
+`release: false` also needs the run's `Launch the Release app` step green (a job forwarding its own `release` input gets
+`-f release=true` on dispatch too); each calling job is read on its own, so a helper job with `release: false` doesn't
+turn the check off for the release job. The newest run on the commit that ended decides (`--dispatch` starts one when
+there is none or after a cancelled run, on the origin branch whose tip is the commit), read with the workflows as the
+commit has them at the repository's top (where GitHub reads them, whatever folder holds the app); a skip's paths count
+from the app however written (relative or absolute), a skip over a shipped path holds the release whatever platform its
+check tests (an Android replay skipped over `conformance/` holds the Mac), and the skips outside what ships are listed,
+not blocking. When the Mac and the iPhone ship from one commit, gate the Mac first: its hosted run clears the `ios` gate
+too.
+
+```sh
+python3 laching/tools/release-gate.py mac --dispatch   # no run on the commit yet: start one (pushed first)
+python3 laching/tools/release-gate.py ios               # again once the run ends
+```
+
+Exit 0 the release may go ahead, 1 refused (why, and what clears it), 2 a usage or setup error, 3 a run on the commit
+is still going or was just started: start the `gh run watch <id> --exit-status` it prints in the background and run
+the gate again when that ends. It never pushes, tags or reruns anything; a hook without `skips --json` refuses.
 
 ## `l10n.py`
 
@@ -421,25 +465,34 @@ The slow checks that share no build folder and no device run side by side, so a 
 slowest group: the macOS tests, the iOS tests (each `xcodebuild` has its own DerivedData), `dotnet` on this machine,
 the build in the VM, the Windows images, Gradle with the app's own slow checks, and the landing build. The checks of
 one group run in sequence. A run that regenerates the vectors does that, and the core package's tests, before the
-others start, because every other check reads the vectors. Each check's lines are held back and printed in the order a serial run
-prints them, a failure with its own log, and the exit status is the same. `--serial` (or `LACHING_VERIFY_SERIAL=1`)
-runs them one after another, each printed as it ends, to debug a check that fails only beside another; that is also
-what Git Bash on Windows does unless `LACHING_VERIFY_SERIAL=0`.
+others start, because every other check reads the vectors; the vectors it rewrote are changed paths from then on, so
+the checks that read them run in the same run, over the new ones. Each check's lines are held back and printed in the
+order a serial run prints them, a failure with its own log, and the exit status is the same. `--serial` (or
+`LACHING_VERIFY_SERIAL=1`) runs them one after another, each printed as it ends, to debug a check that fails only
+beside another; that is also what Git Bash on Windows does unless `LACHING_VERIFY_SERIAL=0`.
 
 Each slow check that ran and passed leaves a line in the repository's git folder (`laching-slow-checks.log`, one per
 worktree: when it started, the Stop hook's names for it, its command), which is how [the hook](#hookshookpy) knows
 what ran since an edit. The lines are written in the checks' order, whichever ended first. The Xcode tests leave one
 line, naming the schemes that ran, when every run the paths asked for passed; when only one of two schemes ran, its
 kind is scoped to that scheme's folder (`xcodebuild-test@<mac.dir>/macOS/`), so the hook still asks for the other
-scheme's and the shared files' tests. `--help`, `--fast`, a check that failed
-and one that was skipped (`--no-vm`, a busy VM, a missing toolchain) leave none.
+scheme's and the shared files' tests. `--help`, `--fast` and a check that failed leave none.
+
+A check that was skipped or stopped past its time (`--no-vm`, a busy VM, a missing toolchain, an app check's exit 77,
+`LACHING_CHECK_SECONDS`) leaves a line there too: `skip`, when, the hook's kind for it (else its name), why, and the
+changed paths it covers, comma-separated (none for all of it). It stays open until the check passes over those paths:
+a slow check's line as above, or an `ok` line for a fast or an app check that had one open (and for `verify.sh` itself
+after a whole run that fails nothing). `hook.py skips` lists the open ones ([the hook](#hookshookpy)). Past 400 lines
+the log keeps its last 200, behind a line for each skip still open (when `hook.py skips` can't say, the skip and `ok`
+lines it drops).
 
 The app's own checks, which a copied `verify.sh` used to hold, are `verify.checks` in `companion.json`: each a `name`, the
 `paths` that trigger it (an extended regular expression), the command to `run` (bash, from the root), `slow` for one
-`--fast` skips and `docs` for one that documentation changes trigger too (a skill folder's links, say). A check that
-can't run on this machine (a missing toolchain) prints why and exits 77: `verify.sh` lists it under `skip` with that
-line, doesn't fail and notes nothing, so the Stop hook keeps reminding of it. Status 0 is for a check that ran and
-passed.
+`--fast` skips, `docs` for one that documentation changes trigger too (a skill folder's links, say) and `lock` for a
+build lock it holds while it runs (`check … locked <lock>`, below), so that two checks building in one folder, or two
+runs of one, wait for each other. A check that can't run on this machine (a missing toolchain) prints why and exits
+77: `verify.sh` lists it under `skip` with that line, doesn't fail and notes it as an open skip, so the Stop hook keeps
+reminding of it. Status 0 is for a check that ran and passed.
 
 ## `verify-lib.sh` and `verify-lock.py`
 
@@ -454,11 +507,15 @@ The shared `verify-lib.sh` also supports app-owned check selection: source it fr
 Each check runs in its own process group. Progress appears after ten seconds and every five minutes; after
 `LACHING_CHECK_SECONDS` (default 1800), the check fails and its process group is stopped. Interrupting the verifier
 also stops its active group. `LACHING_PROGRESS_SECONDS` and `LACHING_PROGRESS_INTERVAL` change progress intervals;
-`LACHING_VERIFY_TIMING=1` adds elapsed times. `check "name" locked <build-name> <command...>` serializes a build
-across verifier sessions in this checkout. Locks live in `build/verify-locks` (or `LACHING_VERIFY_LOCK_DIR`);
-`verify-lock.py` holds an OS advisory lock in a process group separate from the build. The verifier stops the build
-and its descendants before releasing the lock, including on timeout or interruption. OS locks also release if their
-holder crashes. The persistent
+`LACHING_VERIFY_TIMING=1` adds elapsed times. A check stopped at its limit says so,
+`FAIL  <name>: stopped after <N> s (LACHING_CHECK_SECONDS=<N>)`, before the end of its log. Each check leaves
+`verify_outcome` (`ok`, `fail`, `skip`, or `timeout`, a failure too) and `verify_why` (a skip's last line, a timeout's
+limit); with `verify_checked` set to a function's name, a check `check` runs calls it as it ends,
+`<function> <name> <outcome> <why>`, and a queued one is the caller's through `queue_after`.
+`check "name" locked <build-name> <command...>` serializes a build across verifier sessions in this checkout. Locks live
+in `build/verify-locks` (or `LACHING_VERIFY_LOCK_DIR`); `verify-lock.py` holds an OS advisory lock in a process group
+separate from the build. The verifier stops the build and its descendants before releasing the lock, including on
+timeout or interruption. OS locks also release if their holder crashes. The persistent
 lock files are diagnostic and can contain an old PID; stale contents never prevent acquisition. Keep these files in
 place while builds are running, so every process locks the same file.
 
@@ -468,7 +525,8 @@ check's lines never mix with another's, a failure keeps its own log, and `finish
 checks that share a build folder, a device or a Gradle project in one group. A queued check reads `/dev/null`, not the
 terminal, and has the same progress lines, timeout and lock as `check`. Set `queue_after` to a function's name to hear
 of each check as it is printed: it gets the check's index (0 for the first one queued), with `${queue_result[index]}`
-`ok`, `fail` or `skip` and `${queue_started[index]}` the epoch second it began. Interrupting the verifier stops every
+`ok`, `fail`, `skip` or `timeout` (stopped after `LACHING_CHECK_SECONDS`, a failure too), `${queue_why[index]}` why it
+skipped or stopped, and `${queue_started[index]}` the epoch second it began. Interrupting the verifier stops every
 running group, and a check whose verifier was killed outright stops by itself within seconds.
 `LACHING_VERIFY_SERIAL=1` makes `run_queued` run the checks one at a time in the order queued, the default on Git Bash
 for Windows; `0` forces side by side.
@@ -534,7 +592,11 @@ it by version.
 
 Agent guardrails: generated files, the stop-time checks (ktlint over the Kotlin files an agent edits), the Windows and
 Android parity reminders. Wiring it into Claude Code, Codex and Copilot: [`docs/getting-started.md`](../docs/getting-started.md),
-step 4.
+step 4. Copilot's camelCase `preToolUse` and `postToolUse` (`toolName`, `toolArgs`) are read as the PascalCase events
+are, though `conform` asks for the PascalCase names. In either shape the hook maps Copilot's own tool names (`bash`,
+`powershell`, `view`, `edit`, `str_replace_editor`, `create`, `apply_patch`) to Claude Code's, and reads an edit whose
+input is patch text as `apply_patch`. A hook that crashes, or exits on a bad `companion.json`, fails open (exit 0) and
+tells the user: `hook.py <mode> failed open: <error>`, in a `systemMessage`.
 
 The hook reads the guards, the slow-check table and the parity patterns (`hooks.*`) from `companion.json`, and
 fails open when the file is missing or invalid. It guards what Laching's generators write without being told, each
@@ -561,7 +623,9 @@ over lines, and a `sleep` the command only names: in a heredoc, a quoted string,
 On `Stop` it tells the user, once per compaction cycle, when Claude's context is past `hooks.longSessionTokens`
 (130000; 0 disables), so the next task goes to a fresh session. On `SessionStart` after a compaction or a resume
 (`hook.py resume`) it prints where the session was, as the agent's context: the files it edited, the slow checks it
-ran, the branch, git status and the recent commits (nothing when the tree is clean and the session has no log).
+ran, the branch, git status and the recent commits (nothing when the tree is clean and the session has no log). At a
+session's startup it only tells the user when the app has Git hooks (`.githooks`) this checkout doesn't run
+(`core.hooksPath` unset), so its commits skip the pre-commit checks; under CI (`CI` set) it says nothing.
 
 On `Stop` it also runs `verify.sh --fast` on the session's edits, unless that state already passed them: most stops
 come with no edit after the last one. A pass is remembered in the session's own log (beside its edits and runs, under
@@ -574,7 +638,11 @@ once more, also when another session changed the checkout. A failure or a timeou
 anything in an app outside a Git repository, where every stop runs the checks. The hash is read before the run, so a
 run that rewrote a file is followed by one more. What it can't hold: a file Git ignores that the session didn't edit,
 a tool installed or removed on the machine, and what a check fetches (the voices' pushed pointer); `verify.sh --fast`
-by hand checks those.
+by hand checks those. A run that doesn't finish in 150 s (leaving the rest of the stop room under the agents' 180 s
+timeout) is stopped with what it started and blocks the stop: it asks for the run in the background (or, when one the
+agent sent there after the edits covers the files, to wait for it), or a line
+`skipped verify.sh --fast: <reason>`, which the next stop reads as for a slow check (below), and is an open skip over
+the files until a run passes. Without a bash to run `verify.sh` (Windows without Git for Windows) the skip is open too.
 
 The same stop names the slow checks (`hooks.slow`, and the built-in ones for the sides the app has) whose paths
 changed since they last ran. A slow check counts as run when
@@ -602,8 +670,35 @@ files that ask for it (those of its paths edited since it last ran; checks the s
 the C# file and the command has no other. So `verify.sh` runs a built-in check for the paths `hooks.slow` gives it as
 well as for its own (`companion.py slow` matches them as the hook does, as Python regular expressions, so a lookahead
 in one works in both); the APK build is the app's own `verify.checks` entry. A check `verify.sh` skips on this machine
-(`--no-vm`, a missing toolchain, an app check that exits 77) is still named. While the app is linked to a Laching
-checkout the hook says so once per session and blocks no stop for it.
+(`--no-vm`, a missing toolchain, an app check that exits 77) is still named, with why it skipped before. While the
+app is linked to a Laching checkout the hook says so once per session and blocks no stop for it.
+
+The reminder asks for a line of its own for each check the agent skips, `skipped <check>: <reason>`, the check by its
+kind (`swift-test`) or its label. A check that a command the agent sent to the background after the last edit of its
+files runs (the check, or `verify.sh` over every change or over those files) is named as running there since then,
+and not asked for again; when every one is, the stop asks the agent to wait for them or tell the user they're still
+running. The hook never hears such a command end, so it counts until the first stop after it (the stop that retries a
+block too) and 30 minutes at most. The hook logs each block (the kinds and their files) in the session's log, and at
+the next stop what came of each: ran, when it ran over its files since; else skipped for the line's reason; else
+running in the background, when a command there runs it as above, before the block or after it, which `verify.sh`'s
+own lines then account for; else skipped with *stopped without running it or saying why*. On the
+stop that blocks, the agent hears the stop's notes for the user too, and the user hears them at the next stop. A skip
+is also an open one in `verify.sh`'s log, beside the ones `verify.sh`
+notes itself, until the check passes over its files: `hook.py skips` lists them, a line each,
+`<check><TAB><reason><TAB><paths>` with the paths comma-separated (none for the whole check), and `hook.py skips --json`
+as a list of `{"check", "reason", "paths", "at"}` (`at` in epoch seconds); both exit 0.
+
+A file a shell command changed is one no edit hook heard of, so the stop checks don't see it. The stop names, to the
+user and never blocking, each file that is in `git status` or that the command names whose modification time falls
+while one of the session's commands ran, unless an edit record of any session of the app claims it; a file is named
+once until it changes again. A command sent to the background counts until the first stop after it, and 30 minutes at
+most: a file changed then may be another session's, and the line says so.
+
+Under Copilot's cloud coding agent (`agentStop`, `hook.py cloud-stop`) the stop runs `verify.sh` over the branch's
+changes. A failure blocks the stop, and so does, once, a run that didn't start or finish in 25 minutes: it asks the
+agent to say so in the pull request, and is an open skip of `verify.sh` until a whole run passes. Once holds whatever
+the stop sends: the stop that retries a block (`stop_hook_active`, or Copilot's `stopHookActive`) runs nothing, and
+neither does any stop for 50 minutes after that skip.
 
 ## `skills/`
 
@@ -620,8 +715,8 @@ step 5.
 ## Mac apps
 
 Reusable Mac CI (`ci-macos.py`, `../.github/workflows/macos-app.yml`): project generation, formatting, release pins,
-enabled content checks, the conformance vectors, core tests, the Mac and iOS app tests and, when asked, the Release
-builds and a launch of the Release Mac app, from `companion.json`.
+enabled content checks, the conformance vectors, core tests, the Mac and iOS app tests and, unless turned off, the
+Release builds and a launch of the Release Mac app, from `companion.json`.
 
 An app can keep its `workflow_dispatch`, permissions and concurrency policy in a short workflow and call the shared
 Mac checks at the release it pins:
@@ -633,7 +728,7 @@ jobs:
     with:
       hosted: ${{ inputs.hosted }}
       submodules: "true"  # also checks out bundled recorded voices
-      release: true       # optional: the Release builds, and with hosted the launch
+      release: false      # optional: skips the Release builds (and with hosted the launch), on by default
 ```
 
 The self-hosted runner defaults to `["self-hosted","macOS"]`; `runner` accepts another JSON label list. `hosted: true`
@@ -651,8 +746,8 @@ plus the phrase bank when present. A stage the app has nothing for runs no comma
 - `ios` runs the `mac.iosScheme` tests on a simulator of its own, `<name> ci` (`ios-destination.py --own`, made on
   first use).
 - `release` builds what App Store review gets, which the tests never build: the Mac app in Release, signed ad hoc, and
-  the iOS app in Release, unsigned, when there's an `iosScheme`. The workflow runs it only with `release: true` (off by
-  default: it adds a build or two).
+  the iOS app in Release, unsigned, when there's an `iosScheme`. The workflow runs it unless `release: false` (on by
+  default: a resource that only the Release build drops shows nowhere else; it adds a build or two).
 - `smoke` launches the Release Mac app with `smoke-release.sh` and fails when it quits or leaves a crash report within
   20 s (the executable and the report are named `mac.app`). The workflow runs it only with `release` and `hosted`, and
   the script refuses to run outside CI and on a self-hosted runner: a Release build has the App Store bundle ID, so on
@@ -855,7 +950,8 @@ doesn't fit; each language's shots and `problems.txt` in `build/layout-check/<la
 ### `windows/store-release.ps1`
 
 The Microsoft Store release in one command (Windows PowerShell 5.1 or 7): per platform of `windows.release.platforms`
-(x64 and ARM64) the unsigned Native AOT package, checked native and installed fresh and started (`smoke-package.ps1`; up
+(x64 and ARM64) the unsigned Native AOT package, checked native and within `windows.release.maxMB` (each package's
+ceiling in MB, none without it) and installed fresh and started (`smoke-package.ps1`; up
 to 60 s for x64 emulated on ARM64; refuses without Developer Mode unless `-NoSmoke`), each next publish running in the
 background during the previous package's check (`<out>/logs/publish-<name>.log`), `-Screenshots` every window from a
 screenshot-mode package (`-ScreenshotNames store` or names for fewer), then one
@@ -870,7 +966,8 @@ Installs a built `.msix` the way a customer gets it and checks it opens its wind
 `-Hold` seconds later (`-Keep` leaves it for the hand checks, `-SideBySide` next to a Store copy); `-Screenshots
 <folder> [-Language] [-ScreenshotNames]` runs the screenshot run in the installed package instead (a Release publish
 with `-p:ScreenshotMode=true`); `-CheckOnly` only checks the package is native (its executable, no
-`runtimeconfig.json`, no .NET runtime beside it).
+`runtimeconfig.json`, no .NET runtime beside it) and, with `-MaxMB` (`windows.release.maxMB`, which `store-release.ps1`
+and `vm.sh smoke` pass), no bigger than that, so a package that grew fails before an app moves to it.
 
 ### `windows/check-winui.py`
 
@@ -935,22 +1032,27 @@ included) into a Windows VM in Parallels Desktop and builds the app there, Debug
 in the same session. `screenshots <folder>` runs the screenshot script there and copies the PNGs into
 the Mac folder, `check-layout [lang…]` runs `check-layout.ps1` there (one build, the languages side by side, all of them
 unless named) and copies each language's shots and `problems.txt` back into `<windows.dir>/build/layout-check/<lang>`,
-`smoke` publishes the Native AOT package for the VM's platform and runs `smoke-package.ps1` on it (`-- -SideBySide`
-where the Store copy is installed), `test` runs the test projects and `run -- <command>` anything else in the copy;
-arguments after `--` go to the command. `build`, `test` and `smoke` run `dotnet` in the copy's `<windows.dir>`, so a
-relative path in `build`'s or `test`'s arguments (`-bl`, `-o`) is from there; `run` starts in the copy's root. The copy
-is incremental (only changed files travel, `bin` and `obj` stay), and `verify.sh` builds through it when the VM is
-there. The VM needs the .NET SDK (the one the app's `windows/global.json` pins, if it has one), the Visual Studio Build
-Tools with the x64 and ARM64 C++ tools (Native AOT), Developer Mode (screenshots and smoke install packages), Parallels
-Tools, a user signed in, and the Mac's files shared (Parallels' "All Files", `\\Mac\AllFiles`). `LACHING_VM`,
-`LACHING_VM_SHARE` and `LACHING_VM_DIR` change the VM's name, the share and the folder the copies go in
+`smoke` publishes the Native AOT package for the VM's platform, checks it as a release does
+(`smoke-package.ps1 -CheckOnly`, with `windows.release.maxMB`) and only then runs `smoke-package.ps1` on it
+(`-- -SideBySide` where the Store copy is installed), `test` runs the test projects and `run -- <command>` anything else
+in the copy; arguments after `--` go to the command. `build`, `test` and `smoke` run `dotnet` in the copy's
+`<windows.dir>`, so a relative path in `build`'s or `test`'s arguments (`-bl`, `-o`) is from there; `run` starts in the
+copy's root. The copy is incremental (only changed files travel, `bin` and `obj` stay), and `verify.sh` builds through
+it when the VM is there. The VM needs the .NET SDK (the one the app's `windows/global.json` pins, if it has one), the
+Visual Studio Build Tools with the x64 and ARM64 C++ tools (Native AOT), Developer Mode (screenshots and smoke install
+packages), Parallels Tools, a user signed in, and the Mac's files shared (Parallels' "All Files", `\\Mac\AllFiles`).
+`LACHING_VM`, `LACHING_VM_SHARE` and `LACHING_VM_DIR` change the VM's name, the share and the folder the copies go in
 (`%USERPROFILE%\laching-vm`).
 
 ### `windows-release.yml` and `windows-app.yml`
 
 `../.github/workflows/windows-release.yml` and `windows-app.yml` are reusable workflows (`workflow_call`) an app's own
 short workflows call at the release it pins: the Store release (both packages, the bundle as the artifact, the optional
-push, the tag) and the WinUI build check (the traps, the tests, both packages, every window).
+push, the tag) and the WinUI build check (the traps, the tests, both packages, every window). Both build each package
+in one step, `windows/ci-package.ps1 -Platform x64|ARM64 [-Hosted]`, the launch check: `store-release.ps1` for that
+platform, checked native and within `windows.release.maxMB`, then installed and started where the runner can run it
+(GitHub's x64 runner turns on Developer Mode first and checks ARM64 only; the self-hosted one starts it next to the
+Store copy), so what a runner checks is changed there once.
 
 **The Store release** is `store-release.ps1` on a PC, or the app's two short workflows in CI, each calling Laching's
 reusable one at the release the app pins (the `@vX.Y.Z` must be `laching.tag`; `companion.py bump` moves it with

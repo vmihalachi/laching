@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -159,9 +160,10 @@ class MacCITests(FixtureAppTestCase):
         self.assertIn('path: "**/build/ci-*.log"', workflow)
         for stage in ci.STAGES:
             self.assertIn(f'tools/ci-macos.py" {stage}\n', workflow)
-        self.assertIn("default: false", workflow.split("      release:\n")[1].split("\n\n")[0], "the release input is off by default")
+        self.assertIn("default: true", workflow.split("      release:\n")[1].split("\n\n")[0],
+                      "the release input is on by default: CI builds the configuration the apps ship")
         self.assertIn('if: inputs.release\n        run: python3 "./$LACHING_PATH/tools/ci-macos.py" release', workflow,
-                      "the Release builds run on request only")
+                      "release: false skips the Release builds")
         self.assertIn("if: inputs.release && inputs.hosted\n        run: python3 \"./$LACHING_PATH/tools/ci-macos.py\" smoke",
                       workflow, "the Release app launches on GitHub's runner only")
 
@@ -170,10 +172,12 @@ class MacCITests(FixtureAppTestCase):
 class SmokeReleaseTests(FixtureAppTestCase):
     """smoke-release.sh launches mac.app's executable and refuses to run where the Release app would share real data."""
 
-    def smoke(self, quits: bool, then: str = "", seconds: int = 1, **env):
+    def smoke(self, quits: bool, then: str = "", seconds: int | str = 1, **env):
         binary = self.root / "Fixture.app/Contents/MacOS/Fixture"
         binary.parent.mkdir(parents=True)
-        binary.write_text("#!/bin/sh\necho started\n" + then + ("exit 3\n" if quits else "exec sleep 30\n"))
+        # The app's output goes to a log, so the fake marks its launch with a file a refusal must not leave.
+        binary.write_text("#!/bin/sh\necho started\n: > \"$HOME/launched\"\n" + then
+                          + ("exit 3\n" if quits else "exec sleep 30\n"))
         binary.chmod(0o755)
         (self.root / "home").mkdir()
         env = {**os.environ, "HOME": str(self.root / "home"), "CI": "true", "RUNNER_ENVIRONMENT": "github-hosted", **env}
@@ -185,18 +189,42 @@ class SmokeReleaseTests(FixtureAppTestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("Running after 1 s.", done.stdout)
 
-    def test_an_app_that_quits_fails_with_its_output(self):
-        done = self.smoke(quits=True)
+    def test_an_app_that_quits_fails_with_its_output_at_once(self):
+        # A long window costs nothing: the script sees the quit within a tick, where a single sleep would wait it out.
+        started = time.monotonic()
+        done = self.smoke(quits=True, seconds=30)
+        self.assertLess(time.monotonic() - started, 20)
         self.assertEqual(done.returncode, 1)
         self.assertIn("exit status 3", done.stderr)
         self.assertIn("started", done.stderr)
 
+    def test_an_app_that_quits_after_the_first_ticks_fails(self):
+        # Quits about 1 s in, five ticks of 0.2 s; the wide window keeps a slow fork on a loaded machine inside it.
+        done = self.smoke(quits=True, then="sleep 1\n", seconds=6)
+        self.assertEqual(done.returncode, 1, done.stdout)
+        self.assertIn("exit status 3", done.stderr)
+        self.assertNotIn("Running after", done.stdout)
+
+    def test_refuses_a_window_that_isnt_whole_seconds(self):
+        done = self.smoke(quits=False, seconds="1.5")
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("whole number", done.stderr)
+        self.assertFalse((self.root / "home/launched").exists())
+
+    def test_reads_a_window_with_a_leading_zero_as_decimal(self):
+        # Read as octal, 09 is an error, the window loop never runs and the app, still starting, would pass.
+        done = self.smoke(quits=True, then="sleep 1\n", seconds="09")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("The app quit within 9 s", done.stderr)
+
     def test_a_crash_report_fails_even_while_the_app_runs(self):
+        # The report is written first, then the app keeps running: written after a sleep, a loaded machine could end
+        # the window before it. It is still newer than the marker, which the script makes before it starts the app.
         reports = '"$HOME/Library/Logs/DiagnosticReports"'
-        done = self.smoke(quits=False, seconds=2,
-                          then=f"mkdir -p {reports}\nsleep 1\necho 'EXC_BAD_ACCESS' > {reports}/Fixture-2026-11-02.ips\n")
-        self.assertEqual(done.returncode, 1)
-        self.assertIn("Running after 2 s.", done.stdout)
+        done = self.smoke(quits=False, seconds=3,
+                          then=f"mkdir -p {reports}\necho 'EXC_BAD_ACCESS' > {reports}/Fixture-2026-11-02.ips\n")
+        self.assertEqual(done.returncode, 1, done.stdout)
+        self.assertIn("Running after 3 s.", done.stdout)
         self.assertIn("Fixture-2026-11-02.ips", done.stderr)
         self.assertIn("EXC_BAD_ACCESS", done.stderr)
 
@@ -208,12 +236,13 @@ class SmokeReleaseTests(FixtureAppTestCase):
         done = self.smoke(quits=False)
         self.assertEqual(done.returncode, 2)
         self.assertIn("mac.app", done.stderr)
+        self.assertFalse((self.root / "home/launched").exists())
 
     def test_refuses_outside_ci_and_on_a_self_hosted_runner(self):
         for env in ({"CI": ""}, {"RUNNER_ENVIRONMENT": "self-hosted"}):
             with self.subTest(env=env):
                 done = self.smoke(quits=False, **env)
                 self.assertEqual(done.returncode, 2)
-                self.assertNotIn("started", done.stdout)
+                self.assertFalse((self.root / "home/launched").exists())
                 for path in (self.root / "Fixture.app", self.root / "home"):
                     shutil.rmtree(path)
