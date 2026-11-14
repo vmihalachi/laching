@@ -256,6 +256,36 @@ public sealed class ReminderSchedulerTests
         Assert.Equal(new DateTimeOffset(2026, 10, 26, 0, 0, 0, TimeSpan.FromHours(-1)), scheduler.EndOfToday);
     }
 
+    /// <summary>
+    /// Windows' data for Morocco at New Year 2026, as .NET reads it: GetUtcOffset puts 00:00 on 1 January at +01:00,
+    /// while ConvertTime reads that instant as 23:00 on 31 December at +00:00 and the next hour as 01:00. The rest of
+    /// 31 December ends where ConvertTime reaches 1 January, never before now. Built from rules here, so every
+    /// machine runs it.
+    /// </summary>
+    [Fact]
+    public void TestEndOfTodayWhereDotNetsTwoDirectionsDisagree()
+    {
+        static TimeZoneInfo.TransitionTime At(int month, int day, int hour, int minute = 0, int second = 0, int ms = 0) =>
+            TimeZoneInfo.TransitionTime.CreateFixedDateRule(new DateTime(1, 1, 1, hour, minute, second, ms), month, day);
+        TimeZoneInfo.AdjustmentRule[] rules =
+        [
+            TimeZoneInfo.AdjustmentRule.CreateAdjustmentRule(
+                new DateTime(2025, 1, 1), new DateTime(2025, 12, 31), TimeSpan.FromHours(1),
+                At(4, 6, 2), At(12, 31, 23, 59, 59, 999)),
+            TimeZoneInfo.AdjustmentRule.CreateAdjustmentRule(
+                new DateTime(2026, 1, 1), new DateTime(2026, 12, 31), TimeSpan.FromHours(-1),
+                At(2, 15, 3), At(3, 22, 2), TimeSpan.FromHours(1)),
+        ];
+        var zone = TimeZoneInfo.CreateCustomTimeZone("Split New Year", TimeSpan.Zero, "Split New Year", "Standard", "Summer", rules);
+        clock = new MockClock(new DateTimeOffset(2025, 12, 31, 23, 30, 0, TimeSpan.Zero)); // 23:30 on 31 December
+        var scheduler = new ReminderScheduler(new SchedulerConfig(), clock, new MockIdle(), new MockBusy(), zone);
+        Assert.Equal(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero), scheduler.EndOfToday);
+        scheduler.PauseUntil(scheduler.EndOfToday);
+        Assert.IsType<SchedulerStatus.Paused>(scheduler.Status);
+        clock.Now = new DateTimeOffset(2026, 1, 1, 0, 30, 0, TimeSpan.Zero); // 01:30 on 1 January
+        Assert.Equal(new DateTimeOffset(2026, 1, 2, 0, 0, 0, TimeSpan.FromHours(1)), scheduler.EndOfToday);
+    }
+
     [Fact]
     public void TestSessionCompletedResetsInterval()
     {
