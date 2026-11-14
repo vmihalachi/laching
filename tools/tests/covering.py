@@ -81,6 +81,10 @@ COVERS: dict[str, tuple[str, ...]] = {
     "scripts/fixture-art.sh": ("test_character",),
     ".github/workflows/release.yml": ("test_release",),
     ".github/hooks/laching.json": ("test_conform",),  # under the tool events' names conform asks of an app
+    # The reusable Windows workflows, whose steps test_windows runs (ci-package.ps1's) or reads (the SDK check).
+    ".github/workflows/windows-app.yml": ("test_windows",),
+    ".github/workflows/windows-release.yml": ("test_windows",),
+    ".github/workflows/windows-core.yml": ("test_ci_windows_core", "test_windows"),
     # The packages' READMEs and the build files that pack them: test_release checks that every link is absolute.
     "dotnet/README.md": ("test_release.PackedReadmeTests",),
     "web/README.md": ("test_release.PackedReadmeTests",),

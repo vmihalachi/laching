@@ -1353,6 +1353,8 @@ def validate(data, schema: dict | None = None, where: str = "") -> list[str]:
         problems.append(f"{label}: {data!r} is not one of {schema['enum']}")
     if isinstance(data, str) and "pattern" in schema and not re.search(schema["pattern"], data):
         problems.append(f"{label}: {data!r} doesn't match {schema['pattern']}")
+    if _is(data, "number") and "minimum" in schema and data < schema["minimum"]:
+        problems.append(f"{label}: {data!r} is below the minimum {schema['minimum']}")
     if isinstance(data, dict):
         for key in schema.get("required", []):
             if key not in data:
@@ -1370,6 +1372,8 @@ def validate(data, schema: dict | None = None, where: str = "") -> list[str]:
     if isinstance(data, list):
         if len(data) < schema.get("minItems", 0):
             problems.append(f"{label}: needs at least {schema['minItems']} items")
+        if "maxItems" in schema and len(data) > schema["maxItems"]:
+            problems.append(f"{label}: takes at most {schema['maxItems']} items")
         if "items" in schema:
             for index, item in enumerate(data):
                 problems += validate(item, schema["items"], f"{where}[{index}]")

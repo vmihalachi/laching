@@ -13,7 +13,8 @@ in the app's Windows workflow. `vm.sh` runs this file.
                                                                 # (DIR/<LANG> for -Language it,de)
     laching/tools/windows/vm.sh check-layout [LANG…] [-- ARGS] # check-layout.ps1: one build, the languages side by side;
                                                                 # the PNGs land in <windows.dir>/build/layout-check/<LANG>
-    laching/tools/windows/vm.sh smoke [x64|ARM64] [-- ARGS]    # publish the MSIX (Native AOT), then smoke-package.ps1
+    laching/tools/windows/vm.sh smoke [x64|ARM64] [-- ARGS]    # publish the MSIX (Native AOT), check it (-CheckOnly),
+                                                                # then smoke-package.ps1
     laching/tools/windows/vm.sh run -- COMMAND…                # a PowerShell command in the VM's copy
 
 `vm.sh COMMAND --help` prints what one command does, its words and ARGS, and touches nothing.
@@ -126,7 +127,8 @@ script: `-Only home,settings`, `-Jobs 2`.""",
     "smoke": """vm.sh smoke [x64|ARM64] [-- ARGS]
 
 Publishes the MSIX (Release, Native AOT) for one platform (the VM's own by default) from <windows.dir>, so its
-global.json picks the SDK, then runs smoke-package.ps1 on it; ARGS go to that script (`-- -SideBySide`).""",
+global.json picks the SDK, then checks it as a release does (smoke-package.ps1 -CheckOnly: native, no runtime, within
+windows.release.maxMB when set), and only then runs smoke-package.ps1 on it; ARGS go to that run (`-- -SideBySide`).""",
     "run": """vm.sh run -- COMMAND…
 
 Runs a PowerShell command in the VM's copy of the checkout, after the sync; exits with its exit code. It starts in the
@@ -655,6 +657,12 @@ def smoke_body(ctx: Context, platform: str | None, extra: str) -> str:
         raise Usage("companion.json has no windows.app to package")
     folder = ctx.windows_dir()
     script, packages = ctx.script("smoke-package.ps1"), ctx.guest_out + "\\packages\\"
+    # The package's ceiling as written, as store-release.ps1 passes it (smoke-package.ps1 -CheckOnly -MaxMB), and
+    # refused as it refuses it; none without one or with 0.
+    ceiling = ctx.config.get("windows.release.maxMB", 0)
+    if not isinstance(ceiling, (int, float)) or isinstance(ceiling, bool) or ceiling < 0:
+        raise Usage(f"windows.release.maxMB is {json.dumps(ceiling)}: a package's ceiling in MB, or 0 for none")
+    max_mb = f" -MaxMB {ceiling}" if ceiling > 0 else ""
     return "\n".join((
         f"$platform = {ps(platform) if platform else 'Get-GuestPlatform'}",
         f"$packages = Reset-GuestFolder ({ps(packages)} + $platform)",
@@ -666,6 +674,9 @@ def smoke_body(ctx: Context, platform: str | None, extra: str) -> str:
                                 "\"-p:AppxPackageDir=$packages/\" -v q -nologo '-clp:NoSummary'")),
         "if ($global:VmFailures.Count) { Exit-Steps }",
         "$msix = Find-Package $packages",
+        # Native, no runtime, within the ceiling, before anything installs it: a package that would fail the release.
+        step(f"package check ({script} -CheckOnly)", f"& {ps(script)} -Package $msix.FullName -CheckOnly{max_mb}"),
+        "if ($global:VmFailures.Count) { Exit-Steps }",
         step(f"smoke ({script})", f"& {ps(script)} -Package $msix.FullName {extra}".rstrip()),
         "Exit-Steps",
     ))

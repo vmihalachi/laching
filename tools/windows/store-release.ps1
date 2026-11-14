@@ -1,10 +1,11 @@
 <#
 Builds a companion app's Microsoft Store release, the one routine every app and its CI run: for each platform an
-unsigned Native AOT package (the Store signs), checked native, installed fresh and started; then one .msixbundle of
-them, ready for Partner Center; then, when asked, the push to Partner Center (store/push-microsoft.py) and the
-win-<version> tag. Windows PowerShell 5.1 or PowerShell 7. Reads companion.json (found from the current folder up, then
-from this script's, or $env:COMPANION_ROOT): the project (windows.dir + windows.app), and windows.release for the
-platforms and the bundle's name. The version is the Identity Version of the project's Package.appxmanifest.
+unsigned Native AOT package (the Store signs), checked native and within its ceiling, installed fresh and started; then
+one .msixbundle of them, ready for Partner Center; then, when asked, the push to Partner Center (store/push-microsoft.py)
+and the win-<version> tag. Windows PowerShell 5.1 or PowerShell 7. Reads companion.json (found from the current folder
+up, then from this script's, or $env:COMPANION_ROOT): the project (windows.dir + windows.app), and windows.release for
+the platforms, the bundle's name and each package's ceiling in MB (maxMB, smoke-package.ps1 -CheckOnly -MaxMB, also
+on -BundleFrom; none without it). The version is the Identity Version of the project's Package.appxmanifest.
 
 Usage: laching/tools/windows/store-release.ps1 [-Out folder] [-Platforms x64,ARM64] [-NoSmoke] [-SideBySide]
                                                 [-Screenshots folder [-Languages en,de] [-ScreenshotNames all|store|a,b]]
@@ -25,7 +26,8 @@ Usage: laching/tools/windows/store-release.ps1 [-Out folder] [-Platforms x64,ARM
   -ScreenshotNames  the shots the screenshot run takes: all (the default, every window), store (the Store listing's,
                 companion.json store.microsoft.shots) or names and name prefixes, comma-separated (settings,library).
   -NoBundle     the packages only (CI builds each platform in its own job, then bundles with -BundleFrom).
-  -BundleFrom   no build: bundles the one .msix per platform found under the folder, after checking each is native.
+  -BundleFrom   no build: bundles the one .msix per platform found under the folder, after checking each is native and
+                within windows.release.maxMB.
   -Store        draft: a new Partner Center submission with the bundle and the listing text, saved but not sent; submit:
                 sent to certification too. Needs the Partner Center credentials (tools/store/api-setup.md).
   -Tag          tags HEAD win-<version> and pushes the tag once everything passed (and, with -Store, was uploaded).
@@ -129,6 +131,16 @@ $appDir = Join-Path $windowsDir $config.windows.app
 $project = Join-Path $appDir "$($config.windows.app).csproj"
 $release = $config.windows.release
 if (-not $Platforms) { $Platforms = if ($release -and $release.platforms) { @($release.platforms) } else { @("x64", "ARM64") } }
+# Each package's ceiling (smoke-package.ps1 -CheckOnly -MaxMB), 0 for none; one that isn't a number of 0 or more is
+# refused here, before anything publishes, not at the first package's check.
+$maxMB = 0
+if ($release -and $null -ne $release.maxMB) {
+    $ceiling = $release.maxMB
+    if (-not ($ceiling -is [int] -or $ceiling -is [long] -or $ceiling -is [double] -or $ceiling -is [decimal]) -or $ceiling -lt 0) {
+        throw "windows.release.maxMB is $(ConvertTo-Json $ceiling -Compress): a package's ceiling in MB, or 0 for none."
+    }
+    $maxMB = [double]$ceiling
+}
 foreach ($platform in $Platforms) {
     if ($platform -notin "x64", "ARM64") { throw "Platform ${platform}: the Store packages are x64 and ARM64." }
 }
@@ -313,7 +325,7 @@ if (-not $BundleFrom) {
         if ($builds[$i].Name -eq "screenshot-mode") { $shotPackage = $msix; continue }
         $platform = $builds[$i].Platform
         $arch = $platform.ToLowerInvariant()
-        Invoke-Smoke @{ Package = $msix.FullName; CheckOnly = $true }
+        Invoke-Smoke @{ Package = $msix.FullName; CheckOnly = $true; MaxMB = $maxMB }
         if (-not $NoSmoke) {
             if ($arch -eq "arm64" -and -not $hostArm) {
                 $smokeNotes += "$($msix.Name) wasn't started: an x64 PC can't run ARM64. Start it on an ARM64 PC before uploading."
@@ -347,7 +359,7 @@ if (-not $BundleFrom) {
 }
 else {
     $packages = Find-Packages $BundleFrom
-    foreach ($msix in $packages) { Invoke-Smoke @{ Package = $msix.FullName; CheckOnly = $true } }
+    foreach ($msix in $packages) { Invoke-Smoke @{ Package = $msix.FullName; CheckOnly = $true; MaxMB = $maxMB } }
 }
 
 $bundle = $null

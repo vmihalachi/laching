@@ -70,10 +70,11 @@
         "release": {
           "type": "object",
           "additionalProperties": false,
-          "description": "windows/store-release.ps1 and the windows-release.yml workflow: the Store packages and their bundle.",
+          "description": "windows/store-release.ps1 and the windows-release.yml workflow: the Store packages, their bundle and each package's ceiling.",
           "properties": {
             "platforms": { "type": "array", "items": { "type": "string", "enum": ["x64", "ARM64"] }, "minItems": 1, "description": "The packages built and bundled; x64 and ARM64 by default." },
-            "bundle": { "type": "string", "pattern": "^[A-Za-z0-9.-]+$", "description": "The bundle's file name before _<version>_x64_arm64.msixbundle; the app's executable name by default." }
+            "bundle": { "type": "string", "pattern": "^[A-Za-z0-9.-]+$", "description": "The bundle's file name before _<version>_x64_arm64.msixbundle; the app's executable name by default." },
+            "maxMB": { "type": "number", "minimum": 0, "description": "Each Store package's ceiling in MB (1 MB = 1048576 bytes): smoke-package.ps1 -CheckOnly fails a bigger one, in store-release.ps1, the reusable Windows workflows and vm.sh smoke. 0 or unset for none; leave a few MB over the last package." }
           }
         }
       }

@@ -54,6 +54,7 @@ or `$COMPANION_ROOT`); the schema is [`companion.schema.json`](companion.schema.
 | [`windows/dotnet-sdk.ps1`](#windowsdotnet-sdkps1) | In CI, whether the runner image's .NET SDK will do, so a job skips `setup-dotnet`. |
 | [`windows/check-sdk.py`](#windowscheck-sdkpy) | On a self-hosted runner, whether its .NET SDK builds the app's Windows projects, asked before anything builds. |
 | [`windows/vm.sh`](#windowsvmsh) | On a Mac, the WinUI app built and checked in a Parallels Windows VM. |
+| [`windows/ci-package.ps1`](#windows-releaseyml-and-windows-appyml) | In CI, one platform's package built and given the launch check its runner can run, the step both Windows workflows share. |
 | [`windows-release.yml`, `windows-app.yml`](#windows-releaseyml-and-windows-appyml) | Reusable workflows: the Store release and the WinUI build check. |
 
 Tests: `python3 tools/tests/run.py` (over `tools/tests/fixture-app`, a minimal app, the files side by side, `--jobs N`
@@ -909,7 +910,8 @@ doesn't fit; each language's shots and `problems.txt` in `build/layout-check/<la
 ### `windows/store-release.ps1`
 
 The Microsoft Store release in one command (Windows PowerShell 5.1 or 7): per platform of `windows.release.platforms`
-(x64 and ARM64) the unsigned Native AOT package, checked native and installed fresh and started (`smoke-package.ps1`; up
+(x64 and ARM64) the unsigned Native AOT package, checked native and within `windows.release.maxMB` (each package's
+ceiling in MB, none without it) and installed fresh and started (`smoke-package.ps1`; up
 to 60 s for x64 emulated on ARM64; refuses without Developer Mode unless `-NoSmoke`), each next publish running in the
 background during the previous package's check (`<out>/logs/publish-<name>.log`), `-Screenshots` every window from a
 screenshot-mode package (`-ScreenshotNames store` or names for fewer), then one
@@ -924,7 +926,8 @@ Installs a built `.msix` the way a customer gets it and checks it opens its wind
 `-Hold` seconds later (`-Keep` leaves it for the hand checks, `-SideBySide` next to a Store copy); `-Screenshots
 <folder> [-Language] [-ScreenshotNames]` runs the screenshot run in the installed package instead (a Release publish
 with `-p:ScreenshotMode=true`); `-CheckOnly` only checks the package is native (its executable, no
-`runtimeconfig.json`, no .NET runtime beside it).
+`runtimeconfig.json`, no .NET runtime beside it) and, with `-MaxMB` (`windows.release.maxMB`, which `store-release.ps1`
+and `vm.sh smoke` pass), no bigger than that, so a package that grew fails before an app moves to it.
 
 ### `windows/check-winui.py`
 
@@ -989,22 +992,27 @@ included) into a Windows VM in Parallels Desktop and builds the app there, Debug
 in the same session. `screenshots <folder>` runs the screenshot script there and copies the PNGs into
 the Mac folder, `check-layout [lang…]` runs `check-layout.ps1` there (one build, the languages side by side, all of them
 unless named) and copies each language's shots and `problems.txt` back into `<windows.dir>/build/layout-check/<lang>`,
-`smoke` publishes the Native AOT package for the VM's platform and runs `smoke-package.ps1` on it (`-- -SideBySide`
-where the Store copy is installed), `test` runs the test projects and `run -- <command>` anything else in the copy;
-arguments after `--` go to the command. `build`, `test` and `smoke` run `dotnet` in the copy's `<windows.dir>`, so a
-relative path in `build`'s or `test`'s arguments (`-bl`, `-o`) is from there; `run` starts in the copy's root. The copy
-is incremental (only changed files travel, `bin` and `obj` stay), and `verify.sh` builds through it when the VM is
-there. The VM needs the .NET SDK (the one the app's `windows/global.json` pins, if it has one), the Visual Studio Build
-Tools with the x64 and ARM64 C++ tools (Native AOT), Developer Mode (screenshots and smoke install packages), Parallels
-Tools, a user signed in, and the Mac's files shared (Parallels' "All Files", `\\Mac\AllFiles`). `LACHING_VM`,
-`LACHING_VM_SHARE` and `LACHING_VM_DIR` change the VM's name, the share and the folder the copies go in
+`smoke` publishes the Native AOT package for the VM's platform, checks it as a release does
+(`smoke-package.ps1 -CheckOnly`, with `windows.release.maxMB`) and only then runs `smoke-package.ps1` on it
+(`-- -SideBySide` where the Store copy is installed), `test` runs the test projects and `run -- <command>` anything else
+in the copy; arguments after `--` go to the command. `build`, `test` and `smoke` run `dotnet` in the copy's
+`<windows.dir>`, so a relative path in `build`'s or `test`'s arguments (`-bl`, `-o`) is from there; `run` starts in the
+copy's root. The copy is incremental (only changed files travel, `bin` and `obj` stay), and `verify.sh` builds through
+it when the VM is there. The VM needs the .NET SDK (the one the app's `windows/global.json` pins, if it has one), the
+Visual Studio Build Tools with the x64 and ARM64 C++ tools (Native AOT), Developer Mode (screenshots and smoke install
+packages), Parallels Tools, a user signed in, and the Mac's files shared (Parallels' "All Files", `\\Mac\AllFiles`).
+`LACHING_VM`, `LACHING_VM_SHARE` and `LACHING_VM_DIR` change the VM's name, the share and the folder the copies go in
 (`%USERPROFILE%\laching-vm`).
 
 ### `windows-release.yml` and `windows-app.yml`
 
 `../.github/workflows/windows-release.yml` and `windows-app.yml` are reusable workflows (`workflow_call`) an app's own
 short workflows call at the release it pins: the Store release (both packages, the bundle as the artifact, the optional
-push, the tag) and the WinUI build check (the traps, the tests, both packages, every window).
+push, the tag) and the WinUI build check (the traps, the tests, both packages, every window). Both build each package
+in one step, `windows/ci-package.ps1 -Platform x64|ARM64 [-Hosted]`, the launch check: `store-release.ps1` for that
+platform, checked native and within `windows.release.maxMB`, then installed and started where the runner can run it
+(GitHub's x64 runner turns on Developer Mode first and checks ARM64 only; the self-hosted one starts it next to the
+Store copy), so what a runner checks is changed there once.
 
 **The Store release** is `store-release.ps1` on a PC, or the app's two short workflows in CI, each calling Laching's
 reusable one at the release the app pins (the `@vX.Y.Z` must be `laching.tag`; `companion.py bump` moves it with

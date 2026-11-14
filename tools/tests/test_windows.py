@@ -566,9 +566,9 @@ class CheckSdkTests(FixtureAppTestCase):
                 self.assertEqual(check["if"], "${{ !inputs.hosted }}", "setup-dotnet installs the SDK on GitHub's runners")
                 self.assertEqual(steps.index(check) + 1, steps.index(step(steps, name=builds)))
                 later = [s.get("name", s.get("uses")) for s in steps[steps.index(check):]
-                         if s is not check and re.search(r"\bdotnet (?!--version)|store-release|ci-windows-core\.py\" (?!pins)", s.get("run", ""))]
+                         if s is not check and re.search(r"\bdotnet (?!--version)|store-release|ci-package|ci-windows-core\.py\" (?!pins)", s.get("run", ""))]
                 earlier = [s.get("name", s.get("uses")) for s in steps[:steps.index(check)]
-                           if re.search(r"^dotnet |store-release|ci-windows-core\.py\" (?!pins)", s.get("run", ""), re.M)]
+                           if re.search(r"^dotnet |store-release|ci-package|ci-windows-core\.py\" (?!pins)", s.get("run", ""), re.M)]
                 self.assertEqual(earlier, [], "nothing builds before the check")
                 self.assertTrue(later or job == "version", "what builds comes after it")
 
@@ -586,6 +586,15 @@ class AppWorkflowTests(unittest.TestCase):
                 self.assertLess(steps.index(step(steps, id="app")), steps.index(setup), "its global.json found first")
                 self.assertEqual(setup["with.global-json-file"], "${{ steps.app.outputs.global-json }}")
                 self.assertEqual(setup["with.dotnet-version"], '"11.0.x"', "beside the newest .NET 11")
+
+    def test_covering_maps_each_workflow_to_these_tests(self):
+        # covering.py's map: a workflow these tests read or run names them, not every test or none. Whether a changed
+        # workflow reaches the tools tests at all is verify.sh's tools= pattern and tools.yml's paths, not checked here.
+        import covering
+
+        for name in ("windows-app.yml", "windows-release.yml", "windows-core.yml"):
+            with self.subTest(workflow=name):
+                self.assertIn("test_windows", covering.covering([f".github/workflows/{name}"]) or [])
 
     def test_windows_app_asks_and_tests_in_windows_dir(self):
         steps = workflow_steps("windows-app.yml", "app")
@@ -726,6 +735,12 @@ class PowerShellTests(unittest.TestCase):
                    cwd: Path | None = None) -> subprocess.CompletedProcess:
         return subprocess.run([POWERSHELL, "-NoProfile", "-NonInteractive", *args], capture_output=True, text=True,
                               env=env, cwd=cwd)
+
+    @staticmethod
+    def said(done: subprocess.CompletedProcess) -> str:
+        """What a run printed, with PowerShell 7's error view undone (its colors, and a message it wrapped to the
+        console's width rejoined), so a check on a long message doesn't depend on the width it ran at."""
+        return re.sub(r"\s*\n\s*\|\s*", " ", re.sub(r"\x1b\[[0-9;]*m", "", done.stdout + done.stderr))
 
     def fake_dotnet(self, folder: Path, answer: Path | None = None) -> tuple[dict[str, str], Path]:
         """An environment with a dotnet first on PATH that logs each call's command and working folder to the log it
@@ -936,15 +951,19 @@ class PowerShellTests(unittest.TestCase):
             self.assertEqual(ask("10.0.306", "11.0.111"), "use=false", "not .NET 11")
             self.assertEqual(ask(None, "11.0.111"), "use=false", "no SDK that runs here")
 
-    def package(self, folder: Path, *names: str) -> Path:
+    def package(self, folder: Path, *names: str, size: int = 0, file: str = "Fixture.msix") -> Path:
+        """A package holding `names` (a byte each) and, with `size`, Assets/Payload.bin of that many bytes, stored (a
+        ZipFile entry isn't compressed unless asked), so the package is a little over `size` bytes."""
         manifest = ('<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">'
                     '<Identity Name="Fixture" Publisher="CN=Fixture" Version="1.0.0.0" ProcessorArchitecture="x64" />'
                     '<Applications><Application Id="App" Executable="Fixture.exe" /></Applications></Package>')
-        path = folder / "Fixture.msix"
+        path = folder / file
         with zipfile.ZipFile(path, "w") as package:
             package.writestr("AppxManifest.xml", manifest)
             for name in names:
                 package.writestr(name, b"x")
+            if size:
+                package.writestr("Assets/Payload.bin", bytes(size))
         return path
 
     def test_smoke_package_check_only(self):
@@ -968,6 +987,53 @@ class PowerShellTests(unittest.TestCase):
             done = check("Other.exe")
             self.assertNotEqual(done.returncode, 0)
             self.assertIn("has no Fixture.exe", done.stdout + done.stderr)
+
+    def test_smoke_package_check_only_holds_the_package_to_its_ceiling(self):
+        # A native package of 1.5 MB (1 MB is 1048576 bytes, as the size it prints): over a ceiling of 1 MB, within one
+        # of 2, and no ceiling unless one is given (or one of 0).
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            big = self.package(folder, "Fixture.exe", size=3 * 2**19)
+
+            def check(*args: str, package: Path = big) -> subprocess.CompletedProcess:
+                return self.powershell("-File", str(WINDOWS / "smoke-package.ps1"), "-Package", str(package), "-CheckOnly",
+                                       *args)
+
+            size = big.stat().st_size
+            done = check("-MaxMB", "1")
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn(f"Fixture.msix is 1.5 MB ({size} bytes), over its ceiling of 1 MB (1048576 bytes; -MaxMB, "
+                          "which a release takes from windows.release.maxMB): find what it gained", self.said(done))
+            # At most the ceiling: a package of exactly that many bytes passes, one byte over fails, and the bytes tell
+            # the two apart where the MB round to the same. (size / 2**20 is exact in a double, and repr round-trips.)
+            done = check("-MaxMB", repr(size / 2**20))
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertIn("Fixture.msix: native, 3 files, 1.5 MB (ceiling 1.5", done.stdout)
+            done = check("-MaxMB", repr((size - 1) / 2**20))
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn(f"Fixture.msix is 1.5 MB ({size} bytes), over its ceiling of 1.5", self.said(done))
+            self.assertIn(f" MB ({size - 1} bytes; -MaxMB", self.said(done))
+            done = check("-MaxMB", "2")
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertIn("Fixture.msix: native, 3 files, 1.5 MB (ceiling 2 MB)", done.stdout)
+            done = check("-MaxMB", "1.6")
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertIn("(ceiling 1.6 MB)", done.stdout, "a ceiling in tenths")
+            for args in ((), ("-MaxMB", "0")):
+                with self.subTest(args=args):
+                    done = check(*args)
+                    self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                    self.assertIn("Fixture.msix: native, 3 files, 1.5 MB", done.stdout)
+                    self.assertNotIn("ceiling", done.stdout)
+            done = check("-MaxMB", "-1")
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn("-MaxMB -1", done.stdout + done.stderr)
+            # The runtime beside the executable is the usual reason a package doubles: that is named, not the size.
+            done = check("-MaxMB", "1", package=self.package(folder, "Fixture.exe", "coreclr.dll", size=3 * 2**19,
+                                                              file="Runtime.msix"))
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn("carries the .NET runtime", done.stdout + done.stderr)
+            self.assertNotIn("ceiling", done.stdout + done.stderr)
 
     def test_smoke_package_screenshots_stay_out_of_appdata(self):
         if not os.environ.get("LOCALAPPDATA"):
@@ -1038,6 +1104,81 @@ class PowerShellTests(unittest.TestCase):
             self.assertNotEqual(done.returncode, 0)
             self.assertIn("companion.json has no windows.dir.", done.stdout + done.stderr)
 
+    def test_store_release_holds_each_package_to_windows_release_max_mb(self):
+        # Each package found under -BundleFrom (the release's bundle job), as each one built, is checked with
+        # smoke-package.ps1 -CheckOnly -MaxMB <windows.release.maxMB>: a 1.5 MB one fails a ceiling of 1 MB.
+        with fixture_app() as root, tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            self.release_app(root)
+            found = folder / "packages" / "msix-x64"
+            found.mkdir(parents=True)
+            self.package(found, "Fixture.exe", size=3 * 2**19, file="Fixture.App_1.0.3.0_x64.msix")
+            config = root / "companion.json"
+            text = config.read_text("utf8")
+
+            def bundle_from(max_mb: str | None) -> subprocess.CompletedProcess:
+                edited = text.replace('"bundle": "Fixture"', f'"bundle": "Fixture", "maxMB": {max_mb}')
+                config.write_text(text if max_mb is None else edited, "utf8")
+                return self.release(root, "-BundleFrom", str(folder / "packages"), "-NoBundle", "-AnyVersion",
+                                    "-Out", str(folder / "out"))
+
+            done = bundle_from("1")
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn("Fixture.App_1.0.3.0_x64.msix is 1.5 MB (", self.said(done))
+            self.assertIn("over its ceiling of 1 MB (1048576 bytes;", self.said(done))
+            done = bundle_from("2.5")
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertIn("Fixture.App_1.0.3.0_x64.msix: native, 3 files, 1.5 MB (ceiling 2.5 MB)", done.stdout)
+            done = bundle_from(None)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertIn("Fixture.App_1.0.3.0_x64.msix: native, 3 files, 1.5 MB", done.stdout)
+            self.assertNotIn("ceiling", done.stdout, "none unless windows.release.maxMB sets one")
+
+    def test_store_release_holds_each_built_package_to_windows_release_max_mb(self):
+        # The build (what ci-package.ps1 runs in both workflows' package jobs): the package each publish leaves under
+        # -Out is checked with -MaxMB <windows.release.maxMB> before anything installs it. A maxMB that isn't a ceiling
+        # (below 0, a string, true) is refused before anything publishes.
+        with fixture_app() as root, tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            project = root / "windows" / "Fixture.App" / "Fixture.App.csproj"
+            project.parent.mkdir(parents=True)
+            project.write_text("<Project />", "utf8")
+            self.release_app(root)
+            env, log = self.fake_dotnet(folder)
+            if os.name != "nt":
+                env["ProgramFiles(x86)"] = str(folder)  # where it looks for the Visual Studio installer's vswhere
+            env["CI"] = "true"  # as in ci-package.ps1's job: no Explorer window on the packages once it passes
+            out = folder / "out"
+            # Where a publish puts it (the fake one makes none), in a folder of its own that isn't an earlier run's
+            # <Name>_<version>_x64_Test, which the build clears first.
+            built = out / "Fixture.App_1.0.3.0_x64"
+            built.mkdir(parents=True)
+            self.package(built, "Fixture.exe", size=3 * 2**19, file="Fixture.App_1.0.3.0_x64.msix")
+            config = root / "companion.json"
+            text = config.read_text("utf8")
+
+            def build(max_mb) -> subprocess.CompletedProcess:
+                config.write_text(text.replace('"bundle": "Fixture"', f'"bundle": "Fixture", "maxMB": {json.dumps(max_mb)}'),
+                                  "utf8")
+                return self.release(root, "-Platforms", "x64", "-NoSmoke", "-NoBundle", "-Out", str(out), env=env,
+                                    cwd=root)
+
+            done = build(1)
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn("Fixture.App_1.0.3.0_x64.msix is 1.5 MB (", self.said(done))
+            self.assertIn("over its ceiling of 1 MB (1048576 bytes;", self.said(done))
+            self.assertEqual([command for command, _ in self.dotnet_calls(log)], ["publish"])
+            done = build(2.5)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertIn("Fixture.App_1.0.3.0_x64.msix: native, 3 files, 1.5 MB (ceiling 2.5 MB)", done.stdout)
+            self.assertEqual([command for command, _ in self.dotnet_calls(log)], ["publish"])
+            for value in (-1, "40", True):
+                with self.subTest(maxMB=value):
+                    done = build(value)
+                    self.assertNotEqual(done.returncode, 0)
+                    self.assertIn("a package's ceiling in MB, or 0 for none", self.said(done))
+                    self.assertEqual(self.dotnet_calls(log), [], "refused before anything publishes")
+
     def test_store_release_publishes_in_windows_dir(self):
         # Run from the app's root, dotnet publish runs in windows.dir: the global.json there picks the SDK, and one it
         # pins that isn't installed fails the publish.
@@ -1068,6 +1209,125 @@ class PowerShellTests(unittest.TestCase):
             self.assertNotEqual(done.returncode, 0)
             self.assertIn("The x64 publish failed (exit 155)", done.stdout + done.stderr)
             self.assertIn("A compatible .NET SDK was not found", done.stdout + done.stderr)
+
+    DEVELOPER_MODE = (r"add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock /t REG_DWORD /f "
+                      "/v AllowDevelopmentWithoutDevLicense /d 1")
+    """reg's arguments when ci-package.ps1 turns on Developer Mode."""
+
+    def ci_package_layout(self, folder: Path) -> tuple[dict[str, str], Path]:
+        """A laching/tools/windows under `folder` with ci-package.ps1 beside a store-release.ps1 that records what it is
+        given (store-release.json next to it), and an environment with RUNNER_TEMP and a reg first on PATH that logs its
+        arguments (reg.log in `folder`) and exits $REG_EXIT (0 unset). Returns the environment and that folder."""
+        tools = folder / "laching" / "tools" / "windows"
+        tools.mkdir(parents=True)
+        shutil.copy(WINDOWS / "ci-package.ps1", tools / "ci-package.ps1")
+        (tools / "store-release.ps1").write_text(
+            "param([string[]] $Platforms, [string] $Out, [switch] $NoSmoke, [switch] $SideBySide, [string] $Screenshots,\n"
+            "      [string[]] $Languages, [switch] $NoBundle, [switch] $AnyVersion)\n"
+            "$bound = @{}\n"
+            "foreach ($key in $PSBoundParameters.Keys) {\n"
+            "    $bound[$key] = $PSBoundParameters[$key]  # not through an if, which unrolls a one-item array\n"
+            "    if ($bound[$key] -is [switch]) { $bound[$key] = [bool]$bound[$key] }\n"
+            "}\n"
+            "ConvertTo-Json -InputObject $bound -Compress |\n"
+            "    Set-Content -LiteralPath (Join-Path $PSScriptRoot 'store-release.json') -Encoding UTF8\n", "utf8")
+        fake, log = folder / "fake", folder / "reg.log"
+        fake.mkdir()
+        if os.name == "nt":
+            (fake / "reg.cmd").write_text(f'@echo off\r\n>> "{log}" echo %*\r\n'
+                                          "if defined REG_EXIT exit /b %REG_EXIT%\r\nexit /b 0\r\n", "utf8")
+        else:
+            (fake / "reg").write_text(f'#!/bin/sh\necho "$*" >> "{log}"\nexit "${{REG_EXIT:-0}}"\n', "utf8")
+            (fake / "reg").chmod(0o755)
+        (folder / "runner").mkdir()
+        env = {**os.environ, "PATH": str(fake) + os.pathsep + os.environ["PATH"], "RUNNER_TEMP": str(folder / "runner")}
+        env.pop("REG_EXIT", None)
+        return env, tools
+
+    @staticmethod
+    def ci_package_calls(folder: Path, tools: Path) -> tuple[dict | None, list[str]]:
+        """What store-release.ps1 was given (None when it didn't run) and reg's calls, since the last look."""
+        recorded, log = tools / "store-release.json", folder / "reg.log"
+        given = json.loads(recorded.read_text("utf-8-sig")) if recorded.exists() else None
+        calls = [line.strip() for line in log.read_text().splitlines()] if log.exists() else []
+        recorded.unlink(missing_ok=True)
+        log.unlink(missing_ok=True)
+        return given, calls
+
+    def test_ci_package_is_the_launch_check_on_each_runner(self):
+        # GitHub's runner (x64): Developer Mode turned on, then the x64 package started and the ARM64 one checked only;
+        # the self-hosted runner, where Developer Mode is on by hand: each started beside the Store copy there.
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            env, tools = self.ci_package_layout(folder)
+            out, shots = str(folder / "runner" / "AppPackages"), str(folder / "shots")
+
+            def ci_package(*args: str, env: dict[str, str] = env) -> subprocess.CompletedProcess:
+                return self.powershell("-File", str(tools / "ci-package.ps1"), *args, env=env)
+
+            for args, given, reg in (
+                (("-Platform", "x64", "-Hosted"), {"Platforms": ["x64"]}, [self.DEVELOPER_MODE]),
+                (("-Platform", "ARM64", "-Hosted"), {"Platforms": ["ARM64"], "NoSmoke": True}, []),
+                (("-Platform", "x64"), {"Platforms": ["x64"], "SideBySide": True}, []),
+                (("-Platform", "ARM64"), {"Platforms": ["ARM64"], "SideBySide": True}, []),
+                (("-Platform", "x64", "-Hosted", "-Screenshots", shots, "-Languages", "en,de"),
+                 {"Platforms": ["x64"], "Screenshots": shots, "Languages": ["en,de"]}, [self.DEVELOPER_MODE]),
+                (("-Platform", "ARM64", "-Hosted", "-Screenshots", shots),
+                 {"Platforms": ["ARM64"], "NoSmoke": True, "Screenshots": shots}, [self.DEVELOPER_MODE]),
+                (("-Platform", "x64", "-Out", str(folder / "out")), {"Platforms": ["x64"], "SideBySide": True,
+                                                                     "Out": str(folder / "out")}, []),
+            ):
+                with self.subTest(args=args):
+                    done = ci_package(*args)
+                    self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                    self.assertEqual(self.ci_package_calls(folder, tools),
+                                     ({"Out": out, "NoBundle": True, "AnyVersion": True, **given}, reg))
+
+            # Developer Mode that won't turn on stops it before anything builds.
+            done = ci_package("-Platform", "x64", "-Hosted", env={**env, "REG_EXIT": "5"})
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn("Turning on Developer Mode failed (reg exit 5)", self.said(done))
+            self.assertEqual(self.ci_package_calls(folder, tools), (None, [self.DEVELOPER_MODE]))
+            # Outside a runner it needs -Out; a platform the Store doesn't take is refused.
+            done = ci_package("-Platform", "x64", env={key: value for key, value in env.items() if key != "RUNNER_TEMP"})
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn("-Out, or RUNNER_TEMP", self.said(done))
+            done = ci_package("-Platform", "x86")
+            self.assertNotEqual(done.returncode, 0)
+            self.assertEqual(self.ci_package_calls(folder, tools), (None, []))
+
+    @unittest.skipUnless(PWSH, "the step runs as a script here, with PowerShell 7")
+    def test_the_workflows_build_each_package_through_ci_package(self):
+        # In each workflow's package job one step builds and checks the package: ci-package.ps1, given the platform and
+        # the runner (and in windows-app.yml the package's screenshot run, on x64); no other step there turns on
+        # Developer Mode or runs store-release.ps1. What reaches store-release.ps1 is what the steps passed before.
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            env, tools = self.ci_package_layout(folder)
+            runner = Path(env["RUNNER_TEMP"])
+            started = {"Out": str(runner / "AppPackages"), "NoBundle": True, "AnyVersion": True}
+            for name, job, platform, hosted, run, given, reg in (
+                ("windows-app.yml", "app", "x64", "true", "package",
+                 {"Screenshots": f"{runner}\\shots", "Languages": ["en,de"]}, [self.DEVELOPER_MODE]),
+                ("windows-app.yml", "app", "ARM64", "true", "package", {"NoSmoke": True}, []),
+                ("windows-app.yml", "app", "x64", "false", "release", {"SideBySide": True}, []),
+                ("windows-app.yml", "app", "ARM64", "false", "package", {"SideBySide": True}, []),
+                ("windows-release.yml", "package", "x64", "true", "", {}, [self.DEVELOPER_MODE]),
+                ("windows-release.yml", "package", "ARM64", "true", "", {"NoSmoke": True}, []),
+                ("windows-release.yml", "package", "ARM64", "false", "", {"SideBySide": True}, []),
+            ):
+                with self.subTest(workflow=name, platform=platform, hosted=hosted, run=run):
+                    steps = workflow_steps(name, job)
+                    build = step(steps, name="Build and check the ${{ matrix.platform }} package")
+                    self.assertEqual([s for s in steps if "ci-package.ps1" in s.get("run", "")], [build])
+                    self.assertEqual([s.get("name") for s in steps if re.search(r"store-release|reg add", s.get("run", ""))],
+                                     [])
+                    values = {"matrix.platform": platform, "inputs.hosted": hosted, "inputs.screenshot-run": run,
+                              "inputs.languages": "en,de", "inputs.laching-path": str(folder / "laching")}
+                    done = self.run_step(expand(build["run"], values), folder, folder, env)
+                    self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                    self.assertEqual(self.ci_package_calls(folder, tools),
+                                     ({"Platforms": [platform], **started, **given}, reg))
 
     @staticmethod
     def run_step(run: str, folder: Path, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess:
