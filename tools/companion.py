@@ -8,7 +8,12 @@
     python3 laching/tools/companion.py env                  # names, paths and path patterns as shell assignments
     python3 laching/tools/companion.py pins [--staged]      # the Laching version everywhere it's pinned (exit 1 on a mismatch;
                                                             # a link is a warning, and exit 1 with --staged and in CI)
-    python3 laching/tools/companion.py bump X.Y.Z           # every pin, the submodule and the landing page to vX.Y.Z
+    python3 laching/tools/companion.py bump X.Y.Z           # every pin, the submodule and the landing page to vX.Y.Z,
+                                                            # once NuGet.org lists the packages it pins (up to 15 minutes)
+    python3 laching/tools/companion.py bump --no-wait X.Y.Z # the same without asking NuGet.org
+    python3 laching/tools/companion.py bump --wait-only X.Y.Z [APP…]  # that wait alone, once for these apps
+    python3 laching/tools/companion.py nuget-listed X.Y.Z ID…   # wait until NuGet.org lists these packages at X.Y.Z
+                                                            # (exit 1 after 15 minutes; needs no companion.json)
     python3 laching/tools/companion.py link [LACHING]      # build against a Laching checkout (../laching) until unlink
     python3 laching/tools/companion.py unlink               # back to the pinned release, byte for byte
     python3 laching/tools/companion.py conform              # the app uses Laching's tools, not copies (exit 1 on drift)
@@ -37,6 +42,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import NamedTuple
 
@@ -740,6 +746,91 @@ def npm_versions(package: str) -> list[str]:
     return versions if isinstance(versions, list) else [versions]
 
 
+NUGET_INDEX = "https://api.nuget.org/v3-flatcontainer/{id}/index.json"
+NUGET_WAIT = 15 * 60
+"""Seconds `wait_for_nuget` waits: NuGet.org has listed a release's packages 5 to 7 minutes after their push."""
+NUGET_POLL = 15
+
+
+def nuget_versions(package: str) -> list[str]:
+    """The versions NuGet.org lists for `package`, from its flat container's index (what a restore reads); none for a
+    package it has never listed. An OSError or a ValueError when it doesn't answer, or answers something else."""
+    import http.client
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    url = NUGET_INDEX.format(id=urllib.parse.quote(package.lower()))
+    try:
+        with urllib.request.urlopen(url, timeout=30) as response:
+            return [str(version) for version in json.load(response)["versions"]]
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return []
+        raise
+    except http.client.HTTPException as error:
+        raise OSError(f"{url}: {error!r}") from error
+    except (KeyError, TypeError) as error:
+        raise ValueError(f"{url} holds no list of versions") from error
+
+
+def _minutes(seconds: float) -> str:
+    return f"{int(seconds) // 60}:{int(seconds) % 60:02d}"
+
+
+def wait_for_nuget(packages: list[str], version: str, *, patient: bool = False, note: str = "", fetch=None, clock=None,
+                   sleep=None, say=None, timeout: float = NUGET_WAIT, interval: float = NUGET_POLL) -> None:
+    """Returns once NuGet.org lists every one of `packages` at `version`, asking again every `interval` seconds and
+    saying what it waits for (`say` takes a line; `note` ends the first one). A PinError naming the packages still
+    missing after `timeout` seconds. NuGet.org lists a version some minutes after its push, and a restore before that
+    fails, then stays failed from the machine's http-cache: the release's publish job and `bump` both wait here.
+
+    A request that fails counts as not listed yet and is asked again, except before NuGet.org has been reached once:
+    then it's a PinError at once (offline: no reason to wait), unless `patient`. An error status (a 503, a 429) or an
+    answer that isn't a list of versions came from NuGet.org, so it reached it. `fetch` (a package's versions:
+    `nuget_versions`), `clock` and `sleep` are replaced in the tests, which reach no network."""
+    import urllib.error
+
+    fetch, clock, sleep = fetch or nuget_versions, clock or time.monotonic, sleep or time.sleep
+    say = say or (lambda line: print(line, flush=True))  # flushed: a pipe would hold the line until the wait is over
+    missing = sorted(set(packages), key=str.lower)
+    # `failed`: the error of each package whose latest request failed; a list of versions for it clears it.
+    start, reached, listed_any, failed, told = clock(), False, False, {}, -1
+    while missing:
+        for package in list(missing):
+            try:
+                versions = fetch(package)
+            except (OSError, ValueError) as error:
+                reached = reached or isinstance(error, (urllib.error.HTTPError, ValueError))
+                if not (patient or reached):
+                    raise PinError(f"couldn't ask NuGet.org whether it lists {package} {version}: {error}") from error
+                failed[package] = error
+                continue
+            reached = listed_any = True
+            failed.pop(package, None)
+            if version.lower() in (found.lower() for found in versions):
+                missing.remove(package)
+        waited = clock() - start
+        if not missing:
+            break
+        if waited >= timeout:
+            errors = "".join(f"; its last answer for {package}: {failed[package]}" for package in missing
+                             if package in failed)
+            if not listed_any:  # no request got a list of versions: that isn't NuGet.org saying they're missing
+                raise PinError(f"couldn't reach NuGet.org to ask whether it lists {', '.join(missing)} at {version} in "
+                               f"{_minutes(waited)}{errors}")
+            raise PinError(f"NuGet.org doesn't list {', '.join(missing)} at {version} after {_minutes(waited)}{errors}")
+        if told < 0:
+            say(f"Waiting for NuGet.org to list {', '.join(missing)} at {version}: a version appears some minutes after "
+                f"its push, and this gives up after {_minutes(timeout)}{note}")
+        elif waited // 60 > told:
+            say(f"{_minutes(waited):>6}  still waiting for {', '.join(missing)}")
+        told = int(waited // 60)
+        sleep(interval)
+    if told >= 0:
+        say(f"{_minutes(clock() - start):>6}  NuGet.org lists {'them' if len(set(packages)) > 1 else 'it'}")
+
+
 def _modified(folder: Path) -> set[Path]:
     """The tracked files git reports changed under `folder` (none outside a repository)."""
     top = git(folder, "rev-parse", "--show-toplevel")
@@ -795,25 +886,21 @@ def _bump_landing(config: Config, version: str) -> tuple[list[str], list[str]]:
     return changed, []
 
 
-def bump(config: Config, version: str) -> int:
+def bump(config: Config, version: str, wait: bool = True) -> int:
     """Moves the app to Laching `version`: every pin `pin_sites` finds, the Package.resolved files, the submodule (to the
-    tag) and the landing page's package. Refuses while linked, or when origin has no such tag. Prints what changed and
-    the pins; 1 when they still disagree."""
-    version = version.removeprefix("v")
-    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
-        raise PinError(f"{version!r} isn't a version (X.Y.Z)")
-    if linked := linked_to(config):
-        raise PinError(f"linked to {linked}: run `companion.py unlink` first")
+    tag) and the landing page's package. Refuses while linked, or when origin has no such tag. Before it writes
+    anything it waits until NuGet.org lists the packages it is about to pin (`_await_packages`), and stops with the app
+    as it was when that doesn't come; `wait` False doesn't ask. Prints what changed and the pins; 1 when they still
+    disagree."""
+    version, submodule, commit, fetched = _bump_start(config, version)
     tag = f"v{version}"
-    submodule = _submodule(config)
-    if submodule is None:
-        raise PinError(f"bump needs the Laching submodule at {config.get('laching.path') or 'laching.path'}")
-    commit = _remote_tag(submodule, tag)
-    moved = _move_submodule(config, submodule, tag)
+    unasked = _await_packages(_nuget_wanted(_pin_edits(config, version)), wait)
+    moved = _move_submodule(config, submodule, tag) if fetched else []
     edited = _bump_pins(config, version)
     by_xcode = (_project_resolved(config) if xcode_resolves(config) and set(edited) & set(_swift_manifests(config))
                 else None)
     changed, notes = _bump_resolved(config, version, commit, edited, by_xcode)
+    notes = unasked + notes
     changed = [rel(file, config.root) for file in edited] + changed + moved
     if config.path("mac.projectSpec", "mac.dir") in edited:
         notes.append(regenerate_project(config))
@@ -832,26 +919,77 @@ def bump(config: Config, version: str) -> int:
     return print_pins(load(config.root))  # companion.json may have changed
 
 
-def _move_submodule(config: Config, submodule: Path, tag: str) -> list[str]:
-    """Fetches `tag` into the submodule and checks it out, refusing when the submodule has uncommitted changes; the
-    line for the summary, none when it's already there."""
+def _bump_start(config: Config, version: str) -> tuple[str, Path, str, bool]:
+    """`bump`'s first steps, which write nothing in the app: the version without its `v`, the submodule, the tag's
+    commit on origin and whether the tag was fetched into the submodule (`_fetch_tag`). A PinError for a version that
+    isn't X.Y.Z, a linked app, one without the submodule, and a tag origin doesn't have."""
+    version = _release_version(version)
+    if linked := linked_to(config):
+        raise PinError(f"linked to {linked}: run `companion.py unlink` first")
+    tag = f"v{version}"
+    submodule = _submodule(config)
+    if submodule is None:
+        raise PinError(f"bump needs the Laching submodule at {config.get('laching.path') or 'laching.path'}")
+    commit = _remote_tag(submodule, tag)
+    # The tag is fetched first (the packages' version is read from it) and nothing moves until NuGet.org has them: the
+    # submodule's checkout and every file are as they were when the wait gives up.
+    return version, submodule, commit, _fetch_tag(config, submodule, tag)
+
+
+def _release_version(version: str) -> str:
+    """`version` without its `v`; a PinError when it isn't X.Y.Z."""
+    version = version.removeprefix("v")
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        raise PinError(f"{version!r} isn't a version (X.Y.Z)")
+    return version
+
+
+def await_bumps(roots: list[Path], version: str) -> None:
+    """Waits once, before any of the apps at `roots` moves, until NuGet.org lists every package their `bump` to
+    `version` would wait for (`bump --wait-only`, which `bump-apps.sh` runs first): one wait for them all, where each
+    app's own would add up, after which each `bump` asks once and goes on. It fetches the tag into each submodule, as
+    `bump` does, and writes nothing else. An app `bump` refuses (linked, no submodule, no such tag) is left to its
+    `bump` to say so. A PinError when NuGet.org can't be reached or doesn't list them in time."""
+    version, wanted = _release_version(version), {}
+    for root in roots:
+        try:
+            config = load(root, check=False)
+            edits = _pin_edits(config, _bump_start(config, version)[0])
+        except (PinError, OSError, SystemExit):  # load exits for a companion.json that isn't JSON
+            continue
+        for new, packages in _nuget_wanted(edits).items():
+            wanted.setdefault(new, set()).update(packages)
+    _await_packages(wanted, True, nothing=("no app moves", "No app moved"), again="bump-apps.sh --no-wait")
+
+
+def _fetch_tag(config: Config, submodule: Path, tag: str) -> bool:
+    """Fetches `tag` into the submodule, which moves nothing in its checkout, refusing when the submodule has
+    uncommitted changes; False when the submodule is at the tag already."""
     where = rel(submodule, config.root)
     if _submodule_tag(submodule) == tag:
-        return []
+        return False
     if git(submodule, "status", "--porcelain").stdout.strip():
         raise PinError(f"{where} has uncommitted changes, which would ride along to {tag}")
     fetch = git(submodule, "fetch", "--quiet", "origin", "tag", tag)
     if fetch.returncode:
         raise PinError(f"couldn't fetch {tag} into {where}:\n{_tail(fetch)}")
+    return True
+
+
+def _move_submodule(config: Config, submodule: Path, tag: str) -> list[str]:
+    """Checks out `tag`, which `_fetch_tag` fetched, in the submodule; the line for the summary."""
+    where = rel(submodule, config.root)
     checkout = git(submodule, "checkout", "--quiet", tag)
     if checkout.returncode:
         raise PinError(f"couldn't check out {tag} in {where}:\n{_tail(checkout)}")
     return [f"{where} → {tag}"]
 
 
-def _bump_pins(config: Config, version: str) -> list[Path]:
-    """Rewrites every pin `pin_sites` finds in a file to `version` (keeping a `v` prefix); the files it changed."""
-    edits: dict[Path, list[tuple[tuple[int, int], str]]] = {}
+def _pin_edits(config: Config, version: str) -> dict[Path, list[tuple[Pin, str]]]:
+    """What moving to `version` rewrites, without writing it: for each file, the pins `pin_sites` finds in it that name
+    something else, each with the version it gets (keeping a `v` prefix; a NuGet reference gets the packages' own
+    version at the tag, so the tag has to be fetched)."""
+    edits: dict[Path, list[tuple[Pin, str]]] = {}
     for pin in pin_sites(config):
         if pin.file is None:
             continue
@@ -861,10 +999,50 @@ def _bump_pins(config: Config, version: str) -> list[Path]:
         new = ("v" if pin.version.startswith("v") or pin.label.endswith("@") else "") + version
         new = _released_package_version(config, pin, version) or new
         if pin.version != new:
-            edits.setdefault(pin.file, []).append((pin.span, new))
+            edits.setdefault(pin.file, []).append((pin, new))
+    return edits
+
+
+def _nuget_wanted(edits: dict[Path, list[tuple[Pin, str]]]) -> dict[str, set[str]]:
+    """The NuGet packages `edits` is about to pin, by the version it is about to name."""
+    wanted: dict[str, set[str]] = {}
+    for replacements in edits.values():
+        for pin, new in replacements:
+            if pin.package:
+                wanted.setdefault(new, set()).add(pin.package)
+    return wanted
+
+
+def _await_packages(wanted: dict[str, set[str]], wait: bool,
+                    nothing: tuple[str, str] = ("nothing is written", "Nothing was written"),
+                    again: str = "bump --no-wait") -> list[str]:
+    """Waits until NuGet.org lists every package of `wanted` (`_nuget_wanted`) at its version: a restore before that
+    fails, and the failure stays in the machine's http-cache. An app whose NuGet pins don't move asks nothing, and
+    nothing is asked with `wait` False: the note saying so. A PinError when NuGet.org can't be reached or doesn't list
+    them in time (`wait_for_nuget`), raised before `bump` has written anything: `nothing` says so, while and after the
+    wait, and `again` is the command that doesn't ask (`await_bumps` names its own)."""
+    if not wait:
+        return [f"NuGet.org wasn't asked whether it lists {', '.join(sorted(packages, key=str.lower))} at {new} "
+                "(--no-wait): a restore fails until it does" for new, packages in sorted(wanted.items())]
+    until, done = nothing
+    for new, packages in sorted(wanted.items()):
+        try:
+            wait_for_nuget(sorted(packages), new, note=f"; {until} until then (`{again}` doesn't ask)")
+        except KeyboardInterrupt:
+            raise PinError(f"stopped while waiting for NuGet.org. {done}.") from None
+        except PinError as error:
+            raise PinError(f"{error}\n{done}. Run it again once NuGet.org lists them, or with --no-wait to pin "
+                           "them unasked. A restore that failed meanwhile stays in NuGet's cache: "
+                           "`dotnet nuget locals http-cache --clear`.") from error
+    return []
+
+
+def _bump_pins(config: Config, version: str) -> list[Path]:
+    """Rewrites every pin `_pin_edits` names to its new version; the files it changed."""
+    edits = _pin_edits(config, version)
     for file, replacements in edits.items():
         text = read_text(file)
-        for (start, end), new in sorted(replacements, reverse=True):
+        for ((start, end), new) in sorted(((pin.span, new) for pin, new in replacements), reverse=True):
             text = text[:start] + new + text[end:]
         write_text(file, text)
     return list(edits)
@@ -1266,6 +1444,33 @@ def main(argv: list[str]) -> int:
             print(f"{file}: " + ("ok" if not problems else "\n  " + "\n  ".join(problems)))
             status |= bool(problems)
         return status
+    if command == "nuget-listed":
+        # The release's publish job asks from Laching's own checkout, which has no companion.json to load.
+        if len(rest) < 2 or not re.fullmatch(r"\d+\.\d+\.\d+", rest[0]):
+            print(__doc__)
+            return 2
+        try:
+            wait_for_nuget(rest[1:], rest[0], patient=True)
+        except PinError as error:
+            print(f"companion nuget-listed: {error}", file=sys.stderr)
+            return 1
+        print(f"NuGet.org lists {', '.join(rest[1:])} at {rest[0]}.")
+        return 0
+    if command == "bump" and "--wait-only" in rest:
+        # bump-apps.sh's one wait, from Laching's checkout, for the apps it names.
+        rest.remove("--wait-only")
+        if not rest or "--no-wait" in rest:
+            print(__doc__)
+            return 2
+        try:
+            await_bumps([Path(app).resolve() for app in rest[1:]] or [load(check=False).root], rest[0])
+        except PinError as error:
+            print(f"companion bump: {error}", file=sys.stderr)
+            return 1
+        return 0
+    no_wait = command == "bump" and "--no-wait" in rest
+    if no_wait:
+        rest.remove("--no-wait")
     # conform reports what the schema refuses with the rest of its problems, and bump moves an app whose companion.json
     # the release's schema refuses, so the app's verify.sh says what to change.
     config = load(check=command not in ("conform", "bump"))
@@ -1292,7 +1497,7 @@ def main(argv: list[str]) -> int:
     elif (command, len(rest)) in (("bump", 1), ("link", 0), ("link", 1), ("unlink", 0)):
         try:
             if command == "bump":
-                return bump(config, rest[0])
+                return bump(config, rest[0], wait=not no_wait)
             if command == "link":
                 return link(config, Path(rest[0]) if rest else None)
             return unlink(config)

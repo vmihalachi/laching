@@ -3,18 +3,28 @@
 # Commits nothing: read each app's diff and commit there (the landing page's change inside its own repository). Runs
 # this checkout's companion.py, so an app whose submodule predates `bump` moves too. The apps are the folders with a
 # companion.json next to this Laching checkout (not a linked git worktree: its main checkout is the app), unless named.
+# Before any app moves, it waits once until NuGet.org lists every package their bumps pin (`companion.py bump
+# --wait-only`), so each bump finds them listed; --no-wait, anywhere among the arguments, doesn't ask.
 #
 #   laching/tools/bump-apps.sh 0.9.1                     # ../*/companion.json, next to this checkout
 #   laching/tools/bump-apps.sh 0.9.1 ../app-a ../app-b
+#   laching/tools/bump-apps.sh --no-wait 0.9.1 [../app-a ...]  # without asking NuGet.org
 #   laching/tools/bump-apps.sh --report [../app-a ...]  # each app's pin against the releases, and conform (companion.py apps)
 set -uo pipefail
 
 TOOLS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+usage() { sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 case "${1:-}" in
-  -h|--help) sed -n '2,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
-  "") sed -n '2,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+  -h|--help) usage; exit 0 ;;
   --report) shift; exec python3 "$TOOLS/companion.py" apps "$@" ;;
 esac
+no_wait=""
+args=()
+for arg in "$@"; do
+  if [ "$arg" = --no-wait ]; then no_wait=1; else args+=("$arg"); fi
+done
+set -- ${args[@]+"${args[@]}"}  # bash 3.2 calls an empty array unbound
+[ $# -gt 0 ] || { usage >&2; exit 2; }
 version="$1"
 shift
 
@@ -37,12 +47,18 @@ else
   [ ${#apps[@]} -gt 0 ] || { echo "No companion app (a folder with a companion.json) in $siblings" >&2; exit 2; }
 fi
 
+# One wait for them all: each bump waiting on its own would add up, one app after another, when NuGet.org never lists
+# the release. Each bump still asks, once, and goes on.
+if [ -z "$no_wait" ]; then
+  python3 "$TOOLS/companion.py" bump --wait-only "$version" "${apps[@]}" || exit $?
+fi
+
 summary=()
 failed=0
 for app in "${apps[@]}"; do
   name="$(basename "$app")"
   echo "== $name"
-  if ! COMPANION_ROOT="$app" python3 "$TOOLS/companion.py" bump "$version"; then
+  if ! COMPANION_ROOT="$app" python3 "$TOOLS/companion.py" bump ${no_wait:+--no-wait} "$version"; then
     summary+=("bump failed    $name")
     failed=1
     continue

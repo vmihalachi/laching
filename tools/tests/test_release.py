@@ -236,7 +236,8 @@ class ReleaseTests(unittest.TestCase):
         start = next(n for n in range(first, len(lines)) if lines[n].endswith(f"name: {name}"))
         indent = lines[start].index("name:")
         start = lines.index(" " * indent + "run: |", start) + 1
-        end = next(n for n in range(start, len(lines)) if lines[n].strip() and not lines[n].startswith(" " * (indent + 2)))
+        end = next((n for n in range(start, len(lines))
+                    if lines[n].strip() and not lines[n].startswith(" " * (indent + 2))), len(lines))
         output, summary = self.tmp / "output", self.tmp / "summary"
         output.write_text("", "utf8")
         variables = self.env(GITHUB_REPOSITORY="vmihalachi/laching", GITHUB_REF="refs/heads/master", BUMP="auto",
@@ -365,6 +366,48 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual((self.remote(origin, "rev-parse", "master"), self.remote(origin, "tag", "--list", "v0.13.1")),
                          (moved, ""))
         self.assertEqual(outputs, {})
+
+    def test_a_green_run_has_waited_for_nuget_to_list_what_it_pushed(self):
+        # The wait is the publish job's last step, runs only after a push, and fits in the job's time with the rest.
+        publish = self.job("publish")
+        last = publish.rsplit("\n      - ", 1)[1]
+        self.assertTrue(last.startswith("name: Wait until NuGet.org lists the packages\n"
+                                        "        if: steps.push.outputs.pushed == 'true'\n"), last)
+        self.assertIn('echo "pushed=true" >> "$GITHUB_OUTPUT"', publish.split("name: Push to NuGet.org", 1)[1])
+        minutes = int(re.search(r"timeout-minutes: (\d+)", publish).group(1))
+        self.assertGreaterEqual(minutes, 15 + 10, "the wait's 15 minutes (companion.NUGET_WAIT) and the push, with room")
+
+        # The step asks companion.py for every pushed package by its id, at the release's version. python3 is stood in
+        # for: it notes what it is started with and answers as told.
+        fakes, log, summary = self.tmp / "fakes", self.tmp / "python3.log", self.tmp / "summary"
+        fakes.mkdir()
+        (fakes / "python3").write_text('#!/bin/sh\necho "$*" >> "$FAKE_PYTHON_LOG"\nexit "${FAKE_PYTHON_STATUS:-0}"\n', "utf8")
+        (fakes / "python3").chmod(0o755)
+        checkout = self.tmp / "published"
+        for name in ("Laching.Core.0.13.1.nupkg", "Laching.Windows.Companion.0.13.1.nupkg", "Laching.Web.Jobs.0.13.1.nupkg"):
+            (checkout / "dotnet/artifacts").mkdir(parents=True, exist_ok=True)
+            (checkout / "dotnet/artifacts" / name).write_bytes(b"")
+        env = {"LACHING_VERSION": "0.13.1", "FAKE_PYTHON_LOG": str(log),
+               "PATH": f"{fakes}{os.pathsep}{self.bin}{os.pathsep}{os.environ.get('PATH', '')}"}
+        summary.write_text("", "utf8")
+        result, _ = self.step("Wait until NuGet.org lists the packages", checkout, "publish", **env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(log.read_text("utf8"), "tools/companion.py nuget-listed 0.13.1 Laching.Core Laching.Web.Jobs "
+                                                "Laching.Windows.Companion\n")
+        self.assertIn("NuGet.org lists the 3 packages at 0.13.1: the apps can bump.", summary.read_text("utf8"))
+
+        # When the wait gives up the run fails and says the release is out; a package at another version stops it first.
+        summary.write_text("", "utf8")
+        result, _ = self.step("Wait until NuGet.org lists the packages", checkout, "publish", FAKE_PYTHON_STATUS="1", **env)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("::error::NuGet.org doesn't list every package at 0.13.1 yet. The release is out", result.stdout)
+        self.assertEqual(summary.read_text("utf8"), "")
+        log.write_text("", "utf8")
+        (checkout / "dotnet/artifacts/Laching.Core.0.13.0.nupkg").write_bytes(b"")
+        result, _ = self.step("Wait until NuGet.org lists the packages", checkout, "publish", **env)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("::error::Laching.Core.0.13.0.nupkg isn't a package at 0.13.1", result.stdout)
+        self.assertEqual(log.read_text("utf8"), "")
 
     def test_the_plan_never_moves_a_tag(self):
         origin = self.origin()

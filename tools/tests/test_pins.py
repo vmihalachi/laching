@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for companion.py's `bump`, `link` and `unlink`, over the fixture app and a Laching origin made here (git
-repositories in a temporary folder; xcodegen, xcodebuild and npm are stood in for)."""
+repositories in a temporary folder; xcodegen, xcodebuild, npm and NuGet.org are stood in for), and for its wait for
+NuGet.org (`wait_for_nuget`, `nuget-listed`), which reaches no network here."""
 
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import os
 import subprocess
 import sys
 import unittest
+import urllib.error
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
@@ -39,7 +41,9 @@ def resolved(revision: str, version: str, origin_hash: str) -> str:
 
 class PinsTestCase(FixtureAppTestCase):
     """The fixture app at `self.root` and a Laching origin next to it, tagged v0.5.0 and v0.6.0. xcodegen and xcodebuild
-    are stood in for (`self.calls` records them), and npm has the versions in `self.npm`."""
+    are stood in for (`self.calls` records them), npm has the versions in `self.npm`, and NuGet.org lists, for every
+    package, each version of `self.nuget` from the second it names (None: it can't be reached). That clock, `self.now`,
+    moves only when the wait sleeps, and `self.asked` are the packages NuGet.org was asked for."""
 
     def setUp(self):
         super().setUp()
@@ -68,6 +72,22 @@ class PinsTestCase(FixtureAppTestCase):
                 self.calls.append(n), v)[1]))
         stack.enter_context(mock.patch.object(companion, "xcode_resolves", return_value=False))
         stack.enter_context(mock.patch.object(companion, "npm_versions", side_effect=lambda package: self.npm))
+        self.nuget: dict[str, float] | None = {"0.5.0": 0, "0.6.0": 0}
+        self.asked: list[str] = []
+        self.now = 0.0
+        wait = companion.wait_for_nuget
+        stack.enter_context(mock.patch.object(
+            companion, "wait_for_nuget", side_effect=lambda packages, version, **options: wait(
+                packages, version, fetch=self.nuget_versions, clock=lambda: self.now, sleep=self.sleep, **options)))
+
+    def nuget_versions(self, package: str) -> list[str]:
+        self.asked.append(package)
+        if self.nuget is None:
+            raise OSError("no route to nuget.org")
+        return [version for version, since in self.nuget.items() if since <= self.now]
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
 
     def cli(self, *argv: str) -> tuple[int, str]:
         out = io.StringIO()
@@ -300,10 +320,138 @@ class BumpTests(PinsTestCase):
         self.assertIn('"0.4.0"', (landing / "package.json").read_text("utf8"))
         self.assertIn('"0.4.0"', (landing / "package-lock.json").read_text("utf8"))
 
-    def bump_apps(self, *args: str) -> subprocess.CompletedProcess:
+    def test_bump_waits_until_nuget_lists_the_packages_then_moves(self):
+        self.nuget["0.6.0"] = 400  # listed 6:40 after the bump starts
+        code, out = self.cli("bump", "0.6.0")
+        self.assertEqual(code, 0, out)
+        self.assertIn("Waiting for NuGet.org to list Laching.Companion, Laching.Core at 0.6.0", out)
+        self.assertIn("nothing is written until then (`bump --no-wait` doesn't ask)", out)
+        self.assertIn("  3:00  still waiting for Laching.Companion, Laching.Core\n", out)
+        self.assertIn("  6:45  NuGet.org lists them\n", out)
+        self.assertLess(out.index("NuGet.org lists them"), out.index("Laching v0.6.0:"), "the wait, then the move")
+        self.assertEqual(set(self.asked), {"Laching.Core", "Laching.Companion"})
+        self.assertTrue(companion.pins_agree(companion.pins(companion.load())))
+        self.assertIn(b'"Laching.Core" Version="0.6.0"', self.files()["windows/Fixture.Core/Fixture.Core.csproj"])
+        self.assertEqual(git(self.root / "laching", "describe", "--tags"), "v0.6.0")
+
+    def test_bump_gives_up_after_fifteen_minutes_with_nothing_written(self):
+        del self.nuget["0.6.0"]
+        before = self.files()
+        code, out = self.cli("bump", "0.6.0")
+        self.assertEqual(code, 1)
+        self.assertIn("companion bump: NuGet.org doesn't list Laching.Companion, Laching.Core at 0.6.0 after 15:00", out)
+        for line in ("Nothing was written", "--no-wait", "dotnet nuget locals http-cache --clear"):
+            self.assertIn(line, out)
+        self.assertEqual(self.now, 15 * 60)
+        self.assertEqual(self.files(), before, "not half moved: no pin, and the submodule's files as they were")
+        self.assertEqual(git(self.root / "laching", "describe", "--tags"), "v0.5.0")
+        self.assertEqual(git(self.root / "laching", "status", "--porcelain"), "")
+        self.assertEqual(self.calls, [])
+        self.nuget["0.6.0"] = 0  # listed at last: the same command moves the app
+        code, out = self.cli("bump", "0.6.0")
+        self.assertEqual(code, 0, out)
+        self.assertTrue(companion.pins_agree(companion.pins(companion.load())))
+        self.assertEqual(git(self.root / "laching", "describe", "--tags"), "v0.6.0")
+
+    def test_bump_stopped_during_the_wait_has_written_nothing(self):
+        del self.nuget["0.6.0"]
+        before = self.files()
+
+        def interrupted(seconds: float) -> None:  # Ctrl-C while it sleeps between two asks
+            raise KeyboardInterrupt
+
+        self.sleep = interrupted
+        code, out = self.cli("bump", "0.6.0")
+        self.assertEqual(code, 1)
+        self.assertIn("companion bump: stopped while waiting for NuGet.org. Nothing was written.", out)
+        self.assertEqual(self.files(), before)
+        self.assertEqual(git(self.root / "laching", "describe", "--tags"), "v0.5.0")
+
+    def test_bump_stops_at_once_when_nuget_cant_be_asked_unless_told_not_to_ask(self):
+        self.nuget = None
+        before = self.files()
+        code, out = self.cli("bump", "0.6.0")
+        self.assertEqual(code, 1)
+        self.assertIn("couldn't ask NuGet.org whether it lists Laching.Companion 0.6.0: no route to nuget.org", out)
+        self.assertIn("Nothing was written", out)
+        self.assertEqual(self.now, 0, "offline is no reason to wait")
+        self.assertEqual(self.files(), before)
+        self.assertEqual(git(self.root / "laching", "describe", "--tags"), "v0.5.0")
+        self.asked.clear()
+        code, out = self.cli("bump", "--no-wait", "0.6.0")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.asked, [])
+        self.assertIn("note     NuGet.org wasn't asked whether it lists Laching.Companion, Laching.Core at 0.6.0 "
+                      "(--no-wait): a restore fails until it does", out)
+        self.assertTrue(companion.pins_agree(companion.pins(companion.load())))
+        self.assertEqual(self.cli("bump", "0.5.0", "--no-wait")[0], 0, "the flag after the version too")
+        self.assertEqual(self.asked, [])
+        for argv in (("bump", "--no-wait"), ("bump", "--no-wait", "--no-wait", "0.6.0"), ("bump", "0.6.0", "0.5.0")):
+            self.assertEqual(self.cli(*argv)[0], 2, argv)
+        self.assertEqual(companion.load().get("laching.tag"), "v0.5.0")
+
+    def test_bump_wait_only_waits_once_for_every_app_and_moves_none(self):
+        self.nuget["0.6.0"] = 400
+        before, elsewhere = self.files(), self.root.parent / "not-an-app"
+        elsewhere.mkdir()
+        code, out = self.cli("bump", "--wait-only", "0.6.0", str(self.root), str(elsewhere), str(self.root))
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.count("Waiting for NuGet.org to list Laching.Companion, Laching.Core at 0.6.0"), 1, out)
+        self.assertIn("; no app moves until then (`bump-apps.sh --no-wait` doesn't ask)", out)
+        self.assertIn("  6:45  NuGet.org lists them\n", out)
+        self.assertEqual(self.files(), before, "it only waits")
+        self.assertEqual(git(self.root / "laching", "describe", "--tags"), "v0.5.0")
+        self.asked.clear()
+        code, out = self.cli("bump", "0.6.0")  # each bump then asks once and goes on
+        self.assertEqual(code, 0, out)
+        self.assertEqual(sorted(self.asked), ["Laching.Companion", "Laching.Core"])
+        self.assertNotIn("Waiting for", out)
+
+    def test_bump_wait_only_gives_up_once_and_leaves_refused_apps_to_their_bump(self):
+        del self.nuget["0.6.0"]
+        before = self.files()
+        code, out = self.cli("bump", "--wait-only", "0.6.0", str(self.root))
+        self.assertEqual(code, 1)
+        self.assertIn("companion bump: NuGet.org doesn't list Laching.Companion, Laching.Core at 0.6.0 after 15:00\n"
+                      "No app moved. Run it again once NuGet.org lists them, or with --no-wait", out)
+        self.assertEqual((self.now, self.files()), (15 * 60, before))
+        self.asked.clear()
+        self.assertEqual(self.cli("bump", "--wait-only", "0.7.0", str(self.root)), (0, ""), "no such tag: bump says so")
+        self.assertEqual(self.asked, [])
+        self.assertIn("'0.6' isn't a version", self.cli("bump", "--wait-only", "0.6", str(self.root))[1])
+        for argv in (("bump", "--wait-only"), ("bump", "--wait-only", "--no-wait", "0.6.0")):
+            self.assertEqual(self.cli(*argv)[0], 2, argv)
+
+    def test_nuget_is_asked_for_the_packages_own_version_and_only_when_a_pin_moves(self):
+        self.release("0.7.0", "0.6.0")  # the tag is v0.7.0 and its packages are still 0.6.0, which the app doesn't pin yet
+        self.nuget = {"0.6.0": 30}
+        code, out = self.cli("bump", "0.7.0")
+        self.assertEqual(code, 0, out)
+        self.assertIn("Waiting for NuGet.org to list Laching.Companion, Laching.Core at 0.6.0", out)
+        self.assertEqual(self.now, 30)
+        (self.origin / "release.txt").write_text("0.8.0\n", "utf8")
+        self.release("0.8.0", "0.6.0")  # nor in 0.8.0: no NuGet pin moves, so nothing is asked
+        self.nuget, self.asked = None, []
+        code, out = self.cli("bump", "0.8.0")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.asked, [])
+        self.assertNotIn("NuGet.org", out)
+        self.assertEqual(companion.load().get("laching.tag"), "v0.8.0")
+
+    def test_an_app_without_nuget_pins_asks_nothing(self):
+        self.nuget = None
+        csproj = self.root / "windows/Fixture.Core/Fixture.Core.csproj"
+        csproj.write_text(companion._NUGET.sub("", csproj.read_text("utf8")), "utf8")
+        self.assertFalse([pin for pin in companion.pin_sites(companion.load()) if pin.package])
+        code, out = self.cli("bump", "0.6.0")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.asked, [])
+        self.assertEqual(companion.load().get("laching.tag"), "v0.6.0")
+
+    def bump_apps(self, *args: str, **extra: str) -> subprocess.CompletedProcess:
         env = {key: value for key, value in os.environ.items() if key != "COMPANION_ROOT" and not key.startswith("GIT_")}
         return subprocess.run(["bash", str(TOOLS / "bump-apps.sh"), *args],
-                              capture_output=True, encoding="utf8", env=env)
+                              capture_output=True, encoding="utf8", env={**env, **extra})
 
     def test_bump_apps_bumps_then_verifies_each_app(self):
         failing = self.bump_apps("0.7.0", str(self.root))
@@ -315,6 +463,40 @@ class BumpTests(PinsTestCase):
         self.assertIn("ok    Laching pins agree", passing.stdout)
         self.assertIn("ok             app", passing.stdout)
         self.assertEqual(self.bump_apps().returncode, 2)
+
+    @unittest.skipIf(WINDOWS, NO_SHEBANG)
+    def test_bump_apps_waits_once_first_or_passes_no_wait_on(self):
+        # A python3 that notes what it is started with, then is this one; with $GIVE_UP, `bump --wait-only` fails.
+        fakes, log = self.root.parent / "fakes", self.root.parent / "python3.log"
+        fakes.mkdir()
+        (fakes / "python3").write_text(
+            f'#!/bin/sh\necho "$*" >> "{log}"\ncase " $* " in *" --wait-only "*) [ -z "$GIVE_UP" ] || exit 3 ;; esac\n'
+            f'exec "{sys.executable}" "$@"\n', "utf8")
+        (fakes / "python3").chmod(0o755)
+        path = f"{fakes}{os.pathsep}{os.environ.get('PATH', '')}"
+        for args in (("--no-wait", "0.5.0", str(self.root)), ("0.5.0", "--no-wait", str(self.root)),
+                     ("0.5.0", str(self.root), "--no-wait")):
+            log.write_text("", "utf8")
+            result = self.bump_apps(*args, PATH=path)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("ok             app", result.stdout)
+            self.assertIn("companion.py bump --no-wait 0.5.0\n", log.read_text("utf8"), args)
+            self.assertNotIn("--wait-only", log.read_text("utf8"), args)
+        log.write_text("", "utf8")
+        self.assertEqual(self.bump_apps("0.5.0", str(self.root), PATH=path).returncode, 0)
+        calls, tool = log.read_text("utf8").splitlines(), TOOLS / "companion.py"
+        self.assertEqual([call for call in calls if " bump " in call],
+                         [f"{tool} bump --wait-only 0.5.0 {self.root}", f"{tool} bump 0.5.0"],
+                         "one wait for every app first, then each bump")
+        log.write_text("", "utf8")
+        given_up = self.bump_apps("0.5.0", str(self.root), PATH=path, GIVE_UP="1")
+        self.assertEqual(given_up.returncode, 3, "the wait's own status")
+        self.assertNotIn("== app", given_up.stdout)
+        self.assertNotIn("bump 0.5.0", log.read_text("utf8"))
+        usage = self.bump_apps("--no-wait")
+        self.assertEqual(usage.returncode, 2)
+        self.assertIn("bump-apps.sh --no-wait 0.9.1", usage.stderr)
+        self.assertIn("bump-apps.sh --report", self.bump_apps("--help").stdout, "the usage's last line")
 
     def test_bump_apps_finds_the_apps_next_to_its_checkout_but_not_worktrees(self):
         tools = self.root.parent / "checkout" / "tools"
@@ -346,6 +528,155 @@ class NpmVersionsTests(unittest.TestCase):
             self.assertRaisesRegex(companion.PinError, "isn't installed", companion.npm_versions, "@laching/landing")
         with mock.patch.object(companion.shutil, "which", return_value="npm"),                 mock.patch.object(companion.subprocess, "run", side_effect=FileNotFoundError(2, "not found")):
             self.assertRaisesRegex(companion.PinError, "couldn't run npm", companion.npm_versions, "@laching/landing")
+
+
+class NuGetWaitTests(unittest.TestCase):
+    """`wait_for_nuget` and the `nuget-listed` command over a NuGet.org made here: it lists 1.1.0 of every package, and
+    1.2.0 of a package from the second `self.since` names. Between the two seconds of `self.down` a request raises
+    `self.error` (no answer). The clock, `self.now`, moves only when the wait sleeps; `self.asked` is each request, with
+    its second."""
+
+    def setUp(self):
+        self.now = 0.0
+        self.since: dict[str, float] = {}
+        self.down = (0.0, 0.0)
+        self.error: Exception = OSError("timed out")
+        self.asked: list[tuple[float, str]] = []
+        self.said: list[str] = []
+
+    def fetch(self, package: str) -> list[str]:
+        self.asked.append((self.now, package))
+        if self.down[0] <= self.now < self.down[1]:
+            raise self.error
+        return ["1.1.0", *(["1.2.0"] if self.since.get(package, float("inf")) <= self.now else [])]
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+    def wait(self, *packages: str, **options) -> None:
+        companion.wait_for_nuget(list(packages), "1.2.0", fetch=self.fetch, clock=lambda: self.now, sleep=self.sleep,
+                                 say=self.said.append, **options)
+
+    def cli(self, *argv: str) -> tuple[int, str]:
+        wait, out = companion.wait_for_nuget, io.StringIO()
+        with mock.patch.object(companion, "wait_for_nuget", side_effect=lambda packages, version, **options: wait(
+                packages, version, fetch=self.fetch, clock=lambda: self.now, sleep=self.sleep, **options)), \
+                mock.patch.object(companion, "load", side_effect=AssertionError("it needs no companion.json")), \
+                redirect_stdout(out), redirect_stderr(out):
+            code = companion.main(list(argv))
+        return code, out.getvalue()
+
+    def test_packages_listed_already_are_asked_for_once_and_nothing_is_said(self):
+        self.since = {"Laching.Core": 0, "Laching.Windows": 0}
+        self.wait("Laching.Windows", "Laching.Core", "Laching.Core")
+        self.assertEqual(self.asked, [(0, "Laching.Core"), (0, "Laching.Windows")])
+        self.assertEqual((self.said, self.now), ([], 0))
+
+    def test_it_asks_every_fifteen_seconds_for_what_is_still_missing_and_says_so(self):
+        self.since = {"Laching.Core": 0, "Laching.Web.Jobs": 100}
+        self.wait("Laching.Core", "Laching.Web.Jobs", note="; the note")
+        self.assertEqual(self.asked, [(0, "Laching.Core"), *((second, "Laching.Web.Jobs") for second in range(0, 120, 15))])
+        self.assertEqual(self.said, [
+            "Waiting for NuGet.org to list Laching.Web.Jobs at 1.2.0: a version appears some minutes after its push, "
+            "and this gives up after 15:00; the note",
+            "  1:00  still waiting for Laching.Web.Jobs",
+            "  1:45  NuGet.org lists them"])
+
+    def test_it_gives_up_after_fifteen_minutes_naming_what_is_missing(self):
+        self.since = {"Laching.Core": 30}
+        with self.assertRaisesRegex(companion.PinError, r"^NuGet\.org doesn't list Laching\.Windows at 1\.2\.0 after 15:00$"):
+            self.wait("Laching.Core", "Laching.Windows")
+        self.assertEqual(self.now, 15 * 60)
+        self.assertEqual(self.asked[-1], (15 * 60, "Laching.Windows"), "asked a last time when the time is up")
+        self.assertEqual([line for line in self.said if "still waiting" in line][-1],
+                         " 14:00  still waiting for Laching.Windows")
+        with self.assertRaisesRegex(companion.PinError, "after 0:40"):
+            self.wait("Laching.Windows", timeout=40, interval=20)
+
+    def test_a_request_that_fails_is_made_again_once_nuget_has_answered(self):
+        self.since, self.down = {"Laching.Core": 60}, (15, 45)
+        self.wait("Laching.Core")
+        self.assertEqual([second for second, _ in self.asked], [0, 15, 30, 45, 60])
+        self.since, self.down, self.now = {}, (15, 10_000), 0
+        with self.assertRaisesRegex(companion.PinError, "after 15:00; its last answer for Laching.Core: timed out"):
+            self.wait("Laching.Core")
+        self.since, self.down, self.now = {}, (15, 45), 0  # it answered again since: that failure is history
+        with self.assertRaisesRegex(companion.PinError,
+                                    r"^NuGet\.org doesn't list Laching\.Core at 1\.2\.0 after 15:00$"):
+            self.wait("Laching.Core")
+
+    def test_nuget_out_of_reach_from_the_start_stops_at_once_unless_patient(self):
+        self.since, self.down = {"Laching.Core": 0}, (0, 31)
+        with self.assertRaisesRegex(companion.PinError,
+                                    r"couldn't ask NuGet\.org whether it lists Laching\.Core 1\.2\.0: timed out"):
+            self.wait("Laching.Core")
+        self.assertEqual((self.now, self.said), (0, []))
+        self.wait("Laching.Core", patient=True)
+        self.assertEqual(self.now, 45)
+        self.error, self.now = urllib.error.URLError("no route"), 0
+        with self.assertRaisesRegex(companion.PinError, "couldn't ask NuGet.org whether it lists Laching.Core 1.2.0: "
+                                                        "<urlopen error no route>"):
+            self.wait("Laching.Core")
+        self.assertEqual(self.now, 0)
+
+    def test_an_error_status_or_a_strange_answer_came_from_nuget_so_it_waits_through_it(self):
+        for error in (urllib.error.HTTPError("url", 503, "Unavailable", None, None),
+                      urllib.error.HTTPError("url", 429, "Too Many Requests", None, None), ValueError("not JSON")):
+            self.since, self.down, self.error, self.now = {"Laching.Core": 0}, (0, 31), error, 0
+            self.wait("Laching.Core")
+            self.assertEqual(self.now, 45, error)
+
+    def test_nuget_never_answering_isnt_it_saying_the_packages_are_missing(self):
+        self.down = (0, 10_000)
+        with self.assertRaisesRegex(companion.PinError, r"^couldn't reach NuGet\.org to ask whether it lists "
+                                                        r"Laching\.Core at 1\.2\.0 in 15:00; its last answer for "
+                                                        r"Laching\.Core: timed out$"):
+            self.wait("Laching.Core", patient=True)
+        self.error, self.now = urllib.error.HTTPError("url", 503, "Unavailable", None, None), 0
+        with self.assertRaisesRegex(companion.PinError, r"^couldn't reach NuGet\.org .* in 15:00; its last answer for "
+                                                        r"Laching\.Core: HTTP Error 503: Unavailable$"):
+            self.wait("Laching.Core")
+
+    def test_a_version_is_found_whatever_its_case(self):
+        companion.wait_for_nuget(["Laching.Core"], "1.2.0-Beta", fetch=lambda package: ["1.2.0-beta"],
+                                 clock=lambda: 0, sleep=self.sleep, say=self.said.append)
+        self.assertEqual(self.now, 0)
+
+    def test_nuget_versions_reads_the_flat_containers_index_by_the_lowercase_id(self):
+        import urllib.request
+
+        with mock.patch.object(urllib.request, "urlopen",
+                               return_value=io.BytesIO(b'{"versions": ["0.22.0", "0.23.0"]}')) as urlopen:
+            self.assertEqual(companion.nuget_versions("Laching.Core"), ["0.22.0", "0.23.0"])
+        self.assertEqual(urlopen.call_args.args[0], "https://api.nuget.org/v3-flatcontainer/laching.core/index.json")
+        missing = urllib.error.HTTPError("url", 404, "Not Found", None, None)
+        with mock.patch.object(urllib.request, "urlopen", side_effect=missing):
+            self.assertEqual(companion.nuget_versions("Laching.New"), [], "never listed: nothing yet, not an error")
+        for error in (urllib.error.HTTPError("url", 503, "Unavailable", None, None), urllib.error.URLError("no route"),
+                      TimeoutError("timed out")):
+            with mock.patch.object(urllib.request, "urlopen", side_effect=error):
+                self.assertRaises(OSError, companion.nuget_versions, "Laching.Core")
+        for answer in (b"<html>", b"[]", b'{"count": 2}'):
+            with mock.patch.object(urllib.request, "urlopen", return_value=io.BytesIO(answer)):
+                self.assertRaises(ValueError, companion.nuget_versions, "Laching.Core")
+
+    def test_the_nuget_listed_command_waits_through_a_nuget_out_of_reach(self):
+        self.since, self.down = {"Laching.Core": 300, "Laching.Web.Jobs": 400}, (0, 31)
+        code, out = self.cli("nuget-listed", "1.2.0", "Laching.Core", "Laching.Web.Jobs")
+        self.assertEqual(code, 0, out)
+        self.assertIn("Waiting for NuGet.org to list Laching.Core, Laching.Web.Jobs at 1.2.0", out)
+        self.assertIn("  5:00  still waiting for Laching.Web.Jobs\n", out)
+        self.assertTrue(out.endswith("  6:45  NuGet.org lists them\n"
+                                     "NuGet.org lists Laching.Core, Laching.Web.Jobs at 1.2.0.\n"), out)
+
+    def test_the_nuget_listed_command_fails_after_fifteen_minutes(self):
+        self.since = {"Laching.Core": 0}
+        code, out = self.cli("nuget-listed", "1.2.0", "Laching.Core", "Laching.Web.Jobs")
+        self.assertEqual(code, 1)
+        self.assertIn("companion nuget-listed: NuGet.org doesn't list Laching.Web.Jobs at 1.2.0 after 15:00", out)
+        self.assertEqual(self.now, 15 * 60)
+        for argv in (("nuget-listed",), ("nuget-listed", "1.2.0"), ("nuget-listed", "Laching.Core", "1.2.0")):
+            self.assertEqual(self.cli(*argv)[0], 2, argv)
 
 
 class LinkTests(PinsTestCase):

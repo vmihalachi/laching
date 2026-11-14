@@ -14,8 +14,9 @@ name: Release
 # bumped tree; swift and kotlin run swift.yml and kotlin.yml on every release, on the planned commit (the bump edits
 # only version strings); only then does the tag job push the "X.Y.Z: release" commit and its vX.Y.Z tag, in one atomic
 # push onto the master that was planned (when master moved meanwhile it pushes nothing: dispatch again). After the push,
-# npm publishes @laching/landing and publish pushes the packages to NuGet.org and makes the GitHub release; both are
-# re-runnable on their own. NuGet through Trusted Publishing (OIDC: no stored key; nuget.org → your account → Trusted
+# npm publishes @laching/landing and publish pushes the packages to NuGet.org, makes the GitHub release and waits until
+# NuGet.org lists the packages, so a green run means the apps can bump; both are re-runnable on their own. NuGet
+# through Trusted Publishing (OIDC: no stored key; nuget.org → your account → Trusted
 # Publishing → a policy for repository vmihalachi/laching and workflow release.yml, plus the NUGET_USER repository
 # variable set to your nuget.org username). The release notes are generated from the merged pull requests' titles
 # (grouped by .github/release.yml) with what shipped below them. Tags pushed with the workflow's token start no other
@@ -413,15 +414,16 @@ jobs:
           npm publish ./npm/*.tgz --access public --provenance  # ./: a bare npm/… reads as a GitHub repository
           echo "@laching/landing@$VERSION is published on npm." >> "$GITHUB_STEP_SUMMARY"
 
-  # The NuGet push and the GitHub release, after the tag. When it fails, re-run this job (or npm, then this): the push
-  # skips what NuGet has, and the release's upload replaces its assets.
+  # The NuGet push and the GitHub release, after the tag, then the wait until NuGet.org lists what was pushed (up to 15
+  # of the job's minutes). When it fails, re-run this job (or npm, then this): the push skips what NuGet has, and the
+  # release's upload replaces its assets.
   publish:
     needs: [plan, tag, npm]
     if: >-
       !cancelled() && needs.tag.result == 'success' &&
       (needs.npm.result == 'success' || needs.npm.result == 'skipped')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: write
       id-token: write
@@ -535,3 +537,23 @@ jobs:
             gh release create "v$LACHING_VERSION" "${assets[@]}" --title "v$LACHING_VERSION" --verify-tag \
               --notes-file "$RUNNER_TEMP/notes.md"
           fi
+
+      # Last, so that a green run means an app can bump: NuGet.org lists a version some minutes after its push (5 to 7
+      # so far), and a restore before that fails, then stays failed from that machine's http-cache. The tag, the push
+      # and the GitHub release are done by now: when this gives up, see on nuget.org what holds the packages, and
+      # re-run this job once it lists them (the push skips them).
+      - name: Wait until NuGet.org lists the packages
+        if: steps.push.outputs.pushed == 'true'
+        run: |
+          ids=()
+          for package in dotnet/artifacts/*.nupkg; do
+            name=$(basename "$package")
+            id=${name%".$LACHING_VERSION.nupkg"}
+            [ "$id" != "$name" ] || { echo "::error::$name isn't a package at $LACHING_VERSION"; exit 1; }
+            ids+=("$id")
+          done
+          if ! python3 tools/companion.py nuget-listed "$LACHING_VERSION" "${ids[@]}"; then
+            echo "::error::NuGet.org doesn't list every package at $LACHING_VERSION yet. The release is out (the tag, the push, the GitHub release): bump no app before nuget.org lists them, then re-run this job."
+            exit 1
+          fi
+          echo "NuGet.org lists the ${#ids[@]} packages at $LACHING_VERSION: the apps can bump." >> "$GITHUB_STEP_SUMMARY"
