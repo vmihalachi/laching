@@ -234,7 +234,7 @@ fail when the app drifts from the tools (each rule: `conform.py`'s docstring):
     "SessionStart": [
       { "matcher": "startup", "hooks": [
         { "type": "command", "command": "[ \"$CLAUDE_CODE_REMOTE\" != true ] || \"$CLAUDE_PROJECT_DIR/scripts/setup-linux.sh\"", "timeout": 600 }] },
-      { "matcher": "compact|resume", "hooks": [
+      { "matcher": "startup|compact|resume", "hooks": [
         { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py\" resume", "timeout": 10 }] }],
     "PreToolUse": [{ "matcher": "Read|Edit|MultiEdit|Write|NotebookEdit|Grep|Bash", "hooks": [
       { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py\" pre", "timeout": 10 }] }],
@@ -250,7 +250,10 @@ fail when the app drifts from the tools (each rule: `conform.py`'s docstring):
   `.claude/hooks/hook.py`: the Python template above with `"..", ".."` for the app's root and
   `"laching", "tools", "hooks", "hook.py"` for the tool. A hook that calls `laching/tools/hooks/hook.py` itself fails,
   in `.claude/settings.json`, in Codex's `.codex/config.toml` and in Copilot's `.github/hooks/*.json`, and so does a
-  missing wrapper.
+  missing wrapper. So does a Copilot hook that runs `hook.py` under the camelCase `preToolUse` or `postToolUse`: for
+  those Copilot sends `toolName` and `toolArgs`, for `PreToolUse` and `PostToolUse` the `tool_name` and `tool_input`
+  the hook reads (`agentStop` keeps its name). Only `PreToolUse` is documented to send Claude Code's tool names, so
+  the hook maps Copilot's own in either shape ([the hook](#hookshookpy)).
 - **Linked skills.** A skill in `.agents/skills` named like one of `tools/skills` is a link to
   `../../laching/tools/skills/<name>`; the app's own words for it go in `.agents/notes/<name>.md`.
 - **Skill links for every agent.** With an `.agents/skills` folder, `.claude/skills/<name>` is a link to
@@ -421,25 +424,34 @@ The slow checks that share no build folder and no device run side by side, so a 
 slowest group: the macOS tests, the iOS tests (each `xcodebuild` has its own DerivedData), `dotnet` on this machine,
 the build in the VM, the Windows images, Gradle with the app's own slow checks, and the landing build. The checks of
 one group run in sequence. A run that regenerates the vectors does that, and the core package's tests, before the
-others start, because every other check reads the vectors. Each check's lines are held back and printed in the order a serial run
-prints them, a failure with its own log, and the exit status is the same. `--serial` (or `LACHING_VERIFY_SERIAL=1`)
-runs them one after another, each printed as it ends, to debug a check that fails only beside another; that is also
-what Git Bash on Windows does unless `LACHING_VERIFY_SERIAL=0`.
+others start, because every other check reads the vectors; the vectors it rewrote are changed paths from then on, so
+the checks that read them run in the same run, over the new ones. Each check's lines are held back and printed in the
+order a serial run prints them, a failure with its own log, and the exit status is the same. `--serial` (or
+`LACHING_VERIFY_SERIAL=1`) runs them one after another, each printed as it ends, to debug a check that fails only
+beside another; that is also what Git Bash on Windows does unless `LACHING_VERIFY_SERIAL=0`.
 
 Each slow check that ran and passed leaves a line in the repository's git folder (`laching-slow-checks.log`, one per
 worktree: when it started, the Stop hook's names for it, its command), which is how [the hook](#hookshookpy) knows
 what ran since an edit. The lines are written in the checks' order, whichever ended first. The Xcode tests leave one
 line, naming the schemes that ran, when every run the paths asked for passed; when only one of two schemes ran, its
 kind is scoped to that scheme's folder (`xcodebuild-test@<mac.dir>/macOS/`), so the hook still asks for the other
-scheme's and the shared files' tests. `--help`, `--fast`, a check that failed
-and one that was skipped (`--no-vm`, a busy VM, a missing toolchain) leave none.
+scheme's and the shared files' tests. `--help`, `--fast` and a check that failed leave none.
+
+A check that was skipped or stopped past its time (`--no-vm`, a busy VM, a missing toolchain, an app check's exit 77,
+`LACHING_CHECK_SECONDS`) leaves a line there too: `skip`, when, the hook's kind for it (else its name), why, and the
+changed paths it covers, comma-separated (none for all of it). It stays open until the check passes over those paths:
+a slow check's line as above, or an `ok` line for a fast or an app check that had one open (and for `verify.sh` itself
+after a whole run that fails nothing). `hook.py skips` lists the open ones ([the hook](#hookshookpy)). Past 400 lines
+the log keeps its last 200, behind a line for each skip still open (when `hook.py skips` can't say, the skip and `ok`
+lines it drops).
 
 The app's own checks, which a copied `verify.sh` used to hold, are `verify.checks` in `companion.json`: each a `name`, the
 `paths` that trigger it (an extended regular expression), the command to `run` (bash, from the root), `slow` for one
-`--fast` skips and `docs` for one that documentation changes trigger too (a skill folder's links, say). A check that
-can't run on this machine (a missing toolchain) prints why and exits 77: `verify.sh` lists it under `skip` with that
-line, doesn't fail and notes nothing, so the Stop hook keeps reminding of it. Status 0 is for a check that ran and
-passed.
+`--fast` skips, `docs` for one that documentation changes trigger too (a skill folder's links, say) and `lock` for a
+build lock it holds while it runs (`check … locked <lock>`, below), so that two checks building in one folder, or two
+runs of one, wait for each other. A check that can't run on this machine (a missing toolchain) prints why and exits
+77: `verify.sh` lists it under `skip` with that line, doesn't fail and notes it as an open skip, so the Stop hook keeps
+reminding of it. Status 0 is for a check that ran and passed.
 
 ## `verify-lib.sh` and `verify-lock.py`
 
@@ -454,11 +466,15 @@ The shared `verify-lib.sh` also supports app-owned check selection: source it fr
 Each check runs in its own process group. Progress appears after ten seconds and every five minutes; after
 `LACHING_CHECK_SECONDS` (default 1800), the check fails and its process group is stopped. Interrupting the verifier
 also stops its active group. `LACHING_PROGRESS_SECONDS` and `LACHING_PROGRESS_INTERVAL` change progress intervals;
-`LACHING_VERIFY_TIMING=1` adds elapsed times. `check "name" locked <build-name> <command...>` serializes a build
-across verifier sessions in this checkout. Locks live in `build/verify-locks` (or `LACHING_VERIFY_LOCK_DIR`);
-`verify-lock.py` holds an OS advisory lock in a process group separate from the build. The verifier stops the build
-and its descendants before releasing the lock, including on timeout or interruption. OS locks also release if their
-holder crashes. The persistent
+`LACHING_VERIFY_TIMING=1` adds elapsed times. A check stopped at its limit says so,
+`FAIL  <name>: stopped after <N> s (LACHING_CHECK_SECONDS=<N>)`, before the end of its log. Each check leaves
+`verify_outcome` (`ok`, `fail`, `skip`, or `timeout`, a failure too) and `verify_why` (a skip's last line, a timeout's
+limit); with `verify_checked` set to a function's name, a check `check` runs calls it as it ends,
+`<function> <name> <outcome> <why>`, and a queued one is the caller's through `queue_after`.
+`check "name" locked <build-name> <command...>` serializes a build across verifier sessions in this checkout. Locks live
+in `build/verify-locks` (or `LACHING_VERIFY_LOCK_DIR`); `verify-lock.py` holds an OS advisory lock in a process group
+separate from the build. The verifier stops the build and its descendants before releasing the lock, including on
+timeout or interruption. OS locks also release if their holder crashes. The persistent
 lock files are diagnostic and can contain an old PID; stale contents never prevent acquisition. Keep these files in
 place while builds are running, so every process locks the same file.
 
@@ -468,7 +484,8 @@ check's lines never mix with another's, a failure keeps its own log, and `finish
 checks that share a build folder, a device or a Gradle project in one group. A queued check reads `/dev/null`, not the
 terminal, and has the same progress lines, timeout and lock as `check`. Set `queue_after` to a function's name to hear
 of each check as it is printed: it gets the check's index (0 for the first one queued), with `${queue_result[index]}`
-`ok`, `fail` or `skip` and `${queue_started[index]}` the epoch second it began. Interrupting the verifier stops every
+`ok`, `fail`, `skip` or `timeout` (stopped after `LACHING_CHECK_SECONDS`, a failure too), `${queue_why[index]}` why it
+skipped or stopped, and `${queue_started[index]}` the epoch second it began. Interrupting the verifier stops every
 running group, and a check whose verifier was killed outright stops by itself within seconds.
 `LACHING_VERIFY_SERIAL=1` makes `run_queued` run the checks one at a time in the order queued, the default on Git Bash
 for Windows; `0` forces side by side.
@@ -534,7 +551,11 @@ it by version.
 
 Agent guardrails: generated files, the stop-time checks (ktlint over the Kotlin files an agent edits), the Windows and
 Android parity reminders. Wiring it into Claude Code, Codex and Copilot: [`docs/getting-started.md`](../docs/getting-started.md),
-step 4.
+step 4. Copilot's camelCase `preToolUse` and `postToolUse` (`toolName`, `toolArgs`) are read as the PascalCase events
+are, though `conform` asks for the PascalCase names. In either shape the hook maps Copilot's own tool names (`bash`,
+`powershell`, `view`, `edit`, `str_replace_editor`, `create`, `apply_patch`) to Claude Code's, and reads an edit whose
+input is patch text as `apply_patch`. A hook that crashes, or exits on a bad `companion.json`, fails open (exit 0) and
+tells the user: `hook.py <mode> failed open: <error>`, in a `systemMessage`.
 
 The hook reads the guards, the slow-check table and the parity patterns (`hooks.*`) from `companion.json`, and
 fails open when the file is missing or invalid. It guards what Laching's generators write without being told, each
@@ -561,7 +582,9 @@ over lines, and a `sleep` the command only names: in a heredoc, a quoted string,
 On `Stop` it tells the user, once per compaction cycle, when Claude's context is past `hooks.longSessionTokens`
 (130000; 0 disables), so the next task goes to a fresh session. On `SessionStart` after a compaction or a resume
 (`hook.py resume`) it prints where the session was, as the agent's context: the files it edited, the slow checks it
-ran, the branch, git status and the recent commits (nothing when the tree is clean and the session has no log).
+ran, the branch, git status and the recent commits (nothing when the tree is clean and the session has no log). At a
+session's startup it only tells the user when the app has Git hooks (`.githooks`) this checkout doesn't run
+(`core.hooksPath` unset), so its commits skip the pre-commit checks; under CI (`CI` set) it says nothing.
 
 On `Stop` it also runs `verify.sh --fast` on the session's edits, unless that state already passed them: most stops
 come with no edit after the last one. A pass is remembered in the session's own log (beside its edits and runs, under
@@ -574,7 +597,11 @@ once more, also when another session changed the checkout. A failure or a timeou
 anything in an app outside a Git repository, where every stop runs the checks. The hash is read before the run, so a
 run that rewrote a file is followed by one more. What it can't hold: a file Git ignores that the session didn't edit,
 a tool installed or removed on the machine, and what a check fetches (the voices' pushed pointer); `verify.sh --fast`
-by hand checks those.
+by hand checks those. A run that doesn't finish in 150 s (leaving the rest of the stop room under the agents' 180 s
+timeout) is stopped with what it started and blocks the stop: it asks for the run in the background (or, when one the
+agent sent there after the edits covers the files, to wait for it), or a line
+`skipped verify.sh --fast: <reason>`, which the next stop reads as for a slow check (below), and is an open skip over
+the files until a run passes. Without a bash to run `verify.sh` (Windows without Git for Windows) the skip is open too.
 
 The same stop names the slow checks (`hooks.slow`, and the built-in ones for the sides the app has) whose paths
 changed since they last ran. A slow check counts as run when
@@ -602,8 +629,35 @@ files that ask for it (those of its paths edited since it last ran; checks the s
 the C# file and the command has no other. So `verify.sh` runs a built-in check for the paths `hooks.slow` gives it as
 well as for its own (`companion.py slow` matches them as the hook does, as Python regular expressions, so a lookahead
 in one works in both); the APK build is the app's own `verify.checks` entry. A check `verify.sh` skips on this machine
-(`--no-vm`, a missing toolchain, an app check that exits 77) is still named. While the app is linked to a Laching
-checkout the hook says so once per session and blocks no stop for it.
+(`--no-vm`, a missing toolchain, an app check that exits 77) is still named, with why it skipped before. While the
+app is linked to a Laching checkout the hook says so once per session and blocks no stop for it.
+
+The reminder asks for a line of its own for each check the agent skips, `skipped <check>: <reason>`, the check by its
+kind (`swift-test`) or its label. A check that a command the agent sent to the background after the last edit of its
+files runs (the check, or `verify.sh` over every change or over those files) is named as running there since then,
+and not asked for again; when every one is, the stop asks the agent to wait for them or tell the user they're still
+running. The hook never hears such a command end, so it counts until the first stop after it (the stop that retries a
+block too) and 30 minutes at most. The hook logs each block (the kinds and their files) in the session's log, and at
+the next stop what came of each: ran, when it ran over its files since; else skipped for the line's reason; else
+running in the background, when a command there runs it as above, before the block or after it, which `verify.sh`'s
+own lines then account for; else skipped with *stopped without running it or saying why*. On the
+stop that blocks, the agent hears the stop's notes for the user too, and the user hears them at the next stop. A skip
+is also an open one in `verify.sh`'s log, beside the ones `verify.sh`
+notes itself, until the check passes over its files: `hook.py skips` lists them, a line each,
+`<check><TAB><reason><TAB><paths>` with the paths comma-separated (none for the whole check), and `hook.py skips --json`
+as a list of `{"check", "reason", "paths", "at"}` (`at` in epoch seconds); both exit 0.
+
+A file a shell command changed is one no edit hook heard of, so the stop checks don't see it. The stop names, to the
+user and never blocking, each file that is in `git status` or that the command names whose modification time falls
+while one of the session's commands ran, unless an edit record of any session of the app claims it; a file is named
+once until it changes again. A command sent to the background counts until the first stop after it, and 30 minutes at
+most: a file changed then may be another session's, and the line says so.
+
+Under Copilot's cloud coding agent (`agentStop`, `hook.py cloud-stop`) the stop runs `verify.sh` over the branch's
+changes. A failure blocks the stop, and so does, once, a run that didn't start or finish in 25 minutes: it asks the
+agent to say so in the pull request, and is an open skip of `verify.sh` until a whole run passes. Once holds whatever
+the stop sends: the stop that retries a block (`stop_hook_active`, or Copilot's `stopHookActive`) runs nothing, and
+neither does any stop for 50 minutes after that skip.
 
 ## `skills/`
 

@@ -20,7 +20,8 @@ conform fails, one line per problem, when the app:
   - has a .claude/settings.json whose hooks block lacks one of Laching's hooks (HOOKS: the event, its matcher, the
     command and the timeout; the app's own hooks, its permissions and every other key are the app's), or calls
     `<laching.path>/tools/hooks/hook.py` itself, there or in Codex's and Copilot's hooks (.codex/config.toml,
-    .github/hooks/*.json), instead of through the app's one wrapper, .claude/hooks/hook.py;
+    .github/hooks/*.json), instead of through the app's one wrapper, .claude/hooks/hook.py, or has Copilot run the hook
+    under the camelCase preToolUse or postToolUse, whose payload isn't the one it reads (COPILOT_TOOL_EVENTS);
   - has a skill in .agents/skills named like one of tools/skills that isn't a link into `<laching.path>/tools/skills/`
     (the app's own words for a skill go in .agents/notes/<skill>.md);
   - lacks a link Claude Code, Copilot or Junie finds the skills through: .claude/skills/<skill> to
@@ -91,7 +92,7 @@ _HOOK = f'python3 "$CLAUDE_PROJECT_DIR/{HOOK_WRAPPER}" '
 # The hooks block of an app's .claude/settings.json, the same in every app: (event, matcher, command, timeout). A change
 # here reaches the apps with their next bump, where conform asks for it.
 HOOKS = (
-    ("SessionStart", "compact|resume", _HOOK + "resume", 10),
+    ("SessionStart", "startup|compact|resume", _HOOK + "resume", 10),
     ("PreToolUse", "Read|Edit|MultiEdit|Write|NotebookEdit|Grep|Bash", _HOOK + "pre", 10),
     ("PostToolUse", "Edit|MultiEdit|Write|NotebookEdit|Bash", _HOOK + "post", 60),
     ("Stop", None, _HOOK + "stop", 180),
@@ -100,6 +101,12 @@ HOOKS = (
 SETUP_LINUX_SCRIPT = "scripts/setup-linux.sh"
 SETUP_HOOK = ("SessionStart", "startup",
               f'[ "$CLAUDE_CODE_REMOTE" != true ] || "$CLAUDE_PROJECT_DIR/{SETUP_LINUX_SCRIPT}"', 600)
+# Copilot's tool events by the name an app's .github/hooks/*.json gives them: under the camelCase names Copilot sends
+# toolName and toolArgs with its own tool names (bash, view, edit, create), under the PascalCase ones the tool_name and
+# tool_input the hook is written for, with Claude Code's. agentStop has only its camelCase name.
+COPILOT_TOOL_EVENTS = {"preToolUse": "PreToolUse", "postToolUse": "PostToolUse"}
+# A command that runs hook.py, by any path: the app's wrapper or Laching's own.
+RUNS_HOOK = re.compile(r"(?<![\w.-])hook\.py(?![\w.-])")
 
 
 def tool_paths(tools: Path = TOOLS) -> list[str]:
@@ -377,6 +384,8 @@ def hook_problems(config: companion.Config, files: list[str], allowed: set[str])
                             "hands the hook the app's root (COMPANION_ROOT), as every agent's hooks do")
             # The block is checked once its calls are the wrapper's: one line for one cause.
             settings = None if name == SETTINGS else settings
+        if name.startswith(".github/hooks/"):
+            problems += copilot_problems(name, text)
     if settings is not None:
         found = [(event, matcher, hook.get("type"), hook.get("command"), hook.get("timeout"))
                  for event, matcher, hook in hook_calls(settings)]
@@ -389,6 +398,27 @@ def hook_problems(config: companion.Config, files: list[str], allowed: set[str])
     if SETTINGS in files and not {SETTINGS, HOOK_WRAPPER} & allowed and HOOK_WRAPPER not in files:
         problems.append(f"{HOOK_WRAPPER}: missing: the wrapper of {tool} the agents' hooks call (the Python template in "
                         f"{laching}/tools/README.md, *Staying on Laching's tools*, with ../.. for the app's root)")
+    return problems
+
+
+def copilot_problems(name: str, text: str) -> list[str]:
+    """A Copilot hooks file's tool events that run hook.py (the app's wrapper, or Laching's own) under their camelCase
+    names (COPILOT_TOOL_EVENTS), each with the name that hands the hook what it reads. What isn't JSON, or the shape
+    Copilot reads, has none."""
+    try:
+        hooks = json.loads(text).get("hooks")
+    except (ValueError, AttributeError):
+        return []
+    problems = []
+    for camel, pascal in COPILOT_TOOL_EVENTS.items():
+        entries = hooks.get(camel) if isinstance(hooks, dict) else None
+        if any(isinstance(entry, dict) and any(RUNS_HOOK.search(flat(str(entry.get(key, ""))))
+                                               for key in ("bash", "powershell", "command"))
+               for entry in (entries if isinstance(entries, list) else ())):
+            problems.append(f"{name}: hooks.{camel} runs hook.py under Copilot's camelCase name, for which Copilot "
+                            "sends toolName and toolArgs with its own tool names (bash, view, edit, create): name it "
+                            f"{pascal}, for which it sends the tool_name and tool_input the hook reads, with Claude "
+                            "Code's (agentStop keeps its name)")
     return problems
 
 

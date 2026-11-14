@@ -27,17 +27,26 @@
                                about porting Mac UI changes to Windows and Android (hooks.macUI/windowsUI/androidUI);
                                say once per session that the app is linked to a Laching checkout (companion.py link);
                                tell the user once per compaction cycle when Claude's context is past
-                               hooks.longSessionTokens (130k).
-  hook.py resume SessionStart (compact|resume): print where this session was, as the agent's context after a
+                               hooks.longSessionTokens (130k). A fast run past FAST_SECONDS (150 s) is a problem, not
+                               a pass. The reminder asks for a `skipped <check>: <reason>` line per check skipped; each
+                               block and what came of it are logged, a skip as an open one in verify.sh's log. Tell the
+                               user of files shell commands changed that no session's edit record claims (never
+                               blocking).
+  hook.py resume SessionStart (startup|compact|resume): print where this session was, as the agent's context after a
                                compaction: the files it edited, the slow checks it ran, the branch, git status and
-                               the recent commits; nothing when the tree is clean and the session has no log.
+                               the recent commits; nothing when the tree is clean and the session has no log. At
+                               startup, only a line for the user when the app's .githooks are off (core.hooksPath
+                               unset), and nothing under CI.
   hook.py cloud-stop  Copilot agentStop: inside GitHub Actions only (the cloud coding agent, which has no session
                                log), run the app's verify.sh on the branch's changes and ask for fixes.
+  hook.py skips [--json]       Not a hook: the open skips in verify.sh's log (`open_skips`), a line each,
+                               `<check> TAB <reason> TAB <comma-separated paths>`, or a JSON list; exits 0.
 
 Every name and path comes from the app's companion.json. The payload is Claude's shape; `normalize` maps the other
-agents onto it (Codex's apply_patch, Copilot's string tool_input and `path`). Exit code 2 blocks the action and shows
-stderr to the agent. Everything else fails open (Copilot denies on any other non-zero exit, so errors exit 0),
-including a missing or invalid companion.json.
+agents onto it (Codex's apply_patch, Copilot's string tool_input and `path`, and its camelCase events' toolName,
+toolArgs and runtime tool names). Exit code 2 blocks the action and shows stderr to the agent. Everything else fails
+open (Copilot denies on any other non-zero exit, so errors exit 0), including a missing or invalid companion.json; a
+hook that crashes says so to the user in a systemMessage.
 """
 import hashlib
 import json
@@ -79,6 +88,24 @@ OUTLINE = "grep -n '^\\(func\\|class\\|struct\\|extension\\|public\\|private\\|i
 NEVER = "^$a"
 SLOW_LOG = "laching-slow-checks.log"  # in the Git folder: the slow checks verify.sh ran and passed (`verify_ran`)
 UNJUDGED = "unjudged:"  # in the session log, before the kind of a slow check that ran where its failure fails nothing
+FAST_SECONDS = 150  # how long the Stop hook gives `verify.sh --fast`
+STATE_SECONDS = 8  # how long `fast_state` gives Git before the run
+KILL_SECONDS = 15  # at most, to stop a run past its time (taskkill's 10 s on Windows) and drain its pipes (5 s)
+"""The three leave the rest of a stop (the log, `git status`) room under the agents' 180 s Stop timeout (conform.HOOKS)."""
+CLOUD_SECONDS = 1500  # how long `cloud-stop` gives verify.sh on the branch, under the agentStop hook's own timeout
+FAST_CHECK = "verify.sh --fast"  # the Stop hook's fast run, as its open skips and blocks name it
+BACKGROUND_SECONDS = 1800  # how long after a background command starts a file it may have changed counts
+STOP_NO_SAY = "stopped without running it or saying why"  # a blocked check's skip reason when the agent said none
+SKIPPED = re.compile(r"^[\s>*-]*`?skipped\s+`?([^`:\n]+?)`?\s*:\s*(.+?)\s*$", re.M | re.I)
+"""The agent's line for a check it skips after the stale reminder: `skipped <check>: <reason>`, in a list or not."""
+SESSION_KINDS = frozenset(("edit", "passed", "block", "outcome", "bash-start", "bash-end", "bash-checked",
+                           "bash-reported", "unsaid", "said"))
+"""The session log's kinds that aren't a check that ran: everything else in it (`ran`) is one, or a reminder's
+marker."""
+COPILOT_TOOLS = {"bash": "Bash", "powershell": "Bash", "view": "Read", "edit": "Edit", "str_replace_editor": "Edit",
+                 "create": "Write", "apply_patch": "apply_patch"}
+"""Copilot's runtime tool names, which its camelCase events (`preToolUse`) send, and its PascalCase ones may, to
+Claude's."""
 
 
 def setup(root=None):
@@ -664,10 +691,16 @@ PATCHED = re.compile(r"^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+
 
 def normalize(event):
     """One Claude-shaped event per file the tool touches: Codex's apply_patch edits several files in one call, and
-    Copilot sends tool_input as a JSON string and names the file `path`."""
+    Copilot sends tool_input as a JSON string and names the file `path`. Copilot's camelCase events (`preToolUse`, as
+    opposed to `PreToolUse`) send `toolName` and `toolArgs` and `sessionId`. Its runtime's own tool names
+    (`COPILOT_TOOLS`; a `str_replace_editor` view is a Read, its create a Write) are mapped in either shape: GitHub
+    documents Claude's names only for `PreToolUse`, and none of them is one of Claude Code's. An edit that carries a
+    patch (`*** Begin Patch`) and no path is read as apply_patch."""
     if not isinstance(event, dict):
         return []
-    tool, args = event.get("tool_name", ""), event.get("tool_input") or {}
+    camel = "tool_name" not in event and "toolName" in event
+    tool = event.get("toolName" if camel else "tool_name") or ""
+    args = (event.get("toolArgs") if camel else event.get("tool_input")) or {}
     if isinstance(args, str):
         try:
             args = json.loads(args)
@@ -675,10 +708,20 @@ def normalize(event):
             args = {"command": args}
     if not isinstance(args, dict):
         args = {}
+    if tool == "str_replace_editor":
+        tool = {"view": "Read", "create": "Write"}.get(args.get("command"), "Edit")
+    else:
+        tool = COPILOT_TOOLS.get(tool, tool)
+    if camel:
+        event = with_session(event)
+    patch = args.get("command") or args.get("input") or ""
+    if isinstance(patch, list):
+        patch = "\n".join(map(str, patch))
+    if tool == "Edit" and not args.get("file_path") and not args.get("path") and isinstance(patch, str) and (
+            "*** Begin Patch" in patch):
+        tool = "apply_patch"
     if tool == "apply_patch":
-        patch = args.get("command") or args.get("input") or ""
-        if isinstance(patch, list):
-            patch = "\n".join(map(str, patch))
+        patch = patch if isinstance(patch, str) else ""
         # Its paths are relative to the session's directory (`cwd`), which may be below the root.
         cwd = event.get("cwd")
         return [{**event, "tool_name": "Edit", "tool_input": {"file_path": str(Path(cwd) / p) if cwd else p}}
@@ -694,6 +737,18 @@ def normalize(event):
         script = shell_script(argv)  # `bash -lc '<the command>'`: the command is the one to judge
         args = {**args, "command": shlex.join(argv) if script is None else script}
     return [{**event, "tool_name": tool, "tool_input": args}]
+
+
+def with_session(event):
+    """`event` with Copilot's camelCase `sessionId` as `session_id`, which the session log is named by, and its
+    `stopHookActive` as `stop_hook_active`, which a stop that retries a block sends."""
+    if not isinstance(event, dict):
+        return event
+    if not event.get("session_id") and isinstance(event.get("sessionId"), str):
+        event = {**event, "session_id": event["sessionId"]}
+    if "stop_hook_active" not in event and "stopHookActive" in event:
+        event = {**event, "stop_hook_active": event["stopHookActive"]}
+    return event
 
 
 def pre(event):
@@ -740,6 +795,8 @@ def pre_one(event):
                     deny(reason)
                 if whole and (lines := big(word)):
                     deny(whole_read(word, lines))
+        # When it started, for the files it changes (`bash_changes`): the tool call's id pairs it with its end.
+        record(event, "bash-start", event.get("tool_use_id") or "")
 
 
 FILLERS = frozenset(("echo", "printf", "true", ":", "date"))  # beside a `sleep`, they leave the command a wait
@@ -926,7 +983,52 @@ def post_one(event):
                 record(event, "ran", kind if kind.startswith(UNJUDGED) else UNJUDGED + kind)
         if re.search(r"\.swift\b|project\.yml", command) and re.search(r"\b(rm|mv|git\s+rm|git\s+mv|touch|cp)\b", command):
             note = regenerate_project()
+        # A command in the background: what it will run, so the block it answers isn't taken for a skip.
+        runs = {"runs": background_runs(command)} if later else {}
+        record(event, "bash-end", json.dumps({"id": event.get("tool_use_id") or "", "background": bool(later),
+                                              "paths": named_files(command, event.get("cwd")), **runs}))
     return note
+
+
+def background_runs(command):
+    """The checks a command sent to the background will run, its outcome unheard, as {check: the paths it runs over, or
+    None for all it covers}: the slow checks it runs whole (`ran_kinds`, not a run of some of the tests), and
+    `verify.sh` or `FAST_CHECK` when it runs the app's verify.sh (not a --help), which runs whichever apply over the
+    paths after its `--`, else over every change."""
+    runs = {kind: None for kind in ran_kinds(command, passed=True) if not kind.startswith(UNJUDGED)}
+    for part in shell_parts(command):
+        words = run_words(part.words)
+        if program(words) in SHELLS and len(words) > 1 and not words[1].startswith("-"):
+            words = words[1:]  # `bash scripts/verify.sh`
+        end = words.index("--") if "--" in words else len(words)
+        if program(words) != "verify.sh" or {"-h", "--help"} & set(words[1:end]):
+            continue
+        check = FAST_CHECK if "--fast" in words[1:end] else "verify.sh"
+        over = [word.removeprefix("./") for word in words[end + 1:]] if end < len(words) else None
+        if check not in runs:
+            runs[check] = over
+        elif runs[check] is not None:
+            runs[check] = None if over is None else list(dict.fromkeys(runs[check] + over))
+    return runs
+
+
+def named_files(command, cwd=None):
+    """The files in the app's checkout that a shell command names, as root-relative paths (at most 50): the words that
+    are a file there, from the session's directory (`cwd`) or the root. Outside the checkout and in .git, none."""
+    base, found = Path(cwd) if cwd else ROOT, []
+    for word in list(dict.fromkeys(re.findall(r"[^\s'\"`|;&<>()=]+", command)))[:500]:
+        try:
+            path = (base / word).resolve()
+            if not path.is_file():
+                continue
+            name = path.relative_to(ROOT.resolve()).as_posix()
+        except (OSError, ValueError):
+            continue
+        if not (name == ".git" or name.startswith(".git/")) and name not in found:
+            found.append(name)
+        if len(found) == 50:
+            break
+    return found
 
 
 def ran_kinds(command, passed=False):
@@ -1019,23 +1121,132 @@ def verify_ran():
     (`ran_kinds`, every command of it: the script saw it pass); `ran` of hooks.slow is matched against every note. A
     check that failed, was skipped or never started (--help, --fast, --no-vm for the WinUI build) left no line, so its
     reminder stays. The script's stamps are whole seconds, rounded down: a check counts from the end of its second,
-    since the edit made in that second came before it."""
-    folder = git_lines("rev-parse", "--absolute-git-dir")
-    try:
-        lines = (Path(folder[0]) / SLOW_LOG).read_text("utf8", errors="replace").splitlines() if folder else []
-    except OSError:
-        lines = []
-    last, own = {}, {kind for kind, _ in RAN}
-    for line in lines:
+    since the edit made in that second came before it. The log's `skip` and `ok` lines are `open_skips`'."""
+    last = {}
+    for line in slow_lines():
         parts = line.split("\t", 2)
-        if len(parts) != 3 or not parts[0].isdigit():
-            continue
-        # An app's check is noted as `bash -c <its run>`, the quotes around the script gone.
-        named, ran = parts[1].split(), ran_kinds(re.sub(r"^bash -c ", "", parts[2]), passed=True)
-        for kind in named + [kind for kind in ran if kind in own] if named else ran:
-            if not kind.startswith(UNJUDGED):  # a run of some of the tests, which its note can't make the whole check
+        if len(parts) == 3 and parts[0].isdigit():
+            for kind in noted_kinds(parts[1], parts[2]):
                 last[kind] = max(last.get(kind, 0), float(parts[0]) + 1)
     return last
+
+
+def slow_log():
+    """verify.sh's log in this checkout's Git folder (`SLOW_LOG`), None outside a repository."""
+    folder = git_lines("rev-parse", "--absolute-git-dir")
+    return Path(folder[0]) / SLOW_LOG if folder else None
+
+
+def slow_lines():
+    """The lines of `slow_log`, none when there's no log."""
+    try:
+        return path.read_text("utf8", errors="replace").splitlines() if (path := slow_log()) else []
+    except OSError:
+        return []
+
+
+def noted_kinds(kinds, command):
+    """The slow checks one of verify.sh's pass lines stands for: the kinds it names, and those its command runs."""
+    own = {kind for kind, _ in RAN}
+    try:  # an app's check is noted as `bash -c <its run>`, the quotes around the script gone
+        ran = ran_kinds(re.sub(r"^bash -c ", "", command), passed=True)
+    except Exception:  # `hook.py skips` without companion.json: the named kinds alone
+        ran = []
+    named = kinds.split()
+    # A run of some of the tests (UNJUDGED) can't make its note the whole check.
+    return [kind for kind in (named + [k for k in ran if k in own] if named else ran) if not kind.startswith(UNJUDGED)]
+
+
+def note_skip(check, reason, paths=()):
+    """Leaves a `skip` line in verify.sh's log: `check` didn't run over `paths` (none: over everything) for `reason`.
+    It stays open (`open_skips`) until a pass of the check over them. Nothing when an open skip of it already says so
+    (the same reason, or the hook's `STOP_NO_SAY`, over those paths), so a stop that skips the same again every time
+    doesn't grow the log."""
+    paths = list(paths)
+    old = next((skip for skip in open_skips() if skip["check"] == check), None)
+    if old is not None and reason in (old["reason"], STOP_NO_SAY) and (
+            not old["paths"] or (paths and set(paths) <= set(old["paths"]))):
+        return
+    write_slow(["skip", str(int(time.time())), check, reason, ",".join(paths)])
+
+
+def note_ok(check, paths=()):
+    """Leaves an `ok` line in verify.sh's log, which closes an open skip of `check` over `paths` (none: all of it), when
+    there is one to close: a pass of a check that skipped nothing writes nothing."""
+    if any(skip["check"] == check for skip in open_skips()):
+        write_slow(["ok", str(int(time.time())), check, ",".join(paths)])
+
+
+def write_slow(fields):
+    """One line of tab-separated `fields` at the end of verify.sh's log, each on one line, with no tab, nor a comma in a
+    path field; nothing outside a repository."""
+    if (path := slow_log()) is None:
+        return
+    line = "\t".join(re.sub(r"[\t\r\n]+", " ", field) for field in fields)
+    try:
+        with path.open("a", encoding="utf8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+
+def open_skips():
+    """The checks skipped (by verify.sh, or the Stop hook: a timeout, or a blocked check the agent didn't run) and not
+    passed since, from verify.sh's log in order: [{"check", "reason", "paths", "at"}], oldest first. A `skip` line
+    (`skip <epoch> <check> <reason> <paths>`, the paths comma-separated, none for all of it) opens one or adds its
+    paths and reason to the open one (the Stop hook's `STOP_NO_SAY` keeps the open one's); an `ok` line
+    (`ok <epoch> <check> [<paths>]`) passes the paths it names, or all of it; a pass line (`<start> <kinds> <command>`)
+    all of each kind it stands for, a `<kind>@<prefix>` the paths under the prefix. An open skip over all of it closes
+    only with a pass of all of it."""
+    found = {}
+    for line in slow_lines():
+        parts = line.split("\t")
+        if parts[0] in ("skip", "ok") and len(parts) >= 3 and parts[1].isdigit():
+            check, skipped = parts[2], parts[0] == "skip"
+            field = (parts[4] if len(parts) > 4 else "") if skipped else (parts[3] if len(parts) > 3 else "")
+            paths = [p for p in field.split(",") if p]
+            if skipped:
+                old, reason = found.get(check), parts[3] if len(parts) > 3 else ""
+                whole = not paths or (old is not None and not old["paths"])
+                if old is not None and reason == STOP_NO_SAY:  # the hook's own says less than verify.sh's
+                    reason = old["reason"]
+                found[check] = {"check": check, "reason": reason,
+                                "paths": [] if whole else sorted(set(paths) | set(old["paths"] if old else ())),
+                                "at": int(parts[1])}
+            elif check in found:
+                pass_paths(found, check, paths)
+        elif len(parts) >= 3 and parts[0].isdigit():
+            for kind in noted_kinds(parts[1], "\t".join(parts[2:])):
+                check, _, prefix = kind.partition("@")
+                if check not in found:
+                    continue
+                if not prefix:
+                    pass_paths(found, check, [])
+                elif under := [p for p in found[check]["paths"] if p.startswith(prefix)]:
+                    pass_paths(found, check, under)
+    return sorted(found.values(), key=lambda skip: skip["at"])
+
+
+def pass_paths(found, check, paths):
+    """The open skip of `check` in `found` after a pass over `paths` (none: all of it): closed when none is left."""
+    skip = found[check]
+    if not paths:
+        del found[check]
+    elif skip["paths"]:
+        skip["paths"] = [p for p in skip["paths"] if p not in paths]
+        if not skip["paths"]:
+            del found[check]
+
+
+def skips(arguments):
+    """`hook.py skips [--json]`: the open skips (`open_skips`), a line each, `<check> TAB <reason> TAB <paths>` with the
+    paths comma-separated, or with --json a list of {"check", "reason", "paths", "at"}. Exits 0 either way."""
+    found = open_skips()
+    if "--json" in arguments:
+        print(json.dumps(found))
+    else:
+        for skip in found:
+            print(f"{skip['check']}\t{skip['reason']}\t{','.join(skip['paths'])}")
 
 
 def parity_reminder(event, last_edit, last_ran):
@@ -1131,8 +1342,8 @@ def fast_state(script, edited):
     linked to a Laching checkout; and the working trees of the app and of Laching (its tools, this hook among them) as
     `tree_state` reads them, since the checks read far more than the edited files: a commit, a checkout, a pin bump or
     a file a command rewrote changes the key. None when a part can't be read (an app outside Git, a Git too slow for
-    the few seconds the stop has to spare beside the checks' own 170), and nothing is remembered then."""
-    until = time.monotonic() + 8
+    the `STATE_SECONDS` the stop has to spare beside the checks' own), and nothing is remembered then."""
+    until = time.monotonic() + STATE_SECONDS
     try:
         parts = ["\n".join(f"{path}\t{file_stamp(ROOT / path)}" for path in edited).encode("utf8", "replace"),
                  script.read_bytes(), (ROOT / companion.FILE).read_bytes(),
@@ -1213,27 +1424,108 @@ def link_reminder(event):
 
 
 def stop(event):
+    """The Stop hook: blocks (exit 2, the problems on stderr for the agent) while `stop_problems` has any, and tells the
+    user (a systemMessage) what doesn't block: a long session, a linked Laching, what the fast checks skipped, the files
+    shell commands changed (`bash_changes`). First it logs what came of the checks the last block asked for
+    (`resolve_block`), also on the stop that retries it (`stop_hook_active`), which checks nothing again. A stop that
+    blocks tells the agent its notes and keeps them for the user (`unsaid`), who hears them at the next stop that
+    doesn't block; `bash_changes` only looks then, so its files are named to the user too."""
+    resolve_block(event)
+    held = unsaid(event)
     if event.get("stop_hook_active"):
+        tell(event, held, [bash_changes(event)])
         return
+    notes = []
     long, link = long_session(event), link_reminder(event)
-    problems = stop_problems(event)
+    problems = stop_problems(event, notes)
+    changed = bash_changes(event, dry=bool(problems))
     if problems:
         if link:  # the agent goes on anyway, so it reads the reminder itself
             problems.append(link)
+        problems += notes + ([changed] if changed else [])
         if long:  # and the user hears this one from the agent
             problems.append(f"Then tell the user in one line: {long}")
+        for note in notes:
+            record(event, "unsaid", re.sub(r"\s+", " ", note))
         print("\n\n".join(problems), file=sys.stderr)
         sys.exit(2)
-    if long or link:  # shown to the user; costs the agent nothing and blocks no stop
-        print(json.dumps({"systemMessage": " ".join(filter(None, (long, link)))}))
+    tell(event, held, [long, link, *notes, changed])  # costs the agent nothing and blocks no stop
 
 
-def stop_problems(event):
+def unsaid(event):
+    """The notes for the user that a stop which blocked kept (`unsaid` lines since the last `said`), oldest first."""
+    try:
+        lines = state_file(event).read_text().splitlines()
+    except OSError:
+        return []
+    held = []
+    for line in lines:
+        parts = line.split("\t", 2)
+        if len(parts) == 3 and parts[1] == "said":
+            held = []
+        elif len(parts) == 3 and parts[1] == "unsaid" and parts[2] not in held:
+            held.append(parts[2])
+    return held
+
+
+def tell(event, held, notes):
+    """Shows the user `held` (`unsaid`) and `notes`, the empty ones left out, in one systemMessage; the held ones are
+    said then."""
+    if said := [note for note in [*held, *notes] if note]:
+        print(json.dumps({"systemMessage": " ".join(said)}))
+    if held:
+        record(event, "said", "")
+
+
+def run_fast(command, edited):
+    """`verify.sh --fast -- <edited>` from the root (`run_bounded`, FAST_SECONDS)."""
+    return run_bounded([*command, "--fast", "--", *edited], FAST_SECONDS)
+
+
+def run_bounded(argv, seconds):
+    """`argv` from the root: (exit code, stdout, stderr), or (None, why, "") when it didn't start or didn't finish in
+    `seconds`. A run past its time is stopped with every process it started (its own process group), so a check's
+    child holding the pipes can't keep the hook waiting past the agent's own timeout."""
+    try:
+        # UTF-8 as the checks print it, whatever the locale: a byte cp1252 lacks would raise and skip the report.
+        process = subprocess.Popen(argv, cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, encoding="utf8", errors="replace",
+                                   start_new_session=os.name != "nt")
+    except OSError as error:
+        return None, f"didn't start: {error}", ""
+    try:
+        out, err = process.communicate(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)], capture_output=True, timeout=10)
+            else:
+                os.killpg(process.pid, 9)
+        except (OSError, subprocess.TimeoutExpired):
+            process.kill()
+        try:
+            process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        return None, f"didn't finish in {seconds} s", ""
+    return process.returncode, out, err
+
+
+def stop_problems(event, notes=None):
     """What the agent must still do before stopping: failed fast checks, slow checks not run, the parity reminder.
+    What a passing fast run skipped goes to `notes`, a list, for the user.
 
     The fast checks don't run again over a state that passed them: a pass is remembered in the session's log under
     its `fast_state`, read before the run, and the next stop with the same key runs nothing. A failure, a timeout and
-    a state the hook can't read are never remembered, so only a run that passed can stand for a later one."""
+    a state the hook can't read are never remembered, so only a run that passed can stand for a later one. A run that
+    didn't finish, or that no bash could start, is an open skip in verify.sh's log (`note_skip`) until a run over the
+    files passes; one that didn't finish is a problem that asks for the run or a `skipped verify.sh --fast` line.
+
+    The slow-check reminder asks for a line per check the agent skips (`SKIPPED`), and leaves a `block` line with the
+    kinds and their files in the session's log (and `FAST_CHECK` after a timeout), which the next stop resolves
+    (`resolve_block`). A check that a command the agent sent to the background since the edits runs over their files
+    (`running_since`) is named as running there, and not asked for again: when every one is, the reminder asks the
+    agent to wait for them or tell the user they're still running."""
     try:
         lines = state_file(event).read_text().splitlines()
     except OSError:
@@ -1243,54 +1535,319 @@ def stop_problems(event):
         stamp, kind, value = line.split("\t", 2)
         if kind == "passed":
             passed = value
-        else:
-            (last_edit if kind == "edit" else last_ran)[value] = float(stamp)
+        elif kind == "edit":
+            last_edit[value] = float(stamp)
+        elif kind not in SESSION_KINDS:
+            last_ran[value] = float(stamp)
     edited = sorted(p for p in last_edit if not p.startswith("/"))
     if not edited:
         return []
 
-    problems = []
+    problems, fast = [], {}  # `fast`: FAST_CHECK to its files, when the fast run didn't finish
+    running = running_in_background(lines)
     script = verify_script()
     command = companion.shell_command(script)
+    recorded = [p for p in edited if "," not in p]  # the log's paths are comma-separated
     if command is None:
+        note_skip(FAST_CHECK, "no bash to run verify.sh", recorded)
         problems.append(f"{rel(script)} didn't run: Windows starts no shell script itself and there's no Git for "
                         "Windows bash here, so the fast checks on your edits were skipped. Tell the user.")
     elif (state := fast_state(script, edited)) is None or state != passed:
-        try:
-            # UTF-8 as the checks print it, whatever the locale: a byte cp1252 lacks would raise and skip the report.
-            done = subprocess.run([*command, "--fast", "--", *edited], cwd=ROOT, capture_output=True, text=True,
-                                  encoding="utf8", errors="replace", timeout=170)
-            if done.returncode:
-                problems.append("Fast checks on the files you edited failed:\n"
-                                + done.stdout[-4000:] + done.stderr[-1000:])
-            elif state:
+        code, out, err = run_fast(command, edited)
+        if code is None:
+            note_skip(FAST_CHECK, out, recorded)
+            fast[FAST_CHECK] = recorded
+            files = " ".join(shlex.quote(p) for p in edited)
+            if (since := running_since(running, FAST_CHECK, recorded, last_edit)) is not None:
+                problems.append(f"Fast checks on the files you edited {out}, but the `{rel(script)}` you sent to the "
+                                f"background at {clock(since)} runs them: don't start another, wait for its result, or "
+                                "tell the user it's still running.")
+            else:
+                problems.append(f"Fast checks on the files you edited {out}, so nothing checked them: run "
+                                f"`{rel(script)} --fast -- {files}` in the background, or tell the user why you're "
+                                f"skipping it, in a line of its own: `skipped {FAST_CHECK}: <reason>`.")
+        elif code:
+            problems.append("Fast checks on the files you edited failed:\n" + out[-4000:] + err[-1000:])
+        else:
+            note_ok(FAST_CHECK, recorded)
+            if state:
                 record(event, "passed", state)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+            if notes is not None and (skipped := [line[6:].strip() for line in out.splitlines()
+                                                  if line.startswith("skip  ")]):
+                notes.append("The fast checks skipped " + "; ".join(skipped[:5])
+                             + (f" and {len(skipped) - 5} more" if len(skipped) > 5 else "") + ".")
 
     for kind, stamp in verify_ran().items():
         last_ran[kind] = max(last_ran.get(kind, 0), stamp)
     stale = {}  # the edited files that ask for a check, to the checks they ask for
+    blocked, skipped = {}, None  # the kinds asked for, to their files; verify.sh's open skips, read once
+    todo = {}  # the kinds asked for that no command in the background runs over their files, to those files
     for kind, pattern, label in SLOW:
         asked = tuple(sorted(p for p, t in last_edit.items()
                              if t > ran_over(last_ran, kind, p) and re.search(pattern, p)))
         if asked:
-            unjudged = all(ran_over(last_ran, UNJUDGED + kind, p) >= last_edit[p] for p in asked)
+            # A command the agent sent to the background since the edits runs it: not to be started again.
+            since = running_since(running, kind, asked, last_edit)
+            unjudged = since is None and all(ran_over(last_ran, UNJUDGED + kind, p) >= last_edit[p] for p in asked)
+            skipped = open_skips() if skipped is None else skipped
+            # Why it was skipped before, by verify.sh (--no-vm) or the agent, so a rerun that would skip it again isn't
+            # the answer: not the hook's own `STOP_NO_SAY`, which tells nothing.
+            why = next((skip["reason"] for skip in skipped if skip["check"] == kind and skip["reason"] != STOP_NO_SAY),
+                       None)
             stale.setdefault(asked, []).append(
                 label + (" [it ran, but that run doesn't count: in the background, only some of its tests (`--filter`, "
                          "`--tests`, `-only-testing`), or where its failure doesn't fail the command (behind `|`, `;`, "
-                         "`||` or `&`, in `$(...)`)]" if unjudged else ""))
+                         "`||` or `&`, in `$(...)`)]" if unjudged else "")
+                + (f" [running in the background since {clock(since)}, sent there after your last edit of its files]"
+                   if since is not None else "")
+                + (f" [skipped before: {why}]" if why else ""))
+            blocked[kind] = list(asked)
+            if since is None:
+                todo[kind] = list(asked)
     if reminder := parity_reminder(event, last_edit, last_ran):
         problems.append(reminder)
-    if stale:
+    if stale and not todo:
+        listed = "".join(f"- {', '.join(labels)}, for {' '.join(asked)}\n" for asked, labels in stale.items())
+        problems.append(f"Not run since your last edit, and running in the background:\n{listed}"
+                        "Don't start them again: wait for their result, or tell the user they're still running.")
+    elif stale:
         # Only the files whose edit a check is waiting on: with every file of the session the command would start the
         # slow checks of all of them, and late in a session that is dozens of paths.
         listed = "".join(f"- {', '.join(labels)}, for {' '.join(asked)}\n" for asked, labels in stale.items())
-        files = " ".join(shlex.quote(p) for p in sorted({p for asked in stale for p in asked}))
+        files = " ".join(shlex.quote(p) for p in sorted({p for asked in todo.values() for p in asked}))
         problems.append(f"Not run since your last edit:\n{listed}"
-                        f"Run `{rel(script)} -- {files}` (it runs only what applies), "
-                        "or tell the user why you're skipping it.")
+                        f"Run `{rel(script)} -- {files}` (it runs only what applies"
+                        + ("; what's running in the background needn't start again" if len(todo) < len(blocked) else "")
+                        + "), or tell the user why you're skipping it, one line per check: `skipped <check>: <reason>`, "
+                        f"the check one of {', '.join(todo)}.")
+    if blocked or fast:
+        record(event, "block", json.dumps({**fast, **blocked}))
     return problems
+
+
+def running_in_background(lines, now=None):
+    """What this session's commands in the background may still be running, from its log's `lines`, as [(start, runs)]
+    with `runs` their `bash-end`'s (`background_runs`). The hook never hears such a command end, so it counts as
+    `bash_changes` counts it: from its `bash-start` (else its `bash-end`) to the first stop after it (a `bash-checked`
+    line, which a stop that blocks doesn't write, so the stop that retries it still counts it), and
+    `BACKGROUND_SECONDS` at most."""
+    now = time.time() if now is None else now
+    starts, found = {}, []
+    for line in lines:
+        parts = line.split("\t", 2)
+        if len(parts) != 3:
+            continue
+        try:
+            stamp = float(parts[0])
+        except ValueError:
+            continue
+        if parts[1] == "bash-start" and parts[2]:
+            starts[parts[2]] = stamp
+        elif parts[1] == "bash-checked":
+            found = []  # a stop after them: they count no longer
+        elif parts[1] == "bash-end":
+            try:
+                info = json.loads(parts[2])
+            except ValueError:
+                continue
+            if isinstance(info, dict) and info.get("background") and isinstance(info.get("runs"), dict):
+                start = starts.pop(info["id"], stamp) if isinstance(info.get("id"), str) and info["id"] else stamp
+                found.append((start, info["runs"]))
+    return [(start, runs) for start, runs in found if now - start <= BACKGROUND_SECONDS]
+
+
+def running_since(running, check, paths, last_edit):
+    """When the first command in the background (`running_in_background`) that runs `check` over all of `paths`, and
+    started after the last edit of each (`last_edit`, {path: stamp}), started; None when none does. A command runs it
+    when it runs the check itself, or verify.sh (for `FAST_CHECK` too): over every change, or over a list of paths that
+    holds them."""
+    after = max((last_edit.get(p, 0.0) for p in paths), default=0.0)
+    found = [start for start, runs in running if start >= after for name, over in runs.items()
+             if name in (check, "verify.sh") and (over is None or (
+                 bool(paths) and isinstance(over, list) and set(paths) <= set(over)))]
+    return min(found, default=None)
+
+
+def clock(stamp):
+    """An epoch time as the local clock shows it, `14:02`."""
+    return time.strftime("%H:%M", time.localtime(stamp))
+
+
+def resolve_block(event):
+    """What came of each check the session's last `block` asked for, once, at the stop after it: `ran` when it ran over
+    its files since (the session's own run, or verify.sh's: for `FAST_CHECK`, no open skip of it over them is left),
+    else skipped for the reason the agent's last message gives in its line for it (`skipped <check>: <reason>`), else
+    `running in the background` when a command there may still run it over them, started after their last edit
+    (`running_since`, before the block or after it), else skipped with `STOP_NO_SAY`. A skip is also an open one in
+    verify.sh's log (`note_skip`), which `hook.py skips` lists until the check passes; a run in the background leaves
+    its outcome to verify.sh's own lines. Logged as an `outcome` line."""
+    try:
+        lines = state_file(event).read_text().splitlines()
+    except OSError:
+        return
+    block, at, last_ran, last_edit = None, 0.0, {}, {}
+    for line in lines:
+        parts = line.split("\t", 2)
+        if len(parts) != 3:
+            continue
+        try:
+            stamp = float(parts[0])
+        except ValueError:
+            continue
+        if parts[1] == "block":
+            try:
+                block, at = json.loads(parts[2]), stamp
+            except ValueError:
+                continue
+        elif parts[1] == "outcome":
+            block = None
+        elif parts[1] == "edit":
+            last_edit[parts[2]] = stamp
+        elif parts[1] not in SESSION_KINDS:
+            last_ran[parts[2]] = stamp
+    if not isinstance(block, dict) or not block:
+        return
+    for kind, stamp in verify_ran().items():
+        last_ran[kind] = max(last_ran.get(kind, 0), stamp)
+    said, names = {}, {FAST_CHECK.lower(): FAST_CHECK}
+    for kind, _, label in SLOW:  # a line may name the check by its reminder's label too
+        names[kind.lower()] = names[label.split(" (")[0].lower()] = kind
+    for name, reason in SKIPPED.findall(last_reply(event)):
+        if kind := names.get(name.strip().lower()):
+            said.setdefault(kind, reason.strip().strip("`").strip())
+    fast_open = [skip for skip in open_skips() if skip["check"] == FAST_CHECK]
+    running, outcome = running_in_background(lines), {}
+    for kind, paths in block.items():
+        paths = [p for p in paths if isinstance(p, str)] if isinstance(paths, list) else []
+        if kind == FAST_CHECK:
+            ran = not any(not skip["paths"] or not paths or set(skip["paths"]) & set(paths) for skip in fast_open)
+        else:
+            ran = bool(paths) and all(ran_over(last_ran, kind, p) > at for p in paths)
+        if ran:
+            outcome[kind] = "ran"
+        elif kind not in said and running_since(running, kind, paths, last_edit) is not None:
+            outcome[kind] = "running in the background"
+        else:
+            reason = said.get(kind) or STOP_NO_SAY
+            outcome[kind] = f"skipped: {reason}"
+            note_skip(kind, reason, [p for p in paths if "," not in p])
+    record(event, "outcome", json.dumps(outcome))
+
+
+def last_reply(event):
+    """The agent's last message before this stop: the Stop event's `last_assistant_message`, else the last assistant
+    text in Claude's transcript (`transcript_path`); "" when there's neither."""
+    if isinstance(text := event.get("last_assistant_message"), str):
+        return text
+    try:
+        data = Path(event.get("transcript_path")).read_bytes()[-1_000_000:]
+    except (OSError, TypeError):
+        return ""
+    for line in reversed(data.splitlines()):
+        if b'"assistant"' not in line or b'"isSidechain":true' in line:
+            continue
+        try:
+            message = json.loads(line)["message"]
+            content = message["content"]
+        except (ValueError, KeyError, TypeError):
+            continue
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        texts = [content] if isinstance(content, str) else [
+            part.get("text") or "" for part in content if isinstance(part, dict) and part.get("type") == "text"]
+        if any(texts):
+            return "\n".join(texts)
+    return ""
+
+
+def bash_changes(event, dry=False):
+    """A line for the user naming the files this session's shell commands changed that no session's edit record claims
+    (the stop checks see only those), or None. A command's span runs from its `bash-start` (the pre hook) to its
+    `bash-end` (the post hook, which names the files the command names), and one whose end the hook never heard (it
+    failed, or was refused) to the session's next line. One sent to the background runs to the first stop after it
+    (its `bash-checked` line), or now, and never past `BACKGROUND_SECONDS`: a file then may be another session's, and
+    the line says so. A file counts when it's in `git status` or named by the command, and its mtime falls in a span.
+    Only the spans since the last stop are looked at (a `bash-checked` line), and a file is named once until it changes
+    again (`bash-reported`); a `dry` look records neither, so the stop after a blocked one names the files again. It
+    reports only: it never blocks a stop."""
+    try:
+        lines = state_file(event).read_text().splitlines()
+    except OSError:
+        return None
+    now, entries = time.time(), []
+    for line in lines:
+        parts = line.split("\t", 2)
+        if len(parts) == 3:
+            try:
+                entries.append((float(parts[0]), parts[1], parts[2]))
+            except ValueError:
+                continue
+    stops = [stamp for stamp, kind, _ in entries if kind == "bash-checked"]
+    checked, starts, spans, named, reported = 0.0, [], [], [], {}
+    for index, (stamp, kind, value) in enumerate(entries):
+        if kind == "bash-checked":
+            checked = stamp
+        elif kind == "bash-reported":
+            reported[value] = stamp
+        elif kind == "bash-start":
+            starts.append((stamp, value, index))
+        elif kind == "bash-end":
+            try:
+                info = json.loads(value)
+            except ValueError:
+                info = {}
+            info = info if isinstance(info, dict) else {}
+            start = next((one for one in reversed(starts) if info.get("id") and one[1] == info["id"]),
+                         starts[-1] if starts else None)
+            if start is None:
+                continue
+            starts.remove(start)
+            if info.get("background"):
+                until = next((one for one in stops if one >= stamp), now)
+                spans.append((start[0], min(until, start[0] + BACKGROUND_SECONDS), True))
+            else:
+                spans.append((start[0], stamp, False))
+            named += [p for p in info.get("paths") or [] if isinstance(p, str)]
+    for begin, _, index in starts:
+        spans.append((begin, entries[index + 1][0] if index + 1 < len(entries) else now, False))
+    spans = [span for span in spans if span[1] > checked]
+    if not spans:
+        return None
+    candidates = [line[3:].split(" -> ")[-1] for line in
+                  git_lines("-c", "core.quotePath=false", "status", "--porcelain", "--untracked-files=all")[:5000]]
+    changed = {}  # path: whether only a background span holds its change
+    for path in dict.fromkeys(candidates + named):
+        if not path or path.startswith(('"', ".git/")):
+            continue
+        try:
+            mtime = (ROOT / path).stat().st_mtime
+        except OSError:
+            continue
+        holding = [background for begin, end, background in spans if begin <= mtime <= end]
+        if reported.get(path, -1) < mtime and holding:
+            changed[path] = all(holding)
+    if changed:  # the edits any session of this app recorded since the first span: those files are checked
+        claimed, earliest = set(), min(span[0] for span in spans)
+        for log in state_file(event).parent.glob("*.log"):
+            try:
+                if log.stat().st_mtime >= earliest:
+                    claimed.update(re.findall(r"^[^\t\n]*\tedit\t(.*)$", log.read_text(errors="replace"), re.M))
+            except OSError:
+                continue
+        changed = {path: background for path, background in changed.items() if path not in claimed}
+    if not dry:
+        for path in changed:
+            record(event, "bash-reported", path)
+        record(event, "bash-checked", "")
+    said = []
+    for background, text in ((False, "Changed while this session's shell commands ran, not by an edit the hooks "
+                                     "heard of, so no stop check saw it"),
+                             (True, "Changed while a command of this session ran in the background, by it or by "
+                                    "another session, and not by an edit the hooks heard of, so no stop check saw it")):
+        if paths := [path for path, only in changed.items() if only == background]:
+            shown = ", ".join(paths[:10]) + (f" and {len(paths) - 10} more" if len(paths) > 10 else "")
+            said.append(f"{text}: {shown}.")
+    return "\n".join(said) or None
 
 
 def ran_over(last_ran, kind, path):
@@ -1314,7 +1871,12 @@ def git_lines(*args):
 def resume(event):
     """SessionStart after a compaction or a resume: where this session was, printed as the agent's context. The files it
     edited (each once, as first edited, at most 20), the slow checks it ran, then the branch, `git status --short` (at
-    most 30 lines) and the last five commits. Nothing at all when the tree is clean and the session has no log."""
+    most 30 lines) and the last five commits. Nothing at all when the tree is clean and the session has no log. At a
+    session's startup only the `hooks_path_warning`, if any."""
+    if event.get("source") == "startup":
+        if warning := hooks_path_warning():
+            print(json.dumps({"systemMessage": warning}))
+        return
     edited, ran = [], []
     try:
         lines = state_file(event).read_text().splitlines()
@@ -1365,6 +1927,15 @@ def resume(event):
     print("\n".join(out))
 
 
+def hooks_path_warning():
+    """A line for the user when the app has Git hooks (.githooks) that this checkout doesn't run (core.hooksPath unset),
+    so its commits skip the pre-commit checks; None when it runs them, has none, or under CI (`CI` set)."""
+    if os.environ.get("CI") or not (ROOT / ".githooks").is_dir() or git_lines("config", "--get", "core.hooksPath"):
+        return None
+    return (f"{ROOT.name}'s Git hooks are off in this checkout, so its commits skip the pre-commit checks: "
+            "`git config core.hooksPath .githooks` turns them on.")
+
+
 def default_branch():
     """origin's default branch (origin/HEAD), else origin/main or origin/master, else None."""
     head = subprocess.run(["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd=ROOT, capture_output=True,
@@ -1376,27 +1947,39 @@ def default_branch():
     return None
 
 
+def cloud_skipped():
+    """Whether `cloud_stop` skipped verify.sh lately: an open skip of all of it (`open_skips`), written less than twice
+    `CLOUD_SECONDS` ago."""
+    return any(skip["check"] == "verify.sh" and not skip["paths"] and time.time() - skip["at"] < 2 * CLOUD_SECONDS
+               for skip in open_skips())
+
+
 def cloud_stop(event):
     """Copilot's cloud coding agent: check the whole branch, since there's no per-session log of edits. Copilot CLI on
-    a laptop reads .claude/settings.json and gets `stop`, so this does nothing outside GitHub Actions."""
-    if os.environ.get("GITHUB_ACTIONS") != "true" or event.get("stop_hook_active"):
+    a laptop reads .claude/settings.json and gets `stop`, so this does nothing outside GitHub Actions. A run that
+    didn't start or didn't finish in `CLOUD_SECONDS` blocks once, asking the agent to say so in the pull request, and
+    is an open skip of `verify.sh` over everything in its log, written afresh each time. Once holds whatever the stop
+    sends: not on the stop that retries a block (`stop_hook_active`, or Copilot's `stopHookActive`), and no run at all
+    while that skip is younger than twice `CLOUD_SECONDS` (`cloud_skipped`), since the agent can't make a run
+    finish."""
+    if os.environ.get("GITHUB_ACTIONS") != "true" or event.get("stop_hook_active") or cloud_skipped():
         print("{}")
         return
     branch = default_branch()
     base = ["--base", branch] if branch else []  # shallow clone or no remote branch: working-tree changes only
     script = verify_script()
     command = companion.shell_command(script)
-    try:
-        if command is None:
-            raise OSError("no bash to run verify.sh")
-        done = subprocess.run([*command, *base], cwd=ROOT, capture_output=True, text=True, encoding="utf8",
-                              errors="replace", timeout=1500)
-    except (OSError, subprocess.TimeoutExpired):
-        print("{}")
-        return
-    if done.returncode:
+    if command is None:
+        code, out, err = None, "didn't start: no bash to run verify.sh", ""
+    else:
+        code, out, err = run_bounded([*command, *base], CLOUD_SECONDS)
+    if code is None:
+        write_slow(["skip", str(int(time.time())), "verify.sh", out, ""])  # afresh: its time is `cloud_skipped`'s
+        reason = f"{rel(script)} {out}, so nothing checked this branch's changes: say so in the pull request."
+        print(json.dumps({"decision": "block", "reason": reason}))
+    elif code:
         reason = (f"{rel(script)} failed on this branch's changes. Fix them, or explain in the pull request why a check "
-                  "can't pass here:\n" + done.stdout[-4000:] + done.stderr[-1000:])
+                  "can't pass here:\n" + out[-4000:] + err[-1000:])
         print(json.dumps({"decision": "block", "reason": reason}))
     else:
         print("{}")
@@ -1404,17 +1987,29 @@ def cloud_stop(event):
 
 if __name__ == "__main__":
     companion.utf8_console()
+    if sys.argv[1:2] == ["skips"]:  # a command, not a hook: no event on stdin
+        try:
+            setup()
+        except BaseException:  # no companion.json: verify.sh's log of the repository here all the same
+            ROOT = Path.cwd()
+        try:
+            skips(sys.argv[2:])
+        except Exception as error:
+            print(f"hook.py skips: {error!r}", file=sys.stderr)
+        sys.exit(0)
     sys.stdin.reconfigure(encoding="utf-8")  # the agents send UTF-8 JSON, not the code page
     try:
         mode = sys.argv[1]
-        payload = json.load(sys.stdin)
+        payload = with_session(json.load(sys.stdin))
         setup()
         {"pre": pre, "post": post, "stop": stop, "resume": resume, "cloud-stop": cloud_stop}[mode](payload)
     except SystemExit as stop_code:
-        # Only a deliberate block (2) passes through; companion.load's exits on a bad file fail open.
+        # Only a deliberate block (2) passes through; companion.load's exits on a bad file fail open, said to the user.
         if stop_code.code == 2:
             raise
+        if stop_code.code not in (0, None):
+            print(json.dumps({"systemMessage": f"hook.py {' '.join(sys.argv[1:])} failed open: {stop_code.code}"}))
         sys.exit(0)
-    except Exception as error:  # fail open: a hook bug must not block every tool call
-        print(f"hook.py {sys.argv[1:]} failed open: {error!r}", file=sys.stderr)
+    except Exception as error:  # fail open: a hook bug must not block every tool call, but the user hears of it
+        print(json.dumps({"systemMessage": f"hook.py {' '.join(sys.argv[1:])} failed open: {error!r}"}))
         sys.exit(0)

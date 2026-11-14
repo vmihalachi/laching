@@ -34,7 +34,7 @@ SETTINGS = """{
     "SessionStart": [
       { "matcher": "startup", "hooks": [{ "type": "command", "timeout": 600,
           "command": "[ \\"$CLAUDE_CODE_REMOTE\\" != true ] || \\"$CLAUDE_PROJECT_DIR/scripts/setup-linux.sh\\"" }] },
-      { "matcher": "compact|resume", "hooks": [{ "type": "command", "timeout": 10,
+      { "matcher": "startup|compact|resume", "hooks": [{ "type": "command", "timeout": 10,
           "command": "python3 \\"$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py\\" resume" }] }
     ],
     "PreToolUse": [{ "matcher": "Read|Edit|MultiEdit|Write|NotebookEdit|Grep|Bash", "hooks": [
@@ -506,6 +506,51 @@ class ConformTests(FixtureAppTestCase):
         (self.root / ".github/hooks/fixture.json").unlink()
         self.write(".codex/config.toml", codex.format("vendor/laching/tools/hooks/hook.py"))
         self.assertEqual(self.problems(), [".codex/config.toml: " + said.format(1).replace("laching/", "vendor/laching/")])
+
+    def test_copilots_tool_hooks_run_the_hook_under_their_pascalcase_names(self):
+        self.settings()
+        self.write(".claude/hooks/hook.py", HOOK_WRAPPER)
+        copilot = {"version": 1, "hooks": {
+            "preToolUse": [{"type": "command", "bash": "python3 .claude/hooks/hook.py pre",
+                            "powershell": "python .claude\\hooks\\hook.py pre", "cwd": ".", "timeoutSec": 10}],
+            "postToolUse": [{"type": "command", "powershell": "python .claude\\hooks\\hook.py post", "timeoutSec": 60}],
+            "agentStop": [{"type": "command", "bash": "python3 .claude/hooks/hook.py cloud-stop", "timeoutSec": 600}]}}
+        said = ("hooks.{0} runs hook.py under Copilot's camelCase name, for which Copilot sends toolName and toolArgs "
+                "with its own tool names (bash, view, edit, create): name it {1}, for which it sends the tool_name and "
+                "tool_input the hook reads, with Claude Code's (agentStop keeps its name)")
+        self.write(".github/hooks/fixture.json", json.dumps(copilot, indent=2))
+        self.assertEqual(self.problems(), [f".github/hooks/fixture.json: {said.format('preToolUse', 'PreToolUse')}",
+                                           f".github/hooks/fixture.json: {said.format('postToolUse', 'PostToolUse')}"])
+        # Laching's hook called directly is two problems: the form of the call and the event's name.
+        copilot["hooks"]["postToolUse"] = [{"type": "command", "bash": "python3 laching/tools/hooks/hook.py post"}]
+        self.write(".github/hooks/fixture.json", json.dumps(copilot))
+        self.assertEqual(self.problems(), [
+            ".github/hooks/fixture.json: calls laching/tools/hooks/hook.py itself (1 hook(s)): call the app's wrapper, "
+            ".claude/hooks/hook.py, which hands the hook the app's root (COMPANION_ROOT), as every agent's hooks do",
+            f".github/hooks/fixture.json: {said.format('preToolUse', 'PreToolUse')}",
+            f".github/hooks/fixture.json: {said.format('postToolUse', 'PostToolUse')}"])
+        # The PascalCase names pass, and so does a camelCase hook that runs another script, like an agent setup's guard.
+        copilot["hooks"] = {"PreToolUse": copilot["hooks"]["preToolUse"],
+                            "PostToolUse": [{"type": "command", "bash": "python3 .claude/hooks/hook.py post"}],
+                            "preToolUse": [{"type": "command", "bash": "python3 .claude/hooks/guard.py"}],
+                            "postToolUse": [{"type": "command", "bash": "python3 scripts/myhook.py post"}, "hook.py"],
+                            "agentStop": copilot["hooks"]["agentStop"]}
+        self.write(".github/hooks/fixture.json", json.dumps(copilot))
+        self.assertEqual(self.problems(), [])
+        # What isn't JSON, or the shape Copilot reads, has no events to name; a file the app allows is its own.
+        for text in ('{"hooks": {"preToolUse": ', '{"hooks": {"preToolUse": {"bash": "hook.py"}}}', '["hook.py"]'):
+            self.write(".github/hooks/fixture.json", text)
+            self.assertEqual(self.problems(), [], text)
+        self.write(".github/hooks/fixture.json", json.dumps({"hooks": {"preToolUse": [{"bash": "hook.py pre"}]}}))
+        self.assertEqual(len(self.problems()), 1)
+        self.edit_config(lambda data: data.update(conform={"allow": [{"path": ".github/hooks/fixture.json",
+                                                                      "why": "Copilot's own"}]}))
+        self.assertEqual(self.problems(), [])
+
+    def test_lachings_own_copilot_hooks_use_the_pascalcase_tool_events(self):
+        hooks = json.loads((TOOLS.parent / ".github/hooks/laching.json").read_text("utf-8"))["hooks"]
+        # For these Copilot sends tool_name, tool_input and Claude Code's tool names, which the guard reads.
+        self.assertEqual(sorted(hooks), ["PostToolUse", "PreToolUse", "agentStop"])
 
     def test_skills_link_into_laching(self):
         git(self.root, "init", "-q")

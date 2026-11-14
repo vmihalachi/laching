@@ -25,7 +25,7 @@
     ],
     "SessionStart": [
       {
-        "matcher": "compact|resume",
+        "matcher": "startup|compact|resume",
         "hooks": [
           { "type": "command", "command": "python3 -I \"$CLAUDE_PROJECT_DIR/.claude/hooks/validate.py\" resume", "timeout": 10 }
         ]

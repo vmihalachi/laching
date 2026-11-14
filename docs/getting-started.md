@@ -95,7 +95,7 @@ What each tool does: [`tools/README.md`](../tools/README.md).
          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py\" stop", "timeout": 180 }] }],
        "SessionStart": [{ "matcher": "startup", "hooks": [
          { "type": "command", "command": "[ \"$CLAUDE_CODE_REMOTE\" != true ] || \"$CLAUDE_PROJECT_DIR/scripts/setup-linux.sh\"", "timeout": 600 }] },
-         { "matcher": "compact|resume", "hooks": [
+         { "matcher": "startup|compact|resume", "hooks": [
          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook.py\" resume", "timeout": 10 }] }]
      }
    }

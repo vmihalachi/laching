@@ -495,9 +495,10 @@
             "properties": {
               "name": { "type": "string", "description": "The line verify.sh prints." },
               "paths": { "type": "string", "pattern": "^[^\t]+$", "description": "An extended regular expression over the changed root-relative paths; the check runs when one matches (and with --all)." },
-              "run": { "type": "string", "pattern": "^[^\t]+$", "description": "The command, run by bash from the app's root. Exit status 77 says it skipped itself (a missing toolchain, say): verify.sh lists it under `skip` with the last line it printed, fails nothing and doesn't note it as run, so the Stop hook keeps reminding of it. Status 0 is for a check that ran and passed." },
+              "run": { "type": "string", "pattern": "^[^\t]+$", "description": "The command, run by bash from the app's root. Exit status 77 says it skipped itself (a missing toolchain, say): verify.sh lists it under `skip` with the last line it printed, fails nothing and notes it as an open skip (`hook.py skips`), not as run, so the Stop hook keeps reminding of it. Status 0 is for a check that ran and passed." },
               "slow": { "type": "boolean", "description": "Skipped by --fast." },
-              "docs": { "type": "boolean", "description": "Documentation changes (*.md, *.rst, …) count too; the checks leave them out otherwise, as the built-in app checks do." }
+              "docs": { "type": "boolean", "description": "Documentation changes (*.md, *.rst, …) count too; the checks leave them out otherwise, as the built-in app checks do." },
+              "lock": { "type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$", "description": "A build lock (verify-lock.py) the check holds while it runs: another check or verify.sh run holding the same name waits for it. For a check that builds in a folder another one uses (xcodebuild-macos, xcodebuild-ios are the Xcode tests' own)." }
             }
           }
         }

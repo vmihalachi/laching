@@ -80,6 +80,7 @@ COVERS: dict[str, tuple[str, ...]] = {
     "scripts/verify.sh": ("test_covering", "test_release", "test_scripts.LachingVerifyTests"),
     "scripts/fixture-art.sh": ("test_character",),
     ".github/workflows/release.yml": ("test_release",),
+    ".github/hooks/laching.json": ("test_conform",),  # under the tool events' names conform asks of an app
     # The packages' READMEs and the build files that pack them: test_release checks that every link is absolute.
     "dotnet/README.md": ("test_release.PackedReadmeTests",),
     "web/README.md": ("test_release.PackedReadmeTests",),
