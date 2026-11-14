@@ -540,26 +540,70 @@ The hook reads the guards, the slow-check table and the parity patterns (`hooks.
 fails open when the file is missing or invalid. It guards what Laching's generators write without being told, each
 refusal naming the command that rewrites the file: `character.py`'s character vectors, `<Skin>Art.swift` files and,
 for raster skins, its asset folders (from `characters`); `synth.py`'s `.wav` files (from `sounds`); and
-`dev-icon.swift`'s `AppIcon-Dev.appiconset` PNGs under `mac.dir`. A file only the app's own script makes (its
-`AppIcon.appiconset` from its icon renderer) is a `hooks.guards` entry. The hook also refuses to load any text file
+`dev-icon.swift`'s `AppIcon-Dev.appiconset` PNGs under `mac.dir`. Every app also has, from the folders its
+`companion.json` names, four guards it can turn off by name in `hooks.unguarded`: `screenshots` (what the screenshot
+runs write to `screenshots.out` and `windows.screenshots`, never read or edited, a `README.md` there aside), `appIcon`
+(the `AppIcon.appiconset` PNGs under `mac.dir`, which the app's icon renderer writes), `windowsAssets` (the images
+`windows/assets.py` writes to `windows.assets.out`) and `gradleWrapper` (`gradlew` and `gradlew.bat` in `android.dir`).
+An app's own `hooks.guards` entry on the same file gives its own reason. Any other file only the app's own script makes
+is a `hooks.guards` entry. The hook also refuses to load any text file
 over `hooks.bigFileLines` lines (600) whole: a `Read` without `offset`/`limit`, `cat`, or `sed` without a range; the
-refusal names the outline command (`grep -n '^\(func\|class\|...\)'`) to run first. On `Stop` it tells the user, once
-per compaction cycle, when Claude's context is past `hooks.longSessionTokens` (130000; 0 disables), so the next task
-goes to a fresh session. On `SessionStart` after a compaction or a resume (`hook.py resume`) it prints where the session
-was, as the agent's context: the files it edited, the slow checks it ran, the branch, git status and the recent
-commits (nothing when the tree is clean and the session has no log).
+refusal names the outline command (`grep -n '^\(func\|class\|...\)'`) to run first. It refuses a foreground shell
+command that only waits: nothing but a `sleep` of `hooks.foregroundSleepSeconds` (30; 0 disables) or longer, with or
+without an `echo` beside it, or a loop around a `sleep` that waits for something: a `while`/`until`, or a `for` that
+leaves on a `break` and would sleep that long in all its rounds (`$(seq 60)` rounds count as many). The refusal names
+what to do instead: run the long command itself in the background (Claude Code's `run_in_background`), where the
+harness reports its exit, and watch a CI run with one background `gh run watch <id> --exit-status`. The same commands
+in the background pass (the tool call's `run_in_background`, or an `&` behind the `sleep` or the loop), and so do a
+shorter pause between two steps (`sleep 5`), a few short retries, a `for` loop that waits for nothing, a `while read`
+over lines, and a `sleep` the command only names: in a heredoc, a quoted string, a script it writes.
 
-On `Stop` it also runs `verify.sh --fast` on the session's edits and names the slow checks (`hooks.slow`, and the
-built-in ones for the sides the app has) whose paths changed since they last ran. A slow check counts as run when
-`verify.sh` ran it and it passed, which `verify.sh` notes itself ([*`verify.sh`*](#verifysh)), or when the agent ran
-its command (`swift test`, `./gradlew :core:test`, a `hooks.slow` entry's `ran`); a command that only names
-`verify.sh` (`--help`, a `grep` of it, a run that failed) counts for nothing. An entry of the app's own in
-`hooks.slow` therefore needs `ran`: `companion.py validate` says so. The reminder names `verify.sh` on the edited files
-as what to run, so `verify.sh` runs a built-in check for the paths `hooks.slow` gives it as well as for its own
-(`companion.py slow` matches them as the hook does, as Python regular expressions, so a lookahead in one works in
-both); the APK build is the app's own `verify.checks` entry. A check `verify.sh` skips
-on this machine (`--no-vm`, a missing toolchain, an app check that exits 77) is still named. While the app is linked
-to a Laching checkout the hook says so once per session and blocks no stop for it.
+On `Stop` it tells the user, once per compaction cycle, when Claude's context is past `hooks.longSessionTokens`
+(130000; 0 disables), so the next task goes to a fresh session. On `SessionStart` after a compaction or a resume
+(`hook.py resume`) it prints where the session was, as the agent's context: the files it edited, the slow checks it
+ran, the branch, git status and the recent commits (nothing when the tree is clean and the session has no log).
+
+On `Stop` it also runs `verify.sh --fast` on the session's edits, unless that state already passed them: most stops
+come with no edit after the last one. A pass is remembered in the session's own log (beside its edits and runs, under
+`$TMPDIR`) with a hash of what the hook can see the checks depend on: the edited files (path, size, modification and
+change time; a deleted one as gone), the app's `verify.sh` wrapper, `companion.json`, whether the app is linked, and
+the working trees of the app and of Laching as Git sees them (the commit checked out, and every staged, changed,
+untracked or conflicted path with its size and times, read into a submodule that has changes). The next stop with the
+same hash runs nothing; after an edit, a commit, a checkout, a pin bump or a file a command rewrote the checks run
+once more, also when another session changed the checkout. A failure or a timeout is never remembered, and neither is
+anything in an app outside a Git repository, where every stop runs the checks. The hash is read before the run, so a
+run that rewrote a file is followed by one more. What it can't hold: a file Git ignores that the session didn't edit,
+a tool installed or removed on the machine, and what a check fetches (the voices' pushed pointer); `verify.sh --fast`
+by hand checks those.
+
+The same stop names the slow checks (`hooks.slow`, and the built-in ones for the sides the app has) whose paths
+changed since they last ran. A slow check counts as run when
+`verify.sh` ran it and it passed, which `verify.sh` notes itself ([*`verify.sh`*](#verifysh)), or when a command of
+the agent's ran it (`swift test`, `./gradlew :core:test`, a `hooks.slow` entry's `ran`). A run over part of a check,
+which `verify.sh` notes as `<kind>@<path prefix>` (the Mac scheme's tests alone), counts for the files under that
+prefix only: a file both schemes build still asks for the whole check. The hook hears of a command
+that succeeded, so the check has to be what the command runs and what decides its exit status. It reads the command as
+the shell splits it (at `;`, `&&`, `||`, `|` and newlines, without heredoc bodies, quoted strings and comments) and
+looks for the check at the start of a part, after a `cd … &&`, variable assignments and a wrapper such as `time` or
+`env`; a subshell's parts and those of `bash -c '…'` count too. So a `grep`, an `echo`, a commit message or a heredoc
+that names a check records nothing, and neither does a check behind `|`, `;` with more after it, `||`, `&`, `if`, in a
+loop or `if` body or inside `$(…)`: `dotnet test | tail` succeeds whatever the tests did. `swift test && git status`
+counts, and so do `{ swift test; } 2>&1`, a pipe after `set -o pipefail`, and a failure that ends the shell whatever
+follows, in a loop too: `swift test || exit 1`, or any check after `set -e` (but in an `&&` list before its last
+command). A check that ran in the background (or was sent there when it ran too long), or ran only some of its tests
+(`--filter`, `--skip`, `--tests`, `-only-testing`, `-skip-testing`), doesn't count either; `dotnet test <project>` counts
+for that project's check only. When a check ran in one of these ways after the last edit, the reminder says so next to
+its name. A `ran` pattern goes by the same rule: it matches from a part's first word, or from the
+script an interpreter runs (`python3 scripts/shots.py`). A command that only names `verify.sh` (`--help`, a `grep` of
+it, a run that failed) counts for nothing. An entry of the app's own in
+`hooks.slow` therefore needs `ran`: `companion.py validate` says so. The reminder names each check with the edited
+files that ask for it (those of its paths edited since it last ran; checks the same files ask for share a line), then
+`verify.sh` on those files alone as what to run: after a C# file and a Markdown file, the Windows tests are named for
+the C# file and the command has no other. So `verify.sh` runs a built-in check for the paths `hooks.slow` gives it as
+well as for its own (`companion.py slow` matches them as the hook does, as Python regular expressions, so a lookahead
+in one works in both); the APK build is the app's own `verify.checks` entry. A check `verify.sh` skips on this machine
+(`--no-vm`, a missing toolchain, an app check that exits 77) is still named. While the app is linked to a Laching
+checkout the hook says so once per session and blocks no stop for it.
 
 ## `skills/`
 

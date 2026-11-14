@@ -508,8 +508,10 @@
       "additionalProperties": false,
       "properties": {
         "guardedExtra": { "type": "array", "items": { "type": "string" }, "description": "More paths (regular expressions) agents must not edit by hand." },
+        "unguarded": { "type": "array", "items": { "enum": ["screenshots", "appIcon", "windowsAssets", "gradleWrapper"] }, "description": "Built-in guards this app turns off. Without this key every app has them, from the folders companion.json names: screenshots (screenshots.out and windows.screenshots, never read or edited, their README.md aside), appIcon (the AppIcon.appiconset PNGs under mac.dir), windowsAssets (what windows/assets.py writes to windows.assets.out) and gradleWrapper (android.dir's gradlew and gradlew.bat)." },
         "bigFileLines": { "type": "integer", "description": "A text file over this many lines may only be read by range (Read with offset/limit, sed -n 'A,Bp'), never whole; the hook says to read the outline first. Default 600; 0 disables." },
         "longSessionTokens": { "type": "integer", "description": "The Stop hook tells the user once per compaction cycle when Claude's context is past this many tokens, so the next task goes to a fresh session. Default 130000; 0 disables." },
+        "foregroundSleepSeconds": { "type": "integer", "description": "The hook refuses a foreground shell command that only waits: nothing but a `sleep` of this many seconds or longer, or a loop around `sleep` that waits for something (`while`/`until`, or a `for` that `break`s), and names what to do instead (run the long command in the background; watch a CI run with one background `gh run watch <id> --exit-status`). The same commands in the background pass, and so does a shorter pause between two steps. Default 30; 0 disables both refusals." },
         "guards": {
           "type": "array",
           "description": "More guarded paths, each with the reason the agent is shown: never edited by hand, and with `reads`, never loaded either.",
@@ -526,7 +528,7 @@
         },
         "slow": {
           "type": "array",
-          "description": "The app's slow checks, reminded at stop when a matching path changed since they last ran. A `name` of a built-in check (xcodebuild-test, conformance, swift-test, dotnet-test, dotnet-app-test, landing-build, winui-build, gradle-core-test, android-build) replaces its paths (and label), and verify.sh runs that check for those paths as well as its own (android-build excepted: verify.sh builds no APK, a verify.checks entry does); any other name adds a check, which needs `ran`. A check counts as run when verify.sh ran it and it passed (verify.sh notes that itself; a command that only names verify.sh counts for nothing), or when a command the agent ran is one that runs it.",
+          "description": "The app's slow checks, reminded at stop when a matching path changed since they last ran. A `name` of a built-in check (xcodebuild-test, conformance, swift-test, dotnet-test, dotnet-app-test, landing-build, winui-build, gradle-core-test, android-build) replaces its paths (and label), and verify.sh runs that check for those paths as well as its own (android-build excepted: verify.sh builds no APK, a verify.checks entry does); any other name adds a check, which needs `ran`. A check counts as run when verify.sh ran it and it passed (verify.sh notes that itself; a command that only names verify.sh counts for nothing), or when a command the agent ran runs it and its exit status is the command's: one that only names the check (a grep, an echo, a commit message, a heredoc) or loses its status (`| tail`, `; echo done`, `|| true`) counts for nothing.",
           "items": {
             "type": "object",
             "required": ["name", "paths"],
@@ -535,7 +537,7 @@
               "name": { "type": "string" },
               "paths": { "type": "string", "description": "A regular expression over root-relative paths, as Python reads one (a lookahead works): the hook and verify.sh both match it in Python." },
               "label": { "type": "string", "description": "How the reminder names the check." },
-              "ran": { "type": "string", "description": "A regular expression over shell commands that run the check: the agent's, and those of the slow checks verify.sh ran that passed (a verify.checks entry's `run`). Required for a name that isn't a built-in check." }
+              "ran": { "type": "string", "description": "A regular expression for the command that runs the check. The hook splits a shell line at `;`, `&&`, `||`, `|` and newlines and drops a leading `cd … &&`, variable assignments and wrappers such as `time` or `env`: the pattern has to match from a command's first word, or from the script an interpreter runs (`python3 scripts/shots.py`), so it can't span `&&` or match in the arguments. Matched against the agent's commands and those of the slow checks verify.sh ran that passed (a verify.checks entry's `run`). Required for a name that isn't a built-in check." }
             }
           }
         },
