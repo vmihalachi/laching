@@ -763,6 +763,99 @@ class VerifyNotesWhatRan(HookTestCase):
         resumed = self.run_hook("resume", {"session_id": "android"})
         self.assertIn("Slow checks this session ran: gradle-core-test, android-build", resumed.stdout)
 
+    def test_a_run_side_by_side_notes_exactly_the_checks_that_passed(self):
+        """dotnet's checks and Gradle's share no build folder, so verify.sh runs them side by side: with MEET each fake
+        waits for the other to have started. What it prints, its exit status and its notes are those of a run one
+        after another, two failures included."""
+        view = "windows/Fixture.App/Views/HomeView.xaml"
+
+        def meet(mine, other):
+            return (f'touch "{self.root}/{mine}.started"\n'
+                    'n=0\n'
+                    f'while [ -n "${{MEET:-}}" ] && [ ! -f "{self.root}/{other}.started" ]; do\n'
+                    f'  n=$((n + 1)); [ $n -lt 100 ] || {{ echo "{mine} ran alone"; exit 1; }}\n'
+                    '  sleep 0.1\n'
+                    'done\n')
+
+        self.fake(self.bin / "dotnet", meet("dotnet", "gradle") + '[ -z "${DOTNET_FAILS:-}" ] || { echo "dotnet failed"; exit 1; }\n')
+        self.fake(self.root / "android" / "gradlew",
+                  'case " $* " in *" :core:test "*) ;; *) exit 0 ;; esac\n' + meet("gradle", "dotnet")
+                  + '[ -z "${GRADLE_FAILS:-}" ] || { echo "$GRADLE_FAILS failed"; exit 1; }\n')
+
+        def run(*args, **env):
+            for name in ("dotnet.started", "gradle.started"):
+                (self.root / name).unlink(missing_ok=True)
+            if self.log.exists():
+                self.log.unlink()
+            return self.verify(*args, "--no-vm", "--", view, self.CORE, self.APP, LACHING_VERIFY_SERIAL="", **env)
+
+        self.edit("both", view, self.CORE, self.APP)
+        failing = {"DOTNET_FAILS": "1", "GRADLE_FAILS": ":core:test"}
+        beside = run(MEET="1", **failing)
+        self.assertEqual(beside.returncode, 1, beside.stdout + beside.stderr)
+        # ktlint's line is "ok" or "skip" as the machine has it or not (a hosted Linux runner doesn't), so it's left out.
+        self.assertEqual([line for line in beside.stdout.splitlines()
+                          if not line.startswith(" ") and "ktlint" not in line][-5:], [
+            "FAIL  dotnet test (Fixture.App.Tests)", "FAIL  gradlew :core:test", "ok    the APK builds",
+            "skip  WinUI app: builds on Windows or in the Parallels VM (left alone: --no-vm); push the branch and run "
+            "the Windows workflow", "2 check(s) failed."], beside.stderr)
+        self.assertIn("FAIL  dotnet test (Fixture.App.Tests)\n      dotnet failed\nFAIL  gradlew :core:test\n"
+                      "      :core:test failed\nok    the APK builds\n", beside.stdout, "each failure with its own log")
+        self.assertEqual(self.noted(), [""], "the one check that passed, and no other")
+        self.assertEqual(self.named("both"), ["Kotlin core tests", "Windows app model tests", "WinUI app build"])
+
+        serial = run("--serial", **failing)
+        self.assertEqual((serial.returncode, serial.stdout), (1, beside.stdout))
+        self.assertEqual(self.noted(), [""])
+
+        passing = run(MEET="1")
+        self.assertEqual(passing.returncode, 0, passing.stdout + passing.stderr)
+        self.assertIn("ok    dotnet test (Fixture.App.Tests)\nok    gradlew :core:test\nok    the APK builds\n",
+                      passing.stdout)
+        self.assertEqual(self.noted(), ["dotnet-app-test", "gradle-core-test", ""], "in the order they are printed")
+        self.assertEqual(self.named("both"), ["WinUI app build"], "the skipped build is still asked for")
+
+    def test_the_xcode_tests_are_noted_when_each_run_the_paths_ask_for_passed(self):
+        """The macOS and the iOS tests are one kind for the hook: noted once when each of the runs passed. A file of
+        one platform's folder asks for that platform's tests alone, noted for that folder's paths only
+        (`xcodebuild-test@<folder>/`), and the note names the scheme that ran."""
+        config = self.root / "companion.json"
+        data = json.loads(config.read_text("utf8"))
+        data["mac"].update(iosScheme="FixtureiOS", format=["Fixture", "macOS", "iOS", "Shared"])
+        config.write_text(json.dumps(data), "utf8")
+        self.fake(self.bin / "uname", "echo Darwin\n")
+        self.fake(self.bin / "xcodegen", "exit 0\n")
+        self.fake(self.bin / "xcodebuild", 'case "$*" in *"-scheme ${XCODE_FAILS:-none} "*) echo "a test failed"; exit 1 ;; esac\n')
+        self.fake(self.bin / "xcrun", '''case "$*" in
+  "simctl list runtimes -j") echo '{"runtimes": [{"identifier": "runtime", "version": "26.0"}]}' ;;
+  "simctl list devices -j")
+    echo '{"devices": {"runtime": [{"name": "iPhone 17", "udid": "PHONE", "deviceTypeIdentifier": "phone"}]}}' ;;
+  simctl\\ create\\ *) echo OWN ;;
+esac
+''')
+
+        def noted(*paths, **env):
+            """What a run over `paths` printed about the Xcode tests, and the kinds and commands it noted."""
+            if self.log.exists():
+                self.log.unlink()
+            done = self.verify("--", *paths, LACHING_VERIFY_SERIAL="", **env)
+            lines = [line for line in done.stdout.splitlines() if "xcodebuild test" in line]
+            return lines, [line.split("\t")[1:] for line in self.log.read_text("utf8").splitlines()] if self.log.exists() else []
+
+        def tests(schemes, kind="xcodebuild-test"):
+            return [[kind, f"cd macos && xcodebuild -project Fixture.xcodeproj -scheme {schemes} test"]]
+
+        shared, mac, ios = "macos/Shared/Model.swift", "macos/macOS/MenuBar.swift", "macos/iOS/Today.swift"
+        self.assertEqual(noted(shared), (["ok    xcodebuild test", "ok    xcodebuild test (iOS)"], tests("Fixture and FixtureiOS")))
+        self.assertEqual(noted(shared, XCODE_FAILS="FixtureiOS"), (["ok    xcodebuild test", "FAIL  xcodebuild test (iOS)"], []))
+        self.assertEqual(noted(shared, XCODE_FAILS="Fixture"), (["FAIL  xcodebuild test", "ok    xcodebuild test (iOS)"], []))
+        self.assertEqual(noted(mac, XCODE_FAILS="FixtureiOS"),
+                         (["ok    xcodebuild test"], tests("Fixture", "xcodebuild-test@macos/macOS/")), "no iOS run to fail")
+        self.assertEqual(noted(ios, XCODE_FAILS="Fixture"),
+                         (["ok    xcodebuild test (iOS)"], tests("FixtureiOS", "xcodebuild-test@macos/iOS/")))
+        self.assertEqual(noted(mac, ios), (["ok    xcodebuild test", "ok    xcodebuild test (iOS)"],
+                                           tests("Fixture and FixtureiOS")), "both folders: the whole kind")
+
     def test_no_vm_leaves_the_winui_build_unrun(self):
         view = "windows/Fixture.App/Views/HomeView.xaml"
         self.edit("windows", view)

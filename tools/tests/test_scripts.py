@@ -48,6 +48,9 @@ class ScriptTests(FixtureAppTestCase):
         self.bin = self.root / "fake-bin"
         self.bin.mkdir()
         self.log = self.root / "calls.log"
+        # No test reaches a real Parallels VM: a run over a Windows path asks vm.sh, which would build there. A test
+        # that wants a VM fakes its own prlctl over this one.
+        self.fake("prlctl", 'echo "Failed to get VM config: The virtual machine could not be found."; exit 255\n')
 
     def fake(self, name: str, body: str) -> None:
         path = self.bin / name
@@ -700,10 +703,31 @@ while not (state / "killed").exists():
 case "$1" in status) echo "VM $2 exist running" ;; exec) [ "$3" = --current-user ] && [ "$4" = cmd ] || exit 1 ;; esac
 ''')
         result = self.run_script("verify.sh", "--", app, env={"HOME": str(self.root)})
-        self.assertIn("FAIL  WinUI app builds in the VM (Fixture.App, x64 + ARM64)", result.stdout, result.stderr)
+        self.assertIn("FAIL  WinUI app builds in the VM (Fixture.App)\n", result.stdout, result.stderr)
         self.assertIn("the copy into the VM failed", result.stdout)
         self.assertIn("powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \\\\Mac\\AllFiles",
                       self.log.read_text())
+        # The run wrote itself into the VM's lock: one platform, the VM's own, unless both are asked for.
+        lock = self.root / "Library" / "Caches" / "laching-vm" / "Windows-11.lock"
+        asked = lambda: json.loads(lock.read_text("utf8").split("\n")[0])["command"]
+        self.assertEqual(asked(), "vm.sh build")
+        result = self.run_script("verify.sh", "--both-platforms", "--", app, env={"HOME": str(self.root)})
+        self.assertIn("FAIL  WinUI app builds in the VM (Fixture.App, x64 + ARM64)\n", result.stdout, result.stderr)
+        self.assertEqual(asked(), "vm.sh build x64 ARM64")
+        # A VM another run holds isn't waited for: the summary says the build was skipped, and why.
+        import fcntl
+        self.log.unlink()
+        with lock.open("r+", encoding="utf8") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            held.write(json.dumps({"checkout": "/work/other", "command": "vm.sh smoke", "pid": 7, "since": "10:00:00"}))
+            held.truncate()
+            held.flush()
+            result = self.run_script("verify.sh", "--", app, env={"HOME": str(self.root)})
+        self.assertIn("skip  WinUI app build skipped: the VM is busy (vm.sh smoke from /work/other (pid 7, since "
+                      "10:00:00)); run this again when it's free", result.stdout, result.stderr)
+        self.assertNotIn("FAIL", result.stdout)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("exec", self.log.read_text(), "nothing ran in the VM")
         # --no-vm (or LACHING_NO_VM) leaves the VM to the session that holds it.
         self.log.unlink()
         for args, env in ((["--no-vm"], {}), ([], {"LACHING_NO_VM": "1"})):
@@ -711,6 +735,82 @@ case "$1" in status) echo "VM $2 exist running" ;; exec) [ "$3" = --current-user
             self.assertIn("skip  WinUI app: builds on Windows or in the Parallels VM (left alone: "
                           f"{'--no-vm' if args else 'LACHING_NO_VM=1'})", result.stdout, result.stderr)
             self.assertFalse(self.log.exists(), "the VM isn't asked")
+
+    @unittest.skipIf(WINDOWS, "the fakes are sh scripts")
+    def test_verify_runs_the_xcode_tests_of_the_platform_a_path_belongs_to(self):
+        config = self.root / "companion.json"
+        data = json.loads(config.read_text("utf8"))
+        data["mac"]["format"] = ["Fixture", "macOS", "iOS", "Shared"]
+        config.write_text(json.dumps(data), "utf8")
+        self.commit_app()
+        self.fake("uname", "echo Darwin\n")
+        self.fake("xcodegen", "exit 0\n")
+        # With MEET, each test run waits for the other platform's to have started: they pass only side by side.
+        self.fake("xcodebuild", f'''echo "xcodebuild $*" >> "{self.log}"
+[ -n "${{MEET:-}}" ] || exit 0
+case "$*" in *FixtureiOS*) mine=ios other=mac ;; *) mine=mac other=ios ;; esac
+touch "{self.root}/$mine.started"
+n=0
+while [ ! -f "{self.root}/$other.started" ]; do
+  n=$((n + 1)); [ $n -lt 100 ] || {{ echo "the $mine tests ran alone"; exit 1; }}
+  sleep 0.1
+done
+''')
+        self.fake("xcrun", f'''echo "xcrun $*" >> "{self.log}"
+case "$*" in
+  "simctl list runtimes -j") echo '{{"runtimes": [{{"identifier": "runtime", "version": "26.0"}}]}}' ;;
+  "simctl list devices -j")
+    echo '{{"devices": {{"runtime": [{{"name": "iPhone 17", "udid": "PHONE", "deviceTypeIdentifier": "phone"}}]}}}}' ;;
+  simctl\\ create\\ *) echo OWN ;;
+esac
+''')
+        mac, ios = "ok    xcodebuild test", "ok    xcodebuild test (iOS)"
+
+        def ran(*args, **env):
+            """The Xcode test lines of a run over `args`, and what it called."""
+            if self.log.exists():
+                self.log.unlink()
+            result = self.run_script("verify.sh", *args, env={"LACHING_VERIFY_SERIAL": "", **env})
+            self.assertNotIn("FAIL  xcodebuild", result.stdout, result.stderr)
+            calls = self.log.read_text("utf8") if self.log.exists() else ""
+            return [line for line in result.stdout.splitlines() if "xcodebuild test" in line], calls
+
+        # Without an iOS scheme there is one test run, whatever the folder.
+        lines, calls = ran("--", "macos/iOS/Today.swift")
+        self.assertEqual(lines, [mac])
+        self.assertNotIn("simctl", calls)
+
+        data["mac"]["iosScheme"] = "FixtureiOS"
+        config.write_text(json.dumps(data), "utf8")
+        for paths in (["macos/macOS/MenuBar.swift"], ["macos/macOS/MenuBar.swift", "notes.md", "windows/Fixture.Core/A.cs"]):
+            lines, calls = ran("--", *paths)
+            self.assertEqual(lines, [mac], paths)
+            self.assertRegex(calls, r"xcodebuild -project Fixture\.xcodeproj -scheme Fixture -destination platform=macOS ")
+            self.assertNotIn("simctl", calls, "a Mac-only file touches no simulator")
+            self.assertNotIn("FixtureiOS", calls)
+
+        lines, calls = ran("--", "macos/iOS/Today.swift")
+        self.assertEqual(lines, [ios])
+        self.assertIn("xcrun simctl create fixture verify phone runtime\n", calls, "a simulator of its own")
+        self.assertRegex(calls, r"xcodebuild -project Fixture\.xcodeproj -scheme FixtureiOS -destination "
+                                r"platform=iOS Simulator,id=OWN -derivedDataPath \S+/macos/build/dd-ios\.noindex ")
+        self.assertNotIn("-scheme Fixture ", calls, "nor the Mac's tests")
+        self.assertNotIn("simctl shutdown", calls, "the simulator stays booted for the next run")
+        lines, calls = ran("--shutdown-simulator", "--", "macos/iOS/Today.swift")
+        self.assertEqual(lines, [ios])
+        self.assertEqual(calls.count("xcrun simctl shutdown OWN\n"), 2, "before the run and after it")
+
+        # Shared sources, the project's spec, or files of both platforms: both, side by side.
+        for paths in (["macos/Shared/Model.swift"], ["macos/project.yml"],
+                      ["macos/macOS/MenuBar.swift", "macos/iOS/Today.swift"]):
+            for name in ("mac.started", "ios.started"):
+                (self.root / name).unlink(missing_ok=True)
+            lines, calls = ran("--", *paths, MEET="1")
+            self.assertEqual(lines, [mac, ios], paths)
+        # --serial runs them one after the other, in the order they are printed.
+        lines, calls = ran("--serial", "--", "macos/Shared/Model.swift")
+        self.assertEqual(lines, [mac, ios])
+        self.assertEqual(re.findall(r"^xcodebuild .*-scheme (\S+)", calls, re.M), ["Fixture", "FixtureiOS"])
 
     @unittest.skipIf(WINDOWS, "the fake dotnet is an sh script")
     def test_verify_runs_dotnet_in_the_windows_folder_so_its_global_json_picks_the_sdk(self):

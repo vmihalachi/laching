@@ -152,6 +152,21 @@ class BodyTests(FixtureAppTestCase):
         self.assertEqual(vm.build_body(self.ctx, ["x64", "ARM64"], "-c Release").splitlines(),
                          [step.replace("PLATFORM", "x64"), step.replace("PLATFORM", "ARM64"), "Exit-Steps"])
 
+    def test_build_alone_builds_the_vms_own_platform(self):
+        # One architecture unless some are named: the guest says which is its own, as it does for smoke.
+        build = ("Push-Location -LiteralPath (Join-Path $Root 'windows'); "
+                 r"try { dotnet build 'Fixture.App\Fixture.App.csproj' -p:Platform=PLATFORM -v q -nologo '-clp:NoSummary' } "
+                 "finally { Pop-Location }")
+        self.assertEqual(vm.command_body(self.ctx, "build", [], "").splitlines(), [
+            "$platform = Get-GuestPlatform",
+            "Invoke-Step ('dotnet build windows/Fixture.App/Fixture.App.csproj (' + $platform + ', Debug)') { "
+            + build.replace("PLATFORM", "$platform") + " }",
+            "Exit-Steps"])
+        self.assertEqual(vm.command_body(self.ctx, "build", ["arm64", "x64"], "").splitlines(), [
+            f"Invoke-Step 'dotnet build windows/Fixture.App/Fixture.App.csproj ({platform}, Debug)' {{ "
+            + build.replace("PLATFORM", platform) + " }" for platform in ("ARM64", "x64")] + ["Exit-Steps"])
+        self.assertIn("the VM's own", vm.HELP["build"])
+
     def test_test_runs_the_test_projects(self):
         # The fixture names no windows.coreTests: one step.
         self.assertEqual(vm.test_body(self.ctx, "--filter Name~Stats").splitlines(), [
