@@ -11,14 +11,17 @@ standard library only. Run from anywhere inside the app:
   python3 laching/tools/l10n.py export [--lang it] [--since REF]
                                                       # write work files to <mac.dir>/build/l10n/<lang>.json
   python3 laching/tools/l10n.py apply <mac.dir>/build/l10n/*.json
+                                                      # merge filled work files, then regenerate the ports' exports
   python3 laching/tools/l10n.py prune                # delete keys Xcode marked stale
   python3 laching/tools/l10n.py add FILE.json        # add strings only the Windows/Linux ports use
   python3 laching/tools/l10n.py check                # exit 1 if anything is missing or invalid,
-                                                      # or the Windows/Linux exports are stale
+                                                      # or the Windows/Linux/Android exports are stale
   python3 laching/tools/l10n.py export-windows [--out DIR] [--dry-run]
                                                       # .resw per language for the Windows port
   python3 laching/tools/l10n.py export-linux [--out DIR] [--dry-run]
                                                       # .po per language for the Linux port
+  python3 laching/tools/l10n.py export-android [--out DIR] [--dry-run]
+                                                      # strings.xml per language and locales_config.xml for Android
 
 **Language-scoped phrases.** A phrase in `<conformance.dir>/phrases.json` with `languages` (say `["it"]`) exists in
 those languages only: its keys (`phrase.<id>`, or `.1`, `.2` for a joke's parts) are required there, and in every other
@@ -40,6 +43,12 @@ Plural strings have `"en": {"one": ..., "other": ...}` and need `"value"` to be 
 category listed in `"categories"`. Fill in `"value"` and leave everything else alone. `apply` checks that
 format specifiers (%@, %lld, %1$@ …), `{placeholders}` and HTML tags match the English text, and it
 writes the files in the same format Xcode and the repo use, so diffs stay small.
+
+`apply` then regenerates the exports made from the catalog, as `export-windows`, `export-linux` and `export-android`
+do, for each port `companion.json` names (`windows.strings`, `l10n.linuxPo`, `android.strings`) and whose folder
+exists: the files `check` compares, so `check` passes straight after it. When an export fails, `apply` says why and
+that the catalog was written, and exits 2. `export` ends with the batch's size, the distinct strings in the files it
+wrote.
 """
 
 from __future__ import annotations
@@ -51,6 +60,7 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -454,7 +464,7 @@ def cmd_check(args) -> int:
     result = report(args, strict=True)
     stale = stale_exports()
     for path in stale:
-        print(f"stale export: {path.relative_to(ROOT).as_posix()} (run `export-windows` / `export-linux` / `export-android`)")
+        print(f"stale export: {path.relative_to(ROOT).as_posix()} (run {EXPORT_COMMANDS})")
     return 1 if stale else result
 
 
@@ -508,6 +518,7 @@ def cmd_export(args) -> int:
     catalogs = {section: load_catalog(path)["strings"] for section, path in CATALOGS.items()}
     landing_en = flatten(load_landing(SOURCE)) if landing_languages() else {}
     written = []
+    batch: set[tuple[str, str]] = set()  # every string some file asks for, once however many languages lack it
     for lang in langs:
         if lang not in report:
             fail(f"unknown language {lang!r}; known: {', '.join(report)}")
@@ -519,12 +530,23 @@ def cmd_export(args) -> int:
         count = sum(len(work[section]) for section in [*CATALOGS, "landing"])
         if not count:
             continue
+        batch.update((section, key) for section in [*CATALOGS, "landing"] for key in work[section])
         path = Path(args.out) / f"{lang}.json" if args.out else WORK_DIR / f"{lang}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(work, indent=2, ensure_ascii=False) + "\n", "utf8")
         written.append(f"{companion.rel(path, ROOT)} ({count})")
-    print("\n".join(written) if written else "nothing to translate")
+    if not written:
+        print("nothing to translate")
+        return 0
+    print("\n".join(written))
+    # The batch's size, which decides who translates it (the localization skill): one translator, or one per file.
+    print(f"{counted(len(batch), 'distinct string')} in {counted(len(written), 'file')}")
     return 0
+
+
+def counted(count: int, noun: str) -> str:
+    """"1 file", "3 files"."""
+    return f"{count} {noun}{'' if count == 1 else 's'}"
 
 
 def work_item(key: str, entry: dict, lang: str, issues: list[str]) -> dict:
@@ -611,7 +633,32 @@ def cmd_apply(args) -> int:
     print(f"applied {applied}, skipped {skipped} empty, rejected {len(errors)}")
     for error in errors:
         print(f"  {error}")
+    if not export_after_apply(catalog_written=bool(dirty)):
+        return 2
     return 1 if errors else 0
+
+
+def export_after_apply(catalog_written: bool) -> bool:
+    """Brings the ports' exports in line with the catalog `apply` has written (`regenerate_exports`) and prints where it
+    wrote, so `check` passes straight after `apply`. False when an export fails, after saying why and that the catalog
+    was written: its translations are in, and the exports stay stale until an export command passes. A failure nobody
+    foresaw says the same and keeps its traceback."""
+    sys.stdout.flush()  # the summary first, when it shares a pipe with the errors
+    try:
+        lines = regenerate_exports()
+    except BaseException as error:
+        if isinstance(error, OSError):
+            print(f"error: {error}", file=sys.stderr)
+        catalog = "the catalog was written" if catalog_written else "the catalog was left as it was"
+        print(f"error: {catalog}, but the exports made from it are stale: fix that, then run {EXPORT_COMMANDS}",
+              file=sys.stderr)
+        # `fail` has said why (a string no port can take), or the line above has; anything else keeps its traceback.
+        if isinstance(error, (SystemExit, OSError)):
+            return False
+        raise
+    for line in lines:
+        print(line)
+    return True
 
 
 def promoted_plural(key: str, item: dict) -> dict | None:
@@ -733,7 +780,7 @@ def print_added(added: list[str], errors: list[str]) -> int:
         print(f"  + {key!r}")
     for error in errors:
         print(f"  {error}")
-    print("next: `l10n.py export` to translate them, then `export-windows` / `export-linux`")
+    print("next: `l10n.py export` to translate them, then `apply`, which regenerates the ports' exports")
     return 1 if errors else 0
 
 
@@ -1142,17 +1189,36 @@ def android_files(root: Path | None = None) -> dict[Path, str]:
     return files
 
 
+EXPORT_COMMANDS = "`export-windows` / `export-linux` / `export-android`"
+
+
+def export_ports() -> list[tuple[Path, Callable[[], dict[Path, str]]]]:
+    """The ports whose exports follow the catalog, as (where its files go, what makes them): each one `companion.json`
+    names, once the port's folder exists."""
+    ports = [(WINDOWS_STRINGS.parents[1], WINDOWS_STRINGS, windows_files)] if WINDOWS_STRINGS else []
+    ports += [(LINUX_PO.parent, LINUX_PO, linux_files)] if LINUX_PO else []
+    if ANDROID_STRINGS:  # the Gradle project's folder, or four up from <app>/src/main/res without `android.dir`
+        folder = ANDROID_DIR or ANDROID_STRINGS.parents[min(3, len(ANDROID_STRINGS.parents) - 1)]
+        ports.append((folder, ANDROID_STRINGS, android_files))
+    return [(root, files) for folder, root, files in ports if folder.exists()]
+
+
 def stale_exports() -> list[Path]:
     """Generated files that differ from the catalog. Only checked once the port's folder exists."""
-    stale = []
-    ports = [(WINDOWS_STRINGS.parents[1], windows_files)] if WINDOWS_STRINGS else []
-    ports += [(LINUX_PO.parent, linux_files)] if LINUX_PO else []
-    if ANDROID_STRINGS:  # the Gradle project's folder, or four up from <app>/src/main/res without `android.dir`
-        ports.append((ANDROID_DIR or ANDROID_STRINGS.parents[min(3, len(ANDROID_STRINGS.parents) - 1)], android_files))
-    for folder, files in ports:
-        if folder.exists():
-            stale += companion.write_outputs(files(), check=True)
-    return stale
+    return [path for _, files in export_ports() for path in companion.write_outputs(files(), check=True)]
+
+
+def regenerate_exports() -> list[str]:
+    """Rewrites the generated files that differ from the catalog, in the ports `check` compares (`export_ports`); a line
+    for each port it wrote in. Every port's files are made before the first is written, so a string no port can take
+    (`fail`) leaves them all as they were."""
+    made = [(root, files()) for root, files in export_ports()]
+    lines = []
+    for root, files in made:
+        if written := companion.write_outputs(files, check=False):
+            where = companion.rel(root, ROOT)
+            lines.append(f"regenerated {len(written)} of {counted(len(files), 'export')} in {where}")
+    return lines
 
 
 def write_export(files: dict[Path, str], dry_run: bool) -> int:
@@ -1200,7 +1266,8 @@ def main() -> int:
     export.add_argument("--out", help="output directory (default <mac.dir>/build/l10n)")
     export.set_defaults(func=cmd_export)
 
-    apply = sub.add_parser("apply", help="merge filled-in work files back after validating them")
+    apply = sub.add_parser("apply", help="merge filled-in work files back after validating them, then regenerate the "
+                           "ports' exports")
     apply.add_argument("files", nargs="+")
     apply.set_defaults(func=cmd_apply)
 

@@ -244,6 +244,13 @@ predates `bump` (the example: [*Moving to a release, or trying one first*](#movi
 
 String Catalog gaps, work files for translators, apply with validation, `.resw`/`.po` exports; language-scoped phrases.
 
+`apply` ends by regenerating the exports made from the catalog, in each port `companion.json` names (`windows.strings`,
+`l10n.linuxPo`, `android.strings`) and whose folder exists: the files `check` compares, so `check` passes straight after
+it with no export step, and an app without ports gets none. When an export fails, `apply` says why and that the catalog
+was written, and exits 2. `export` ends with the batch's size (`3 distinct strings in 16 files`), which the
+`localization` skill's threshold reads: under ten strings one sub-agent translates every language, from ten one per
+language.
+
 ## `phrases.py`
 
 Keeps the catalog's `phrase.<id>` (and `.n` for jokes) keys in step with `phrases.json`; `check` also reports a phrase

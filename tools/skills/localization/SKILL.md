@@ -35,8 +35,15 @@ language) are in the app's `DESIGN.md` and `.agents/notes/localization.md` when 
 3. **See the gaps**: `python3 laching/tools/l10n.py status`. If source text changed under an existing key, add
    `--since HEAD` (or the base ref). Stale keys the code no longer uses: `prune`.
 4. **Export and fan out**: `python3 laching/tools/l10n.py export [--since HEAD]` writes
-   `<mac.dir>/build/l10n/<lang>.json`, one per language with gaps. Launch one background sub-agent per file, all in
-   the same turn (a fast, cheaper model is fine). Prompt for each:
+   `<mac.dir>/build/l10n/<lang>.json`, one per language with gaps, and ends with the batch's size, as in
+   `3 distinct strings in 16 files`: a string counts once, however many languages lack it. The threshold is **ten
+   strings**:
+
+   - **Fewer than ten**: launch one background sub-agent that translates every file. One per language would each
+     load the rules and the context to translate a line or two.
+   - **Ten or more**: launch one background sub-agent per file, all in the same turn.
+
+   A fast, cheaper model is fine for both. The prompt for one file:
 
    > Translate the work file `<path>` for <displayName> (<one line about the character from DESIGN.md>). Read the file,
    > follow its `rules` and `glossary` (above all: transcreate, write it as a native copywriter would, never word for
@@ -44,13 +51,19 @@ language) are in the app's `DESIGN.md` and `.agents/notes/localization.md` when 
    > other file and don't open `.xcstrings` files. Reply with one line: the number of strings you filled and anything
    > you were unsure about.
 
+   For the one sub-agent that takes every file, list the paths instead, say that each file's `lang` names its
+   language and its `glossary` is that language's, and ask for one line per language.
+
    Don't read the work files yourself; wait for the one-line replies.
 5. **Apply**: `python3 laching/tools/l10n.py apply '<mac.dir>/build/l10n/*.json'`. If it rejects entries, send the
-   error lines back to that language's sub-agent and apply again.
-6. **Verify**: `python3 laching/tools/l10n.py check` must print `ok` for every language. It also fails when the Windows
-   `.resw`, Linux `.po` or Android `strings.xml` exports are stale: run `l10n.py export-windows` (or `export-linux`,
-   `export-android`) and commit the output. Build the app (or run the tests); when landing copy changed, build the
-   landing page.
+   error lines back to the sub-agent that filled that language and apply again. It then regenerates the exports the
+   app has (the Windows `.resw`, the Linux `.po`, the Android `strings.xml` and locale config), so there is no export
+   step: commit them with the catalog. If an export fails, it says why and exits 2; the catalog is already written, so
+   fix the cause and run `l10n.py export-windows` (or `export-linux`, `export-android`).
+6. **Verify**: `python3 laching/tools/l10n.py check` must print `ok` for every language. It also fails when the
+   exports are stale. After `apply` they aren't; after a change with nothing to apply (a `prune`, a changed comment),
+   run `l10n.py export-windows` (or `export-linux`, `export-android`) and commit the output. Build the app (or run the
+   tests); when landing copy changed, build the landing page.
 7. **Report**: list the new or changed strings in the languages the owner reviews (`.agents/notes/localization.md`),
    source → translation, one line each, and anything the sub-agents flagged as unsure.
 
