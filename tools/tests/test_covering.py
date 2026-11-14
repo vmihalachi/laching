@@ -103,6 +103,23 @@ class PythonTests(unittest.TestCase):
             self.assertEqual(run.newer_python(str(old), (str(also),)), str(also / "python3"), "then the folders")
             self.assertIsNone(run.newer_python(str(old), ()))
 
+    @unittest.skipIf(WINDOWS, NO_SHEBANG)
+    def test_the_search_takes_a_versioned_name_where_python3_is_old_or_missing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            old, brew, tools = (Path(temp) / name for name in ("old", "brew", "tools"))
+            for folder, files in ((old, {"python3": 1}), (brew, {"python3.9": 1, "python3.13": 0, "python3.14": 0}),
+                                  (tools, {"python3.14-config": 0, "python3.x": 0, "python3.²": 0, "python3.٣": 0})):
+                folder.mkdir()
+                for name, status in files.items():
+                    (folder / name).write_text(f"#!/bin/sh\nexit {status}\n", "utf8")
+                    (folder / name).chmod(0o755)
+            self.assertEqual(run.newer_python(str(old), (str(brew),)), str(brew / "python3.14"), "the newest first")
+            (brew / "python3").write_text("#!/bin/sh\nexit 0\n", "utf8")
+            (brew / "python3").chmod(0o755)
+            self.assertEqual(run.newer_python(str(old), (str(brew),)), str(brew / "python3"), "python3 before them")
+            self.assertIsNone(run.newer_python(str(old), (str(tools),)), "only python3.N, N in ASCII digits")
+            self.assertEqual(run.pythons(str(tools)), [str(tools / "python3")])
+
 
 # A test file for the copy's run.py: each test appends its name to $MARKS when it runs.
 FAKE_TEST = '''import os, unittest

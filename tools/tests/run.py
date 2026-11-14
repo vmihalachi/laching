@@ -12,7 +12,8 @@ split between them. A line per file as it ends, the failing files' output in ful
 state: each works in its own temporary folders, and what one sets in os.environ stays in its process.
 
 The tests need Python 3.10 or later: an older python3 (macOS's /usr/bin/python3 is 3.9) re-runs this file under a newer
-one on PATH, in /opt/homebrew/bin or /usr/local/bin, or stops with one line when there's none.
+one on PATH, in /opt/homebrew/bin or /usr/local/bin (named python3, or python3.14 as Homebrew can name it there), or
+stops with one line when there's none.
 """
 
 from __future__ import annotations
@@ -136,28 +137,41 @@ def need_python(version: tuple = sys.version_info, find=None) -> None:
     if newer:
         os.execv(newer, [newer, str(Path(__file__).resolve()), *sys.argv[1:]])
     sys.exit(f"tools/tests/run.py: the tools tests need Python {'.'.join(map(str, MINIMUM))} or later, and "
-             f"{sys.executable} is {'.'.join(map(str, version[:3]))}, with no newer python3 on PATH or in "
+             f"{sys.executable} is {'.'.join(map(str, version[:3]))}, with no newer python3 or python3.N on PATH or in "
              f"{' or '.join(FOLDERS)} (brew install python)")
 
 
 def newer_python(search: str | None = None, folders: tuple[str, ...] | None = None) -> str | None:
-    """The first python3 of MINIMUM or later on `search` (default $PATH), then in `folders` (default FOLDERS), other
-    than this one."""
+    """The first Python of MINIMUM or later on `search` (default $PATH), then in `folders` (default FOLDERS), other
+    than this one. A folder's `python3` is tried first, then its versioned names (`pythons`)."""
     path = os.environ.get("PATH", "") if search is None else search
     seen = {os.path.realpath(sys.executable)}
+    probe = f"import sys; sys.exit(sys.version_info[:2] < {MINIMUM})"
     for folder in [*path.split(os.pathsep), *(FOLDERS if folders is None else folders)]:
-        candidate = os.path.join(folder, "python3")
-        real = os.path.realpath(candidate)
-        if not folder or real in seen or not os.access(candidate, os.X_OK) or os.path.isdir(candidate):
-            continue
-        seen.add(real)
-        probe = f"import sys; sys.exit(sys.version_info[:2] < {MINIMUM})"
-        try:
-            if subprocess.run([candidate, "-c", probe], capture_output=True, timeout=30).returncode == 0:
-                return candidate
-        except (OSError, subprocess.TimeoutExpired):
-            continue
+        for candidate in pythons(folder) if folder else ():
+            real = os.path.realpath(candidate)
+            if real in seen or not os.access(candidate, os.X_OK) or os.path.isdir(candidate):
+                continue
+            seen.add(real)
+            try:
+                if subprocess.run([candidate, "-c", probe], capture_output=True, timeout=30).returncode == 0:
+                    return candidate
+            except (OSError, subprocess.TimeoutExpired):
+                continue
     return None
+
+
+def pythons(folder: str) -> list[str]:
+    """`python3` in `folder`, then the versioned names there (python3.14, python3.13, ...), the newest first:
+    Homebrew's bin folder can hold only the versioned one."""
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        names = []
+    # ASCII digits only: str.isdigit takes a ² too, which int() refuses.
+    versioned = sorted((name for name in names if name.startswith("python3.") and name[8:].isascii()
+                        and name[8:].isdigit()), key=lambda name: int(name[8:]), reverse=True)
+    return [os.path.join(folder, name) for name in ("python3", *versioned)]
 
 
 if __name__ == "__main__":
