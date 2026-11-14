@@ -237,6 +237,7 @@ describe("companionLanding", () => {
     expect([...files.keys()].sort()).toEqual([
       "apple-touch-icon.png",
       "favicon-32.png",
+      "favicon-96.png",
       "favicon.ico",
       "icon-192.png",
       "icon-512.png",

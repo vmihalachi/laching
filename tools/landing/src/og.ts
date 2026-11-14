@@ -104,6 +104,8 @@ export function socialAssets(options: OgOptions) {
   const files = new Map<string, Buffer>([
     ["favicon.ico", favicon],
     ["favicon-32.png", renderIcon(icon, 32)],
+    // Google Search reads only raster favicons (not SVG) and wants one larger than 48 px.
+    ["favicon-96.png", renderIcon(icon, 96)],
     ["apple-touch-icon.png", renderIcon(icon, 180, { padded: true })],
     ["icon-192.png", renderIcon(icon, 192, { padded: true })],
     ["icon-512.png", renderIcon(icon, 512, { padded: true })],
