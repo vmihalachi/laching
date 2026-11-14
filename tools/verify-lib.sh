@@ -56,6 +56,15 @@ verify_stop_runners() {
   for pid in "${verify_runners[@]+"${verify_runners[@]}"}"; do wait "$pid" 2>/dev/null || true; done
   verify_runners=()
 }
+# verify_launch <file> <command...>: a check's command, in the process group of its own it was started in, after
+# writing that group's number (this subshell's, its leader) to <file> whole. Bash 3.2 has no $BASHPID: a shell this
+# starts sees it as $PPID. A program replaces this subshell, so its parent is the runner, as with a plain `"$@" &`.
+verify_launch() {
+  sh -c 'echo "$PPID" >"$1.tmp" && mv -f "$1.tmp" "$1"' sh "$1"
+  shift
+  case "$(type -t "$1")" in file) exec "$@" ;; esac
+  "$@"
+}
 # In a runner: the verifier is gone, or was killed outright and waits as a zombie for its parent (one look a second).
 verify_orphaned() {
   kill -0 "$$" 2>/dev/null || return 0
@@ -117,13 +126,16 @@ check() {
         break
       fi
     elif [ "$launched" = 0 ]; then
+      # Never fd 3, the verifier's own output: a descendant the check leaves behind can't hold that open.
       set -m
-      "$@" >>"$log" 2>&1 &
+      if [ -n "$verify_runner" ]; then
+        # For the verifier, should this runner be killed before it can stop its check. The check names its group
+        # before it starts: one that kills its runner at once would outrun the runner's own note of it.
+        verify_launch "$logdir/queue.${verify_tag}group" "$@" >>"$log" 2>&1 3>&- &
+      else "$@" >>"$log" 2>&1 3>&- & fi
       verify_active=$!
       set +m
       launched=1
-      # For the verifier, should this runner be killed before it can stop its check.
-      [ -z "$verify_runner" ] || echo "$verify_active" >"$logdir/queue.${verify_tag}group"
     elif ! kill -0 "$verify_active" 2>/dev/null; then
       wait "$verify_active" 2>/dev/null; status=$?
       break
