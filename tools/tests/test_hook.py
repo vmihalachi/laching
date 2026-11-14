@@ -793,7 +793,9 @@ class VerifyNotesWhatRan(HookTestCase):
         failing = {"DOTNET_FAILS": "1", "GRADLE_FAILS": ":core:test"}
         beside = run(MEET="1", **failing)
         self.assertEqual(beside.returncode, 1, beside.stdout + beside.stderr)
-        self.assertEqual([line for line in beside.stdout.splitlines() if not line.startswith(" ")][-5:], [
+        # ktlint's line is "ok" or "skip" as the machine has it or not (a hosted Linux runner doesn't), so it's left out.
+        self.assertEqual([line for line in beside.stdout.splitlines()
+                          if not line.startswith(" ") and "ktlint" not in line][-5:], [
             "FAIL  dotnet test (Fixture.App.Tests)", "FAIL  gradlew :core:test", "ok    the APK builds",
             "skip  WinUI app: builds on Windows or in the Parallels VM (left alone: --no-vm); push the branch and run "
             "the Windows workflow", "2 check(s) failed."], beside.stderr)
