@@ -5,6 +5,7 @@ Usage (from the app's root):
   python3 laching/tools/store/push.py --version 1.0 --status        # read only: what App Store Connect has, what's missing
   python3 laching/tools/store/push.py --version 1.0 [--create] [--build 4] [--only text,iap,screenshots] [lang ...]
   ... --apply        to write; without it nothing changes and the script prints what it would do.
+  ... --build 4 --wait-build [minutes]   right after an upload: waits for App Store Connect to process the build
 A push's lines are led by the minutes and seconds since it started, and print as they happen when sent to a file.
 
 What it syncs, per language (companion.json's `store.apple` names the app, its locales and in-app purchases):
@@ -35,6 +36,10 @@ With `store.apple.ios` (a universal app), the iPhone and iPad version page too (
                    when the file exists (without one, App Store search shows the screenshots)
 The iOS version for --version is found or created (--create) like the Mac's, and --build is attached to it too; the
 `review` part sets its App Review notes as well, and --status reports it (screenshots per display type) after the Mac's.
+--build attaches a build App Store Connect has processed (VALID). One it doesn't have yet, or is still processing, is
+reported as a problem and the rest is pushed without it; with --wait-build [minutes] (30 when no number is given) the
+push asks again every 30 seconds until the build is VALID or the time is up, then goes on the same way. A build that
+ends FAILED or INVALID stops the wait at once. The minutes go after the languages, or as --wait-build=45.
 A field the listing doesn't have is left alone, and What's New is left out on a platform's first version (App Store
 Connect refuses it there). Languages missing from App Store Connect
 are added (App Information first: App Store Connect then adds them to the version, which is filled in rather than added
@@ -49,6 +54,7 @@ Team Keys, access App Manager). Put the downloaded AuthKey_<KEY_ID>.p8 in
 import argparse
 import base64
 import hashlib
+import http.client
 import json
 import os
 import subprocess
@@ -198,9 +204,11 @@ class ApiError(Exception):
     pass
 
 
-# A network failure (timeout, reset, DNS) rather than an answer from the server; HTTPError is a URLError too, so it is
+# A network failure (timeout, reset, DNS, an answer cut short) rather than an answer from the server: every OSError,
+# since urlopen leaves a read that times out unwrapped and before Python 3.10 its socket.timeout is no TimeoutError, and
+# http.client's own errors (IncompleteRead, BadStatusLine), which aren't OSErrors. HTTPError is an OSError too, so it is
 # caught first. Seconds before a request that gets no answer fails.
-NETWORK_ERRORS = (urllib.error.URLError, TimeoutError, ConnectionError)
+NETWORK_ERRORS = (OSError, http.client.HTTPException)
 TIMEOUT = 120
 
 
@@ -297,6 +305,13 @@ def log(message=""):
     print(message[:len(message) - len(body)] + f"[{elapsed()}] {body}" if body else message)
 
 
+# --wait-build: the minutes it waits when given no number, the seconds between two looks at the build, and the states
+# App Store Connect leaves a build in for good (the others are PROCESSING and VALID).
+WAIT_BUILD_MINUTES = 30
+BUILD_POLL = 30
+BUILD_ENDED = {"FAILED", "INVALID"}
+
+
 # An in-app purchase's name and description are held by its versions (App Store Connect API 4.4.1). The newest one is
 # open for edits as a draft, can't be changed while it is with App Review, and in any other state (approved, rejected,
 # replaced) is followed by a new draft.
@@ -320,8 +335,10 @@ def iap_version(api, product):
 
 
 class Sync:
-    def __init__(self, listing: Listing, client, apply, log=log):
+    def __init__(self, listing: Listing, client, apply, log=log, wait_build=None, clock=time.monotonic, sleep=time.sleep):
         self.listing, self.api, self.apply, self.log = listing, client, apply, log
+        # --wait-build: the minutes to wait for a build that isn't processed yet (None: don't), on this clock.
+        self.wait_build, self.clock, self.sleep = wait_build, clock, sleep
         self.problems = []
         self.mac = mac_page(listing)
         self.ios = ios_page(listing) if listing.ios is not None else None
@@ -377,15 +394,46 @@ class Sync:
         others = self.api.get_all(f"/v1/apps/{self.listing.app_id}/appStoreVersions?filter[platform]={page.platform}")
         return not [v for v in others if v["id"] != version["id"]]
 
+    def processed_build(self, number, platform):
+        """The platform's build of that number once App Store Connect has processed it (VALID); None, with the problem
+        recorded, when it isn't there or isn't VALID. With --wait-build it looks again every BUILD_POLL seconds until
+        the build is VALID, ends FAILED or INVALID, or the minutes are up; a look that fails during the wait (the
+        network, a busy server) is logged and the next one tried."""
+        path = (f"/v1/builds?filter[app]={self.listing.app_id}&filter[version]={number}"
+                f"&filter[preReleaseVersion.platform]={platform}")
+        deadline = None if self.wait_build is None else self.clock() + self.wait_build * 60
+        problem = None  # what the last look that got an answer found
+        while True:
+            try:
+                builds = self.api.get_all(path)
+            except ApiError as e:
+                if problem is None:  # the first look fails as any other read does
+                    raise
+                self.log(f"    ! {e}")
+            else:
+                state = builds[0]["attributes"].get("processingState") if builds else None
+                if state == "VALID":
+                    if problem:
+                        self.log(f"  build {number} is VALID")
+                    return builds[0]
+                if state in BUILD_ENDED:  # no wait helps, with --wait-build or without
+                    self.problems.append(f"build {number} is {state}: App Store Connect won't process it further, "
+                                         "upload a new build number")
+                    return None
+                found = (f"build {number} is {state}, not VALID yet" if builds
+                         else f"build {number} isn't in App Store Connect yet (still uploading?)")
+                if deadline is not None and found != problem:
+                    self.log(f"  {found}" + ("" if problem else f": waiting up to {self.wait_build:g} minutes"))
+                problem = found
+            left = 0 if deadline is None else deadline - self.clock()
+            if left <= 0:
+                self.problems.append(problem + (f" (waited {self.wait_build:g} minutes)" if deadline is not None else ""))
+                return None
+            self.sleep(min(BUILD_POLL, left))
+
     def attach_build(self, version, number, platform):
-        builds = self.api.get_all(f"/v1/builds?filter[app]={self.listing.app_id}&filter[version]={number}"
-                                  f"&filter[preReleaseVersion.platform]={platform}")
-        if not builds:
-            self.problems.append(f"build {number} isn't in App Store Connect yet (still uploading?)")
-            return
-        build = builds[0]
-        if build["attributes"].get("processingState") != "VALID":
-            self.problems.append(f"build {number} is {build['attributes'].get('processingState')}, not VALID yet")
+        build = self.processed_build(number, platform)
+        if build is None:
             return
         if version["id"]:
             current = self.api.request("GET", f"/v1/appStoreVersions/{version['id']}/build").get("data")
@@ -887,11 +935,26 @@ def status_version(listing: Listing, api, version_string, page, missing):
     return True
 
 
+def minutes(text):
+    """--wait-build's number. argparse hands it the word after the flag, so a language there is refused by name."""
+    try:
+        value = float(text)
+    except ValueError:
+        value = 0
+    if not 0 < value < float("inf"):
+        raise argparse.ArgumentTypeError(f"{text!r} isn't a number of minutes above 0 (put the languages before "
+                                         "--wait-build, or write --wait-build=45)")
+    return value
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--version", required=True, help="the version string, for example 1.0.2")
     parser.add_argument("--create", action="store_true", help="create the version if it doesn't exist")
     parser.add_argument("--build", help="attach this build number (CFBundleVersion) to the version")
+    parser.add_argument("--wait-build", nargs="?", type=minutes, const=WAIT_BUILD_MINUTES, metavar="MINUTES",
+                        help="wait for App Store Connect to finish processing --build's build, up to this many minutes "
+                             f"({WAIT_BUILD_MINUTES} without a number), instead of going on without it")
     listing = load()
     default = "text,iap,screenshots,review" + (",ios-text,ios-screenshots" if listing.ios is not None else "") + (
         ",ios-header" if listing.ios is not None and listing.ios_header.exists() else "") + (
@@ -909,6 +972,8 @@ def main():
         parser.error(f"--only takes {', '.join(PARTS)}; languages are {' '.join(listing.langs)}")
     if listing.ios is None and any(p.startswith("ios-") for p in parts):
         parser.error("the ios- parts need store.apple.ios in companion.json")
+    if args.wait_build is not None and not args.build:
+        parser.error("--wait-build waits for the build --build names")
     if not listing.app_id:
         sys.exit("companion.json has no store.apple.appId")
     if args.status:
@@ -918,7 +983,7 @@ def main():
     if not check.run(listing, args.langs):
         sys.exit("Fix the listing first (laching/tools/store/check.py).")
 
-    sync = Sync(listing, Client(), args.apply)
+    sync = Sync(listing, Client(), args.apply, wait_build=args.wait_build)
     if not args.apply:
         log("Dry run: nothing is written. Add --apply to push.\n")
     # Each platform's version only when one of its parts asks for it: the Mac and iOS apps have their own version

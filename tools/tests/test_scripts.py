@@ -1499,38 +1499,86 @@ class MacAndroidStoreScreenshotTests(FixtureAppTestCase):
         self.assertIn(f"1-panel-light.png 4000×2000: {sides} (store.canvases)", result.stderr)
         self.assertEqual(list((self.root / "store" / "android-tablet" / "en").iterdir()), [])
 
+    def screenshots_sh(self, calls: list, fails=lambda command: False):
+        """A subprocess.run for screenshots.sh: it notes the command line and, for a capture that works, leaves the two
+        windows in the folder the command names."""
+        def run(command):
+            calls.append(command)
+            if fails(command):
+                return subprocess.CompletedProcess(command, 1)
+            if "--build-only" not in command:
+                for shot in ("panel-light", "home-dark"):
+                    self.screen(Path(command[-2]) / f"{shot}.png", (800, 600))
+            return subprocess.CompletedProcess(command, 0)
+        return run
+
+    def compose(self, tool, runs, *args: str):
+        """main() with screenshots.sh replaced by `runs`: its exit code and the images it printed."""
+        with mock.patch.object(tool.subprocess, "run", runs), contextlib.redirect_stdout(io.StringIO()) as printed:
+            return tool.main([*args]), printed.getvalue().split()
+
     @unittest.skipIf(BASH is None, NO_SHELL)
     def test_mac_captures_another_language_first(self):
         tool = self.load_tool()
         folder = self.root / "build" / "store-captures" / "apple" / "it"
         script = companion.shell_command(TOOLS / "screenshots.sh")
+        build = [*script, "--build-only"]
         calls = []
+        works = self.screenshots_sh(calls)
 
-        def capture(command):
-            calls.append(command)
-            for shot in ("panel-light", "home-dark"):
-                self.screen(folder / f"{shot}.png", (800, 600))
-            return subprocess.CompletedProcess(command, 0)
-
-        def run(*args, runs=capture):
-            with mock.patch.object(tool.subprocess, "run", runs), contextlib.redirect_stdout(io.StringIO()) as printed:
-                return tool.main(["--lang", "it", *args]), printed.getvalue().split()
-
-        self.assertEqual(run(), (0, ["store/it/1-panel-light.png", "store/it/2-home-dark.png"]))
-        self.assertEqual(calls, [[*script, "--only", "panel,home", "--front", str(folder), "it"]])
+        # The app is built, then the windows are captured from that build.
+        self.assertEqual(self.compose(tool, works, "--lang", "it"),
+                         (0, ["store/it/1-panel-light.png", "store/it/2-home-dark.png"]))
+        self.assertEqual(calls, [build, [*script, "--only", "panel,home", "--front", "--no-build", str(folder), "it"]])
         # --only captures its windows alone.
-        self.assertEqual(run("--only", "home"), (0, ["store/it/2-home-dark.png"]))
-        self.assertEqual(calls[-1], [*script, "--only", "home", "--front", str(folder), "it"])
+        self.assertEqual(self.compose(tool, works, "--lang", "it", "--only", "home"), (0, ["store/it/2-home-dark.png"]))
+        self.assertEqual(calls[2:], [build, [*script, "--only", "home", "--front", "--no-build", str(folder), "it"]])
         # A failed capture stops the run, as does no bash to run it (a Windows without Git for Windows).
+        del calls[:]
         with self.assertRaises(SystemExit) as stop:
-            run(runs=lambda command: subprocess.CompletedProcess(command, 1))
+            self.compose(tool, self.screenshots_sh(calls, lambda command: "--no-build" in command), "--lang", "it")
         self.assertEqual(str(stop.exception), "store-screenshots: capturing the it windows failed")
+        self.assertEqual(len(calls), 2)
         no_bash = mock.patch.object(tool.companion, "shell_command", return_value=None)
         with no_bash, self.assertRaises(SystemExit) as stop:
-            run()
+            self.compose(tool, works, "--lang", "it")
         self.assertEqual(str(stop.exception),
                          "store-screenshots: capturing needs bash (Git for Windows); pass a captures folder")
         self.assertEqual(len(calls), 2)
+
+    @unittest.skipIf(BASH is None, NO_SHELL)
+    def test_mac_builds_the_app_once_for_every_language(self):
+        tool = self.load_tool()
+        apple = self.root / "build" / "store-captures" / "apple"
+        script = companion.shell_command(TOOLS / "screenshots.sh")
+        build = [*script, "--build-only"]
+        italian = [*script, "--only", "panel,home", "--front", "--no-build", str(apple / "it"), "it"]
+        german = [*script, "--only", "home", "--front", "--no-build", str(apple / "de"), "de"]
+        calls = []
+
+        # Every language: the source's committed captures need no build, the others share one.
+        self.assertEqual(self.compose(tool, self.screenshots_sh(calls), "--lang", "all"),
+                         (0, ["store/en/1-panel-light.png", "store/en/2-home-dark.png", "store/it/1-panel-light.png",
+                              "store/it/2-home-dark.png", "store/de/1-home-dark.png"]))
+        self.assertEqual(calls, [build, italian, german])
+        # The first capture that fails stops the run and names its language: the ones after it aren't captured.
+        del calls[:]
+        with self.assertRaises(SystemExit) as stop:
+            self.compose(tool, self.screenshots_sh(calls, lambda command: command[-1] == "it"), "--lang", "all")
+        self.assertEqual(str(stop.exception), "store-screenshots: capturing the it windows failed")
+        self.assertEqual(calls, [build, italian])
+        # A build that fails stops it before any capture.
+        del calls[:]
+        with self.assertRaises(SystemExit) as stop:
+            self.compose(tool, self.screenshots_sh(calls, lambda command: command == build), "--lang", "all")
+        self.assertEqual(str(stop.exception),
+                         "store-screenshots: building the app for the captures failed, so no windows were captured")
+        self.assertEqual(calls, [build])
+        # Nothing is built when nothing is captured: the source language alone, or a captures folder.
+        del calls[:]
+        self.assertEqual(self.compose(tool, self.screenshots_sh(calls))[0], 0)
+        self.assertEqual(self.compose(tool, self.screenshots_sh(calls), "--lang", "it", str(apple / "it"))[0], 0)
+        self.assertEqual(calls, [])
 
     def test_only_keeps_a_mac_or_android_folders_others(self):
         for canvas, folder in (("mac", "store/en"), ("android-phone", "store/android-phone/en"),

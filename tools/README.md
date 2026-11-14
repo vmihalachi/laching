@@ -283,8 +283,9 @@ once and is shot as soon as it has drawn, in light and then in dark).
 
 ## `store-screenshots.py`
 
-- App Store images (`--lang LANG|all`: another language's windows are captured in it first; `--only shot,…` re-renders
-  those images alone and keeps the folder's others, refusing a folder that lacks them).
+- App Store images (`--lang LANG|all`: another language's windows are captured in it first, every language from one
+  build of the app; `--only shot,…` re-renders those images alone and keeps the folder's others, refusing a folder
+  that lacks them).
 - The App Store's iPhone, iPad and iPhone Duo images (`--canvas iphone|ipad|duo`: the caption above the simulator's
   screen, from build/store-captures/ios/<device>/<lang>, into push.py's folders).
 - Google Play's from the Android captures (`--canvas android-phone` 1080 × 1920 with the caption above the screen,
@@ -435,7 +436,9 @@ name 55 and description 200; Google Play's push is `push-google.py`).
 ### `store/push.py`
 
 App Store Connect (text, in-app purchases, screenshots, previews, review notes, and a universal app's iOS page and
-iPhone and iPad screenshots; `--status` reads only).
+iPhone and iPad screenshots; `--status` reads only). `--build N` attaches a processed build; right after an upload,
+`--wait-build [minutes]` (30) waits for App Store Connect to process it, asking every 30 seconds, and stops at once on
+a build that ends `FAILED` or `INVALID`.
 
 ### `store/import.py`
 
