@@ -1588,6 +1588,8 @@ class VerifyNotesWhatRan(HookTestCase):
         self.bin.mkdir()
         self.calls = self.root / "calls.log"
         self.fake(self.bin / "java", "exit 0\n")
+        # ktlint on every machine: without one (a hosted Linux runner has none) its own skip would join each run's notes.
+        self.fake(self.bin / "ktlint", "exit 0\n")
         self.fake(self.bin / "dotnet", f'echo "dotnet $*" >> "{self.calls}"\n')
         (self.root / "android").mkdir()
         self.fake(self.root / "android" / "gradlew", f'echo "gradlew $*" >> "{self.calls}"\n'
@@ -1705,9 +1707,7 @@ class VerifyNotesWhatRan(HookTestCase):
         failing = {"DOTNET_FAILS": "1", "GRADLE_FAILS": ":core:test"}
         beside = run(MEET="1", **failing)
         self.assertEqual(beside.returncode, 1, beside.stdout + beside.stderr)
-        # ktlint's line is "ok" or "skip" as the machine has it or not (a hosted Linux runner doesn't), so it's left out.
-        self.assertEqual([line for line in beside.stdout.splitlines()
-                          if not line.startswith(" ") and "ktlint" not in line][-5:], [
+        self.assertEqual([line for line in beside.stdout.splitlines() if not line.startswith(" ")][-5:], [
             "FAIL  dotnet test (Fixture.App.Tests)", "FAIL  gradlew :core:test", "ok    the APK builds",
             "skip  WinUI app: builds on Windows or in the Parallels VM (left alone: --no-vm); push the branch and run "
             "the Windows workflow", "2 check(s) failed."], beside.stderr)
