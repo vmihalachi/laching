@@ -226,6 +226,36 @@ public sealed class ReminderSchedulerTests
         Assert.Equal(new DateTimeOffset(2026, 9, 30, 0, 0, 0, TimeSpan.FromHours(3)), scheduler.EndOfToday);
     }
 
+    /// <summary>
+    /// In the Azores, daylight saving skips midnight on 2026-03-29 (00:00 becomes 01:00, UTC-1 becomes UTC+0). That
+    /// day starts at 01:00, and the rest of it still ends at midnight, not at 01:00 the next day.
+    /// </summary>
+    [Fact]
+    public void TestEndOfTodayWhereMidnightIsSkipped()
+    {
+        var azores = TimeZoneInfo.FindSystemTimeZoneById("Atlantic/Azores");
+        clock = new MockClock(new DateTimeOffset(2026, 3, 29, 12, 0, 0, TimeSpan.Zero));
+        var scheduler = new ReminderScheduler(new SchedulerConfig(), clock, new MockIdle(), new MockBusy(), azores);
+        Assert.Equal(new DateTimeOffset(2026, 3, 30, 0, 0, 0, TimeSpan.Zero), scheduler.EndOfToday);
+        clock.Now = new DateTimeOffset(2026, 3, 28, 12, 0, 0, TimeSpan.FromHours(-1));
+        Assert.Equal(new DateTimeOffset(2026, 3, 29, 1, 0, 0, TimeSpan.Zero), scheduler.EndOfToday);
+    }
+
+    /// <summary>
+    /// In the Azores, daylight saving ends at 01:00 on 2026-10-25 (back to 00:00), so midnight happens twice: the day
+    /// before ends at the first one, and 2026-10-25, 25 hours long, ends at midnight on 2026-10-26.
+    /// </summary>
+    [Fact]
+    public void TestEndOfTodayWhereMidnightRepeats()
+    {
+        var azores = TimeZoneInfo.FindSystemTimeZoneById("Atlantic/Azores");
+        clock = new MockClock(new DateTimeOffset(2026, 10, 24, 12, 0, 0, TimeSpan.Zero));
+        var scheduler = new ReminderScheduler(new SchedulerConfig(), clock, new MockIdle(), new MockBusy(), azores);
+        Assert.Equal(new DateTimeOffset(2026, 10, 25, 0, 0, 0, TimeSpan.Zero), scheduler.EndOfToday);
+        clock.Now = new DateTimeOffset(2026, 10, 25, 0, 30, 0, TimeSpan.FromHours(-1)); // the second 00:30
+        Assert.Equal(new DateTimeOffset(2026, 10, 26, 0, 0, 0, TimeSpan.FromHours(-1)), scheduler.EndOfToday);
+    }
+
     [Fact]
     public void TestSessionCompletedResetsInterval()
     {

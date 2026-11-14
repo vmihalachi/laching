@@ -200,6 +200,28 @@ final class ReminderSchedulerTests: XCTestCase {
         if case .paused = s.status {} else { XCTFail("expected paused") }
     }
 
+    /// In the Azores, daylight saving skips midnight on 2026-03-29 (00:00 becomes 01:00, UTC-1 becomes UTC+0). That
+    /// day starts at 01:00, and the rest of it still ends at midnight, not at 01:00 the next day.
+    func testEndOfTodayWhereMidnightIsSkipped() async throws {
+        let azores = try ConformanceSupport.calendar("Atlantic/Azores")
+        clock = MockClock(try ConformanceSupport.date("2026-03-29T12:00:00+00:00"))
+        let s = ReminderScheduler(config: SchedulerConfig(), clock: clock, idle: MockIdle(), busy: MockBusy(), calendar: azores)
+        XCTAssertEqual(s.endOfToday, try ConformanceSupport.date("2026-03-30T00:00:00+00:00"))
+        clock.now = try ConformanceSupport.date("2026-03-28T12:00:00-01:00")
+        XCTAssertEqual(s.endOfToday, try ConformanceSupport.date("2026-03-29T01:00:00+00:00"))
+    }
+
+    /// In the Azores, daylight saving ends at 01:00 on 2026-10-25 (back to 00:00), so midnight happens twice: the day
+    /// before ends at the first one, and 2026-10-25, 25 hours long, ends at midnight on 2026-10-26.
+    func testEndOfTodayWhereMidnightRepeats() async throws {
+        let azores = try ConformanceSupport.calendar("Atlantic/Azores")
+        clock = MockClock(try ConformanceSupport.date("2026-10-24T12:00:00+00:00"))
+        let s = ReminderScheduler(config: SchedulerConfig(), clock: clock, idle: MockIdle(), busy: MockBusy(), calendar: azores)
+        XCTAssertEqual(s.endOfToday, try ConformanceSupport.date("2026-10-25T00:00:00+00:00"))
+        clock.now = try ConformanceSupport.date("2026-10-25T00:30:00-01:00")  // the second 00:30
+        XCTAssertEqual(s.endOfToday, try ConformanceSupport.date("2026-10-26T00:00:00-01:00"))
+    }
+
     func testSessionCompletedResetsInterval() async {
         let s = makeScheduler(start: ConformanceSupport.monday(10))
         _ = run(s, minutes: 40)

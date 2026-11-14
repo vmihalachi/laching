@@ -269,10 +269,12 @@ public final class ReminderScheduler {
         nextFireDate = nil
     }
 
-    /// Start of the next calendar day, for "Pause for the rest of today".
+    /// Start of the next calendar day, for "Pause for the rest of today". Counted from today's noon, not its start:
+    /// where daylight saving skips midnight, today starts at 01:00, and a day after that is 01:00 tomorrow.
     public var endOfToday: Date {
         let start = calendar.startOfDay(for: clock.now)
-        return calendar.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86_400)
+        return calendar.date(byAdding: .day, value: 1, to: start.addingTimeInterval(12 * 3600)).map { calendar.startOfDay(for: $0) }
+            ?? start.addingTimeInterval(86_400)
     }
 
     public func resume() {

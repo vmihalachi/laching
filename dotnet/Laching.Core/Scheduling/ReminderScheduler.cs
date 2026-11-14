@@ -82,8 +82,11 @@ public sealed class ReminderScheduler
         }
     }
 
-    /// <summary>Start of the next calendar day in <see cref="TimeZone"/>, for "Pause for the rest of today".</summary>
-    public DateTimeOffset EndOfToday => AddLocalDays(StartOfDay(clock.Now), 1);
+    /// <summary>
+    /// Start of the next calendar day in <see cref="TimeZone"/>, for "Pause for the rest of today". Taken from
+    /// tomorrow's date, not today's start plus a day: where daylight saving skips midnight, today starts at 01:00.
+    /// </summary>
+    public DateTimeOffset EndOfToday => AtLocal(LocalDateTime(clock.Now).Date.AddDays(1));
 
     public void Update(SchedulerConfig config)
     {
@@ -292,9 +295,4 @@ public sealed class ReminderScheduler
             : TimeZone.GetUtcOffset(local);
         return new DateTimeOffset(DateTime.SpecifyKind(local, DateTimeKind.Unspecified), offset);
     }
-
-    private DateTimeOffset StartOfDay(DateTimeOffset instant) => AtLocal(LocalDateTime(instant).Date);
-
-    private DateTimeOffset AddLocalDays(DateTimeOffset instant, int days) =>
-        AtLocal(LocalDateTime(instant).AddDays(days));
 }
