@@ -15,6 +15,12 @@ conform fails, one line per problem, when the app:
   - keeps a workflow Laching ships, by file name, instead of using Laching's: its .github/workflows/core.yml must call
     core-linux.yml, its regenerate-vectors.yml vectors-linux.yml, and its copilot-setup-steps.yml must run
     setup-linux.sh (which Claude Code's cloud sessions run too);
+  - has a workflow that runs only on workflow_dispatch and sets `cancel-in-progress: true`: no push supersedes a run
+    there, so a second dispatch on the same branch would only cancel a run that is nearly done;
+  - has a .claude/settings.json whose hooks block lacks one of Laching's hooks (HOOKS: the event, its matcher, the
+    command and the timeout; the app's own hooks, its permissions and every other key are the app's), or calls
+    `<laching.path>/tools/hooks/hook.py` itself, there or in Codex's and Copilot's hooks (.codex/config.toml,
+    .github/hooks/*.json), instead of through the app's one wrapper, .claude/hooks/hook.py;
   - has a skill in .agents/skills named like one of tools/skills that isn't a link into `<laching.path>/tools/skills/`
     (the app's own words for a skill go in .agents/notes/<skill>.md);
   - lacks a link Claude Code, Copilot or Junie finds the skills through: .claude/skills/<skill> to
@@ -71,6 +77,29 @@ WRAPPER_FORM = {
 }
 # setup-linux.sh's first step in a clone made without its submodules.
 BOOTSTRAP = re.compile(r"\bgit\b.*\bsubmodule\s+update\b.*--init")
+# A literal true, block or flow style: an expression (${{ !inputs.commit }}) decides per run and passes. In a flow
+# mapping the key follows its `{` or a comma, and an expression's braces before it (group: ci-${{ github.ref }}) don't
+# end the mapping; a comment after it isn't the setting.
+CANCELS = re.compile(r"""^\s*(concurrency\s*:\s*\{([^#\n]*?[{,])?\s*)?['"]?cancel-in-progress['"]?\s*:\s*['"]?true\b""",
+                     re.I | re.M)
+# Claude Code's settings, the app's wrapper of tools/hooks/hook.py that every agent's hooks call, and where Codex and
+# Copilot keep theirs.
+SETTINGS = ".claude/settings.json"
+HOOK_WRAPPER = ".claude/hooks/hook.py"
+HOOK_CALLERS = re.compile(r"\.codex/config\.toml|\.github/hooks/[^/]+\.json")
+_HOOK = f'python3 "$CLAUDE_PROJECT_DIR/{HOOK_WRAPPER}" '
+# The hooks block of an app's .claude/settings.json, the same in every app: (event, matcher, command, timeout). A change
+# here reaches the apps with their next bump, where conform asks for it.
+HOOKS = (
+    ("SessionStart", "compact|resume", _HOOK + "resume", 10),
+    ("PreToolUse", "Read|Edit|MultiEdit|Write|NotebookEdit|Grep|Bash", _HOOK + "pre", 10),
+    ("PostToolUse", "Edit|MultiEdit|Write|NotebookEdit|Bash", _HOOK + "post", 60),
+    ("Stop", None, _HOOK + "stop", 180),
+)
+# With a scripts/setup-linux.sh: what a Claude Code cloud session installs as it starts.
+SETUP_LINUX_SCRIPT = "scripts/setup-linux.sh"
+SETUP_HOOK = ("SessionStart", "startup",
+              f'[ "$CLAUDE_CODE_REMOTE" != true ] || "$CLAUDE_PROJECT_DIR/{SETUP_LINUX_SCRIPT}"', 600)
 
 
 def tool_paths(tools: Path = TOOLS) -> list[str]:
@@ -186,17 +215,21 @@ def wrapper_problems(config: companion.Config, files: list[str], allowed: set[st
     return problems
 
 
+def workflow_code(root: Path, name: str) -> str | None:
+    """A workflow without its comment lines; None for a file that can't be read."""
+    try:
+        text = (root / name).read_text("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
+
 def workflow_problems(config: companion.Config, files: list[str]) -> list[str]:
     tag = config.get("laching.tag")
     problems, called = [], set()
     for name in files:
-        if not re.match(r"\.github/workflows/[^/]+\.ya?ml$", name):
+        if not re.match(r"\.github/workflows/[^/]+\.ya?ml$", name) or (code := workflow_code(config.root, name)) is None:
             continue
-        try:
-            text = (config.root / name).read_text("utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
         if match := FORKED_BUILD.search(code):
             problems.append(f"{name}: builds the Store packages itself ({match.group(0)}): call Laching's "
                             "windows-release.yml or windows-app.yml (uses: vmihalachi/laching/.github/workflows/...)")
@@ -238,11 +271,8 @@ def shared_workflow_problems(config: companion.Config, files: list[str], allowed
         match = re.fullmatch(r"\.github/workflows/([^/]+)\.ya?ml", name)
         if not match or name in allowed or match.group(1) not in (*CALLERS, COPILOT_SETUP):
             continue
-        try:
-            text = (config.root / name).read_text("utf-8")
-        except (OSError, UnicodeDecodeError):
+        if (code := workflow_code(config.root, name)) is None:
             continue
-        code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
         if match.group(1) == COPILOT_SETUP:
             if not any(SETUP_LINUX.search(line) for line in run_lines(code)):
                 problems.append(f"{name}: sets up its own tools: its steps are actions/checkout with submodules, "
@@ -251,6 +281,114 @@ def shared_workflow_problems(config: companion.Config, files: list[str], allowed
         elif (reusable := CALLERS[match.group(1)]) not in {workflow for workflow, _ in REUSABLE.findall(code)}:
             problems.append(f"{name}: a copy of Laching's {reusable}.yml: call it instead "
                             f"(uses: vmihalachi/laching/.github/workflows/{reusable}.yml@{tag})")
+    return problems
+
+
+def triggers(code: str) -> set[str] | None:
+    """The events that start a workflow, from its top-level `on:` as a word, a one-line list, a one-line mapping (its
+    top-level keys: `{workflow_dispatch: {inputs: …}}` is one event), or a block of events (a mapping or a list); None
+    for a workflow without one, or with one written another way."""
+    lines = code.splitlines()
+    for at, line in enumerate(lines):
+        if not (match := re.match(r"""(?:on|"on"|'on')\s*:(.*)""", line)):
+            continue
+        value = re.sub(r"(^|\s)#.*", "", match.group(1)).strip()
+        if value.startswith("["):
+            return set(re.findall(r"[\w-]+", value)) if value.endswith("]") else None
+        if value.startswith("{"):
+            if not value.endswith("}"):
+                return None
+            # The nested mappings and lists go, innermost first, leaving the keys at the top: `a: , b`.
+            inner, nested = value[1:-1], re.compile(r"\{[^{}\[\]]*\}|\[[^{}\[\]]*\]")
+            while nested.search(inner):
+                inner = nested.sub("", inner)
+            keys = [re.fullmatch(r"""\s*['"]?([\w-]+)['"]?\s*(:.*)?""", item) for item in inner.split(",")
+                    if item.strip()]
+            return {key.group(1) for key in keys} if keys and all(keys) else None
+        if value:
+            return {value.strip("'\"")} if re.fullmatch(r"""['"]?[\w-]+['"]?""", value) else None
+        events, indent = set(), None
+        for child in lines[at + 1:]:
+            depth = len(child) - len(child.lstrip())
+            if not child.strip():
+                continue
+            if depth == 0 and not child.startswith("-"):
+                break
+            indent = depth if indent is None else indent
+            if depth == indent and (event := re.match(r"""\s*(?:-\s+)?['"]?([\w-]+)""", child)):
+                events.add(event.group(1))
+        return events or None
+    return None
+
+
+def dispatch_problems(config: companion.Config, files: list[str], allowed: set[str]) -> list[str]:
+    """The workflows only a dispatch starts that cancel the run in progress."""
+    problems = []
+    for name in files:
+        if name in allowed or not re.fullmatch(r"\.github/workflows/[^/]+\.ya?ml", name):
+            continue
+        code = workflow_code(config.root, name)
+        if code is not None and triggers(code) == {"workflow_dispatch"} and CANCELS.search(code):
+            problems.append(f"{name}: runs only on workflow_dispatch and sets cancel-in-progress: true: no push supersedes "
+                            "a run there, so a second dispatch on the same branch would only cancel a run that is nearly "
+                            "done: set it to false")
+    return problems
+
+
+def hook_calls(settings: object) -> list[tuple[str, str | None, dict]]:
+    """Every hook in a settings.json's hooks block: (its event, its group's matcher, the hook). What isn't the shape
+    Claude Code reads is left out."""
+    hooks = settings.get("hooks") if isinstance(settings, dict) else None
+    calls = []
+    for event, groups in (hooks.items() if isinstance(hooks, dict) else ()):
+        for group in (groups if isinstance(groups, list) else ()):
+            entries = group.get("hooks") if isinstance(group, dict) else None
+            calls += [(event, group.get("matcher") or None, hook) for hook in (entries if isinstance(entries, list) else ())
+                      if isinstance(hook, dict)]
+    return calls
+
+
+def hook_problems(config: companion.Config, files: list[str], allowed: set[str]) -> list[str]:
+    """The agents' hooks: Laching's hooks (HOOKS) in the app's .claude/settings.json, and one form of call in Claude
+    Code's, Codex's and Copilot's, the app's wrapper. An app without a .claude/settings.json has no hooks to check."""
+    laching = config.get("laching.path", "laching").strip("/")
+    tool = f"{laching}/tools/hooks/hook.py"
+    # Either slash, and JSON's doubled backslash.
+    direct = re.compile("/+".join(map(re.escape, tool.split("/"))) + r"(?![\w.-])")
+    problems, settings = [], None
+    for name in files:
+        if name in allowed or not (name == SETTINGS or HOOK_CALLERS.fullmatch(name)):
+            continue
+        try:
+            text = (config.root / name).read_text("utf-8-sig")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if name == SETTINGS:
+            try:
+                settings = json.loads(text)
+            except ValueError as error:
+                problems.append(f"{name}: not JSON ({error}): its hooks block can't be checked")
+                continue
+            commands = [str(hook.get("command", "")) for _, _, hook in hook_calls(settings)]
+        else:
+            commands = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+        if count := sum(len(direct.findall(flat(command))) for command in commands):
+            problems.append(f"{name}: calls {tool} itself ({count} hook(s)): call the app's wrapper, {HOOK_WRAPPER}, which "
+                            "hands the hook the app's root (COMPANION_ROOT), as every agent's hooks do")
+            # The block is checked once its calls are the wrapper's: one line for one cause.
+            settings = None if name == SETTINGS else settings
+    if settings is not None:
+        found = [(event, matcher, hook.get("type"), hook.get("command"), hook.get("timeout"))
+                 for event, matcher, hook in hook_calls(settings)]
+        for event, matcher, command, timeout in (*HOOKS, *([SETUP_HOOK] if SETUP_LINUX_SCRIPT in files else [])):
+            if (event, matcher, "command", command, timeout) not in found:
+                group = {**({"matcher": matcher} if matcher else {}),
+                         "hooks": [{"type": "command", "command": command, "timeout": timeout}]}
+                problems.append(f"{SETTINGS}: hooks.{event} lacks Laching's hook (the matcher, the command and the timeout "
+                                f"as here): {json.dumps(group)}")
+    if SETTINGS in files and not {SETTINGS, HOOK_WRAPPER} & allowed and HOOK_WRAPPER not in files:
+        problems.append(f"{HOOK_WRAPPER}: missing: the wrapper of {tool} the agents' hooks call (the Python template in "
+                        f"{laching}/tools/README.md, *Staying on Laching's tools*, with ../.. for the app's root)")
     return problems
 
 
@@ -341,7 +479,8 @@ def problems(config: companion.Config) -> list[str]:
     allowed = {entry["path"] for entry in config.get("conform.allow", [])}
     files = tracked(config.root)
     return (wrapper_problems(config, files, allowed) + workflow_problems(config, files)
-            + shared_workflow_problems(config, files, allowed) + skill_problems(config)
+            + shared_workflow_problems(config, files, allowed) + dispatch_problems(config, files, allowed)
+            + hook_problems(config, files, allowed) + skill_problems(config)
             + skill_link_problems(config, allowed) + store_problems(config))
 
 
@@ -372,8 +511,9 @@ def app_folders(laching: Path) -> list[Path]:
 
 
 def apps(folders: list[Path], laching: Path = TOOLS.parent) -> int:
-    """One line per app: the release it pins, how far behind the newest that is, and whether it conforms; 1 when the
-    apps pin different releases or one is behind."""
+    """One line per app: the release it pins, how far behind the newest that is, the Laching checkout it is linked to
+    (`companion.py link`), whether the pins that are left agree and whether it conforms; 1 when the apps pin different
+    releases, or one is behind, linked or pinned to more than one release."""
     tags = _tags(laching)
     latest = tags[0] if tags else None
     if latest:
@@ -389,15 +529,20 @@ def apps(folders: list[Path], laching: Path = TOOLS.parent) -> int:
             continue
         tag = config.get("laching.tag") or "?"
         pins[folder.name] = tag
-        disagree = not companion.pins_agree(companion.pins(config))
+        # A linked app isn't on a release, which is drift of its own: the link is named, and only the pins `link` left
+        # alone are compared, as `companion.py pins` compares them there.
+        linked = companion.linked_to(config)
+        disagree = not companion.pins_agree(companion.pins(config, linked=False))
         behind = tags.index(tag) if tag in tags else None
         conform = problems(config)
         notes = [f"{behind} release(s) behind" if behind else "newest" if behind == 0 else "not a release tag"]
+        if linked:
+            notes.append(f"linked to {linked} (companion.py unlink)")
         if disagree:
             notes.append("its pins disagree (companion.py pins)")
         notes.append(f"{len(conform)} conform problem(s)" if conform else "conforms")
         print(f"  {folder.name}: {tag} ({', '.join(notes)})")
-        drift |= bool(behind) or behind is None or disagree
+        drift |= bool(behind) or behind is None or disagree or bool(linked)
     if len(set(pins.values())) > 1:
         print("The apps pin different releases: tools/bump-apps.sh X.Y.Z moves them together.")
         drift = True

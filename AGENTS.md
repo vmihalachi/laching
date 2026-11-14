@@ -135,4 +135,4 @@ The short form; the full rules with their examples are in `docs/conventions.md`.
 
 ## Sessions
 
-One task per session: start a new one for unrelated work and hand off follow-ups instead of continuing here. Before searching for code you don't know the location of, use the `context-explorer` subagent (or `jbcontext search`) so the reads stay out of this context. Read big files by outline (the command under *Read this first*) and then a range, never whole; the hook refuses a whole read over 600 lines. `/compact` at a milestone in a long session.
+One task per session: start a new one for unrelated work and hand off follow-ups instead of continuing here. To find code you can't place, use `jbcontext search`, which keeps the reads out of this context. Read big files by outline (the command under *Read this first*) and then a range, never whole; the hook refuses a whole read over 600 lines. `/compact` at a milestone in a long session.
