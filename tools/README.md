@@ -10,6 +10,7 @@ or `$COMPANION_ROOT`); the schema is [`companion.schema.json`](companion.schema.
 | [`companion.py`](#companionpy) | Loads and validates `companion.json`; the Laching pins, moved, linked and checked. |
 | [`conform.py`](#staying-on-lachings-tools) | `companion.py conform` and `apps`: the app stays on these tools, not copies. |
 | [`bump-apps.sh`](#bump-appssh) | `companion.py bump` in every app checked out next to this Laching checkout. |
+| [`release-gate.py`](#release-gatepy) | The Mac and iOS release gate: a green run on the exact commit, no open skip. |
 | [`l10n.py`](#l10npy) | String Catalog gaps, work files for translators, `.resw`/`.po` exports. |
 | [`phrases.py`](#phrasespy) | Keeps the catalog's `phrase.<id>` keys in step with `phrases.json`. |
 | [`voice.py`, `voice-review.html`](#voicepy-and-voice-reviewhtml) | Records, reviews and publishes the character's voices with ElevenLabs. |
@@ -61,6 +62,8 @@ Tests: `python3 tools/tests/run.py` (over `tools/tests/fixture-app`, a minimal a
 at once; `tools.yml` runs them; Python 3.10 or later, which an older `python3` finds and re-runs under), and for the
 landing package `npx vp test run` in `tools/landing`. `scripts/verify.sh --fast` runs only the tests that cover the
 changed files, from the map in `tools/tests/covering.py`: a new tool or test file goes in it (`test_covering` says so).
+In a Laching clone, `git config core.hooksPath .githooks` once makes `.githooks/pre-commit` run
+`scripts/verify.sh --fast --staged` before each commit (`git commit --no-verify` skips it once).
 
 An app without a phrase bank or a character (a reminder app, say) leaves `character` and `conformance` out of
 `companion.json`: `l10n.py`, the store tools, `verify.sh` and the hook work as usual; `phrases.py`, `voice.py`,
@@ -270,12 +273,49 @@ releases, or one is behind, linked or pinned to more than one release.
 ## `bump-apps.sh`
 
 `companion.py bump` in every app checked out next to this Laching checkout (or the ones named), then each one's
-`verify.sh --fast`; commits nothing. Before any app moves it waits once for NuGet.org to list every package their
-bumps pin (`companion.py bump --wait-only`), so 15 minutes is the longest a release NuGet.org never lists holds it up,
-not 15 per app, and when that wait gives up no app has moved. `--no-wait`, anywhere among the arguments, skips that
-wait and is passed on to each `bump`. `--report` prints `companion.py apps`: each app's pin against the releases, and
-whether it conforms. `bump-apps.sh` runs the Laching checkout's `companion.py`, so it moves an app whose submodule
-predates `bump` (the example: [*Moving to a release, or trying one first*](#moving-to-a-release-or-trying-one-first)).
+`verify.sh --fast`; commits nothing. Each moved app's pure suites (`swift test` on `mac.core`, `dotnet test` on
+`windows.coreTests`, Gradle's `:<android.core>:test`: those this machine has the tools for; unlocked, as
+`scripts/verify.sh` runs them) start in the background, each in its own process group so a run stopped (an interrupt, a
+TERM, its terminal hanging up) stops them too, as it moves; the run waits for them, names each that failed and keeps its
+log. Then `companion.py apps` reports, and its drift (an app behind this checkout's newest tag, linked, pins
+disagreeing, apps on different releases) fails the run; last, each moved app's slow-checks command
+(`cd <app> && scripts/verify.sh`), to start in the background. One run moves an app at a time: each takes a lock in the
+app's Git folder (`laching-bump-apps.lock`, the run's pid inside), a second run on that app exits 2 naming the first,
+and a lock whose run has ended (its pid gone, or no longer a `bump-apps.sh`) is taken over, under a second lock
+(`<lock>.takeover`) so that of two runs finding it so, one does. The report places a release by this checkout's tags, so
+before any lock a vX.Y.Z it lacks is fetched from its origin (the Release run tags on GitHub), and one the origin lacks
+too refuses the run, exit 2, as a version that isn't X.Y.Z does at once. Before any app moves it waits once for
+NuGet.org to list every package their bumps pin (`companion.py bump --wait-only`), so 15 minutes is the longest a
+release NuGet.org never lists holds it up, not 15 per app, and when that wait gives up no app has moved. `--no-wait`,
+anywhere among the arguments, skips that wait and is passed on to each `bump`. `--report` prints `companion.py apps`:
+each app's pin against the releases, and whether it conforms. `bump-apps.sh` runs the Laching checkout's `companion.py`,
+so it moves an app whose submodule predates `bump` (the example:
+[*Moving to a release, or trying one first*](#moving-to-a-release-or-trying-one-first)).
+
+## `release-gate.py`
+
+The `release-mac` and `release-ios` skills' gate before submitting and tagging: the app's workflow that calls
+[`macos-app.yml`](#mac-apps) must have passed on the exact commit the tag names (`gh run list --commit <sha>`), and no
+check the agent hook recorded as skipped (`hooks/hook.py skips --json`) may cover a path that ships (anything outside
+`windows.dir`, `android.dir` and `landing.dir`). For the Mac, a calling job that forwards `hosted` and doesn't set
+`release: false` also needs the run's `Launch the Release app` step green (a job forwarding its own `release` input gets
+`-f release=true` on dispatch too); each calling job is read on its own, so a helper job with `release: false` doesn't
+turn the check off for the release job. The newest run on the commit that ended decides (`--dispatch` starts one when
+there is none or after a cancelled run, on the origin branch whose tip is the commit), read with the workflows as the
+commit has them at the repository's top (where GitHub reads them, whatever folder holds the app); a skip's paths count
+from the app however written (relative or absolute), a skip over a shipped path holds the release whatever platform its
+check tests (an Android replay skipped over `conformance/` holds the Mac), and the skips outside what ships are listed,
+not blocking. When the Mac and the iPhone ship from one commit, gate the Mac first: its hosted run clears the `ios` gate
+too.
+
+```sh
+python3 laching/tools/release-gate.py mac --dispatch   # no run on the commit yet: start one (pushed first)
+python3 laching/tools/release-gate.py ios               # again once the run ends
+```
+
+Exit 0 the release may go ahead, 1 refused (why, and what clears it), 2 a usage or setup error, 3 a run on the commit
+is still going or was just started: start the `gh run watch <id> --exit-status` it prints in the background and run
+the gate again when that ends. It never pushes, tags or reruns anything; a hook without `skips --json` refuses.
 
 ## `l10n.py`
 

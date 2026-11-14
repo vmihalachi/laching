@@ -20,14 +20,36 @@ version or tags.
    - `NuGet: ship|skip (why)` (`scripts/release.sh nuget X.Y.Z`);
    - `Web packages: ship|skip (why)` (`scripts/release.sh web X.Y.Z`);
    - `@laching/landing: yes|no (why)` (`scripts/release.sh landing`).
-2. Dispatch it again without `dry_run`. The `bump` input (default `auto`) forces `patch`, `minor` or `major`. The
+2. **When the release touches `dotnet/` or `tools/windows`**, try it in an app first: the release run tests and packs
+   the packages but builds no WinUI app and runs no VM script, and a pushed tag is spent. This lists what it touches:
+
+   ```sh
+   git fetch --tags
+   git diff --name-only "$(git describe --tags --abbrev=0 origin/master)" origin/master -- dotnet tools/windows
+   ```
+
+   When it lists a file, in a worktree or clone of one app made for this, beside this checkout so that its `../laching`
+   is this one (up to date with `origin/master`), its `laching` submodule initialised: never a checkout other sessions
+   share, since `link` rewrites its pins until `unlink` and the smoke builds and packs from it. In that app:
+
+   ```sh
+   python3 laching/tools/companion.py link   # its Windows projects build this checkout's dotnet/
+   ../laching/tools/windows/vm.sh smoke      # this checkout's VM scripts: the MSIX published and launched in the VM
+   python3 laching/tools/companion.py unlink
+   ```
+
+   Dispatch without `dry_run` only once the smoke passed; a failure is fixed on `master` first. No VM on this Mac: leave
+   the release to a machine that has one rather than tag untried. There is no hosted stand-in for the smoke yet: an
+   app's Windows workflow on GitHub's runners builds the Laching release it pins, never this checkout.
+3. Dispatch it again without `dry_run`. The `bump` input (default `auto`) forces `patch`, `minor` or `major`. The
    dispatch is the only human gate: nothing waits for an approval after it.
 
 Nothing remote is written until everything that ships has been tested and packed. The plan job bumps in its runner and
 runs `scripts/verify.sh --version`; when NuGet ships, the core and windows jobs test and pack the six packages at X.Y.Z
 from that same bumped tree, when the web packages ship the web job tests (against a postgres service) and packs them,
-and the landing job packs `@laching/landing`. On every release the swift and kotlin jobs run `swift.yml` and
-`kotlin.yml` (the vectors check included) on the planned commit, and the tag waits for both green. Only then does the
+and the landing job packs `@laching/landing`. On every release the swift, kotlin and tools jobs run `swift.yml`,
+`kotlin.yml` (the vectors check included) and `tools.yml` (the tools tests) on the planned commit, and the tag waits for
+all three green. Only then does the
 tag job push the `X.Y.Z: release` commit and its `vX.Y.Z` tag to `master`, in one atomic push onto the commit that was
 planned (if `master` moved meanwhile it pushes nothing: dispatch again), and start the site's deploy. A red test or a
 refused push therefore spends no tag. After the tag, `npm` publishes the landing and `publish` pushes the packages
@@ -87,6 +109,17 @@ Once the Release run is green, from this checkout:
 ```sh
 tools/bump-apps.sh X.Y.Z   # companion.py bump in every app next to this checkout, then its verify.sh --fast
 ```
+
+Run it in the background: it ends when the slowest app's pure suites do. The apps' report it ends with places the
+release by this checkout's tags, so a vX.Y.Z the Release run tagged on GitHub that this checkout hasn't fetched yet is
+fetched from its origin first; one the origin hasn't either refuses the run (exit 2) before any app moves. Each moved
+app's pure suites (`swift test`, the core's `dotnet test`, Gradle's core tests: those this machine has the tools for)
+start in the background as it moves, beside its `verify.sh --fast`, and their logs are kept when one fails. Then the
+apps' report (`companion.py apps`): an app behind this checkout's newest tag, linked, or whose pins disagree fails the
+run, as do the apps on different releases. Last it prints, per app, the command that runs its slow checks
+(`scripts/verify.sh` without `--fast`): start those in the background too before committing. One run moves an app at a
+time: a second one on an app whose lock (`laching-bump-apps.lock` in its Git folder) a live run holds exits 2 at once,
+naming that run.
 
 There is no waiting for NuGet by hand: the green run has seen NuGet.org list the packages, and `companion.py bump`
 asks it again before it writes anything, for the packages the app pins. While one is missing it says what it is waiting

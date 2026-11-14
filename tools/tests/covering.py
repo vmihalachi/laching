@@ -48,6 +48,7 @@ COVERS: dict[str, tuple[str, ...]] = {
     "tools/l10n.py": ("test_l10n",),
     "tools/layoutcheck.py": ("test_screens", "test_scripts"),  # check-layout-ios.py and -android.py
     "tools/phrases.py": ("test_l10n",),
+    "tools/release-gate.py": ("test_release_gate",),
     "tools/screens.py": ("test_screens", "test_scripts"),  # screenshots.sh, check-layout-android.py
     "tools/screenshots.sh": ("test_scripts",),
     "tools/setup-linux.sh": ("test_scripts", "test_setup_linux"),
@@ -80,11 +81,14 @@ COVERS: dict[str, tuple[str, ...]] = {
     "scripts/verify.sh": ("test_covering", "test_release", "test_scripts.LachingVerifyTests"),
     "scripts/fixture-art.sh": ("test_character",),
     ".github/workflows/release.yml": ("test_release",),
+    ".github/workflows/tools.yml": ("test_covering",),  # whose paths test_covering checks against COVERS
     ".github/hooks/laching.json": ("test_conform",),  # under the tool events' names conform asks of an app
     # The reusable Windows workflows, whose steps test_windows runs (ci-package.ps1's) or reads (the SDK check).
     ".github/workflows/windows-app.yml": ("test_windows",),
     ".github/workflows/windows-release.yml": ("test_windows",),
     ".github/workflows/windows-core.yml": ("test_ci_windows_core", "test_windows"),
+    # Laching's own pre-commit hook, which test_githooks commits through.
+    ".githooks/*": ("test_githooks",),
     # The packages' READMEs and the build files that pack them: test_release checks that every link is absolute.
     "dotnet/README.md": ("test_release.PackedReadmeTests",),
     "web/README.md": ("test_release.PackedReadmeTests",),

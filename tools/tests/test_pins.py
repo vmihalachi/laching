@@ -9,8 +9,11 @@ import hashlib
 import io
 import json
 import os
+import shutil
+import signal
 import subprocess
 import sys
+import time
 import unittest
 import urllib.error
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
@@ -448,21 +451,226 @@ class BumpTests(PinsTestCase):
         self.assertEqual(self.asked, [])
         self.assertEqual(companion.load().get("laching.tag"), "v0.6.0")
 
-    def bump_apps(self, *args: str, **extra: str) -> subprocess.CompletedProcess:
-        env = {key: value for key, value in os.environ.items() if key != "COMPANION_ROOT" and not key.startswith("GIT_")}
-        return subprocess.run(["bash", str(TOOLS / "bump-apps.sh"), *args],
-                              capture_output=True, encoding="utf8", env={**env, **extra})
+    def bump_apps_command(self, *args: str, tools: Path | None = None,
+                          **extra: str) -> tuple[list[str], dict[str, str]]:
+        """The command and environment `bump_apps` runs: bump-apps.sh in `tools`, by default `newest_checkout`'s (never
+        this checkout's, whose origin is GitHub), with a `swift` and a `dotnet` first on the PATH (but on Windows) that
+        note where and with what they are started (swift.log and dotnet.log, next to the app), run $FAKE_SWIFT_DO and
+        $FAKE_DOTNET_DO when set, and exit $FAKE_SWIFT_STATUS and $FAKE_DOTNET_STATUS: the pure suites the fixture has,
+        swift test (and dotnet test, given windows.coreTests)."""
+        env = {key: value for key, value in os.environ.items()
+               if key != "COMPANION_ROOT" and not key.startswith("GIT_")}
+        env.update(extra)
+        if not WINDOWS:
+            suites = self.root.parent / "suites"
+            suites.mkdir(exist_ok=True)
+            for tool in ("swift", "dotnet"):
+                name = tool.upper()
+                (suites / tool).write_text(f'#!/bin/sh\necho "$PWD $*" >> "{self.root.parent / f"{tool}.log"}"\n'
+                                           f'if [ -n "$FAKE_{name}_DO" ]; then eval "$FAKE_{name}_DO"; fi\n'
+                                           f'exit "${{FAKE_{name}_STATUS:-0}}"\n', "utf8")
+                (suites / tool).chmod(0o755)
+            env["PATH"] = f"{suites}{os.pathsep}{env.get('PATH', '')}"
+        return ["bash", str((tools or self.newest_checkout()) / "bump-apps.sh"), *args], env
+
+    def bump_apps(self, *args: str, tools: Path | None = None, **extra: str) -> subprocess.CompletedProcess:
+        """bump-apps.sh run to its end, as `bump_apps_command` says."""
+        command, env = self.bump_apps_command(*args, tools=tools, **extra)
+        return subprocess.run(command, capture_output=True, encoding="utf8", env=env)
+
+    def newest_checkout(self) -> Path:
+        """The tools of a Laching checkout whose newest release is the fixture app's pin, v0.5.0 (a clone of the origin
+        without v0.6.0, this checkout's tools copied in; made once per test): the apps' report finds the app on the
+        newest release there, and a tag bump-apps.sh fetches comes from the fixture origin, never GitHub."""
+        checkout = self.root.parent / "laching-checkout"
+        if not checkout.exists():
+            git(self.root.parent, "clone", "-q", str(self.origin), str(checkout))
+            git(checkout, "tag", "-d", "v0.6.0")
+            skipped = shutil.ignore_patterns("tests", "__pycache__", "node_modules")
+            shutil.copytree(TOOLS, checkout / "tools", ignore=skipped)
+        return checkout / "tools"
+
+    def fake_verify(self, script: str) -> None:
+        """The app's own scripts/verify.sh, a shell script with these lines, which bump-apps.sh runs with --fast."""
+        verify = self.root / "scripts" / "verify.sh"
+        verify.parent.mkdir(exist_ok=True)
+        verify.write_text(f"#!/bin/sh\n{script}", "utf8")
+        verify.chmod(0o755)
+
+    @staticmethod
+    def running(pid: int, within: float = 10) -> bool:
+        """Whether `pid` still runs `within` seconds from now: a process stopped is gone, and reaped, well before."""
+        deadline = time.monotonic() + within
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return False
+            time.sleep(0.05)
+        return True
+
+    @staticmethod
+    def stop(pid: int) -> None:
+        """Kills `pid`, if it still runs: a suite a failing test left behind."""
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
     def test_bump_apps_bumps_then_verifies_each_app(self):
-        failing = self.bump_apps("0.7.0", str(self.root))
-        self.assertEqual(failing.returncode, 1)
-        self.assertIn("v0.7.0 isn't a tag", failing.stderr)
-        self.assertIn("bump failed    app", failing.stdout)
-        passing = self.bump_apps("0.5.0", str(self.root))
+        tools = self.newest_checkout()
+        passing = self.bump_apps("0.5.0", str(self.root), tools=tools)
         self.assertEqual(passing.returncode, 0, passing.stdout + passing.stderr)
         self.assertIn("ok    Laching pins agree", passing.stdout)
         self.assertIn("ok             app", passing.stdout)
+        self.assertIn("  app: v0.5.0 (newest, ", passing.stdout, "the apps' report")
+        self.assertNotIn("Fetched", passing.stdout, "a tag the checkout has is used as it is")
+        git(tools.parent, "tag", "v0.7.0")  # in this checkout alone: the origin the app's bump asks hasn't it
+        failing = self.bump_apps("0.7.0", str(self.root), tools=tools)
+        self.assertEqual(failing.returncode, 1)
+        self.assertIn("v0.7.0 isn't a tag on Laching's origin", failing.stderr)
+        self.assertIn("bump failed    app", failing.stdout)
+        self.assertNotIn("pure ", failing.stdout, "no pure suites for an app that didn't move")
         self.assertEqual(self.bump_apps().returncode, 2)
+
+    def test_bump_apps_fails_on_the_apps_report(self):
+        tools = self.newest_checkout()
+        git(tools.parent, "fetch", "-q", "origin", "tag", "v0.6.0")  # its newest release now, past the app's pin
+        result = self.bump_apps("0.5.0", str(self.root), tools=tools)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("ok             app", result.stdout, "the bump and the fast checks passed")
+        self.assertIn("  app: v0.5.0 (", result.stdout)
+        self.assertIn("The apps' report above found drift", result.stdout)
+
+    def test_bump_apps_fetches_the_release_its_checkout_lacks_or_refuses_before_any_app_moves(self):
+        tools = self.newest_checkout()
+        before = self.files()
+        unreleased = self.bump_apps("0.7.0", str(self.root), tools=tools)
+        self.assertEqual(unreleased.returncode, 2, unreleased.stdout + unreleased.stderr)
+        self.assertIn(f"v0.7.0 isn't a tag in {tools.parent}, and fetching it from its origin failed",
+                      unreleased.stderr)
+        self.assertIn(f"git -C {tools.parent} fetch --tags origin", unreleased.stderr)
+        self.assertNotIn("== app", unreleased.stdout, "refused before any app moves")
+        self.assertEqual(self.files(), before, "nor a lock taken")
+        for typo in ("0.24", "0.5.0-rc1", "vv0.5.0", "0.5.0 "):
+            malformed = self.bump_apps(typo, str(self.root), tools=tools)
+            self.assertEqual(malformed.returncode, 2, malformed.stdout + malformed.stderr)
+            self.assertIn(f"'{typo.removeprefix('v')}' isn't a version (X.Y.Z), as companion.py bump takes it",
+                          malformed.stderr, "not a tag to release")
+            self.assertNotIn("isn't a tag", malformed.stderr)
+            self.assertEqual(self.files(), before)
+        # The Release run tagged it on the origin; this checkout hasn't fetched since.
+        git(tools.parent, "tag", "-d", "v0.5.0")
+        fetched = self.bump_apps("v0.5.0", str(self.root), tools=tools)
+        self.assertEqual(fetched.returncode, 0, fetched.stdout + fetched.stderr)
+        self.assertIn(f"Fetched v0.5.0 into {tools.parent}, for the apps' report", fetched.stdout)
+        self.assertIn("  app: v0.5.0 (newest, ", fetched.stdout, "placed as the newest release, not as no release")
+        self.assertEqual(git(tools.parent, "tag", "--list", "v0.5.0"), "v0.5.0")
+
+    @unittest.skipIf(WINDOWS, NO_SHEBANG)
+    def test_bump_apps_runs_the_pure_suites_in_the_background_and_names_the_slow_command(self):
+        tools, swift, dotnet = self.newest_checkout(), self.root.parent / "swift.log", self.root.parent / "dotnet.log"
+        passing = self.bump_apps("0.5.0", str(self.root), tools=tools)
+        self.assertEqual(passing.returncode, 0, passing.stdout + passing.stderr)
+        self.assertIn("pure ok        app: swift test\n", passing.stdout)
+        self.assertEqual(swift.read_text("utf8"), f"{self.root.resolve()} test --package-path macos/FixtureCore\n")
+        self.assertFalse(dotnet.exists(), "no windows.coreTests, no dotnet test")
+        self.assertIn(f"  cd {self.root} && {tools / 'verify.sh'}\n", passing.stdout, "the slow checks, to run next")
+        manifest = self.root / "companion.json"
+        config = json.loads(manifest.read_text("utf8"))
+        config["windows"]["coreTests"] = "Fixture.Core.Tests"
+        manifest.write_text(json.dumps(config, indent=2) + "\n", "utf8")
+        failing = self.bump_apps("0.5.0", str(self.root), tools=tools, FAKE_SWIFT_STATUS="1")
+        self.assertEqual(failing.returncode, 1, failing.stdout + failing.stderr)
+        self.assertIn("ok             app", failing.stdout, "the fast checks passed")
+        self.assertIn("pure failed    app: swift test (log: ", failing.stdout, "only the one that failed")
+        self.assertIn("swift test failed (exit 1)", failing.stdout, "the log's tail")
+        project = "Fixture.Core.Tests/Fixture.Core.Tests.csproj"
+        self.assertEqual(dotnet.read_text("utf8"), f"{self.root.resolve() / 'windows'} test {project} -v q --nologo\n",
+                         "in windows.dir, after the swift test that failed")
+
+    @unittest.skipIf(WINDOWS, NO_SHEBANG)
+    def test_bump_apps_runs_the_pure_suites_side_by_side_with_the_fast_checks(self):
+        # The app's fast checks and the swift test each mark their start, then wait for the other's: run one after the
+        # other, in either order, the first would wait in vain.
+        checking, testing = self.root.parent / "verify.began", self.root.parent / "swift.began"
+
+        def meets(mark: Path, other: Path, name: str) -> str:
+            return (f': > "{mark}"\ni=0\nwhile [ ! -e "{other}" ]; do\n  i=$((i + 1))\n'
+                    f'  [ "$i" -lt 200 ] || {{ echo "no {name} began beside it"; exit 1; }}\n  sleep 0.1\ndone\n')
+
+        self.fake_verify(meets(checking, testing, "swift test"))
+        result = self.bump_apps("0.5.0", str(self.root), FAKE_SWIFT_DO=meets(testing, checking, "fast check"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("ok             app", result.stdout, "the fast checks saw the swift test begin")
+        self.assertIn("pure ok        app: swift test\n", result.stdout, "and it saw them")
+        self.assertIn(f"  cd {self.root} && scripts/verify.sh\n", result.stdout, "the app's own, for the slow checks")
+
+    @unittest.skipIf(WINDOWS, "Git Bash's process ids aren't Windows'")
+    def test_bump_apps_stopped_stops_the_pure_suites_it_started(self):
+        # Stopped, or its terminal gone (a hang-up, which never reaches the suites: their process groups are their own).
+        pid_file = self.root.parent / "swift.pid"
+        self.fake_verify("")
+        for stop, status in ((signal.SIGTERM, 143), (signal.SIGINT, 130), (signal.SIGHUP, 129)):
+            with self.subTest(signal=stop.name):
+                pid_file.unlink(missing_ok=True)
+                command, env = self.bump_apps_command("0.5.0", str(self.root),
+                                                      FAKE_SWIFT_DO=f'echo $$ > "{pid_file}"; exec sleep 120')
+                run = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                       encoding="utf8")
+                self.addCleanup(lambda run=run: run.poll() is not None or run.kill())
+                deadline = time.monotonic() + 60
+                while not (pid_file.exists() and pid_file.read_text("utf8").strip()) and time.monotonic() < deadline:
+                    self.assertIsNone(run.poll(), "bump-apps.sh ended before its swift test began")
+                    time.sleep(0.05)
+                swift = int(pid_file.read_text("utf8"))
+                self.addCleanup(self.stop, swift)
+                run.send_signal(stop)
+                out, _ = run.communicate(timeout=60)
+                self.assertEqual(run.returncode, status, out)
+                self.assertFalse(self.running(swift), "the swift test it started stops with it, not just the shell")
+                self.assertFalse((self.root / ".laching-bump-apps.lock").exists(), "its lock let go")
+
+    @unittest.skipIf(WINDOWS, "Git Bash's process ids aren't Windows'")
+    def test_bump_apps_refuses_an_app_another_run_is_moving(self):
+        git(self.root, "init", "-q")
+        self.fake_verify("")  # Laching's own fast checks need a commit
+        lock = self.root / ".git" / "laching-bump-apps.lock"
+        takeover = Path(f"{lock}.takeover")
+        lock.mkdir()
+        # Another run: a process whose command line is a bump-apps.sh's, alive until its stdin closes.
+        other = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()", "bump-apps.sh"],
+                                 stdin=subprocess.PIPE)
+        self.addCleanup(other.wait)
+        self.addCleanup(other.stdin.close)
+        (lock / "pid").write_text(f"{other.pid}\n", "utf8")
+        held = self.bump_apps("0.5.0", str(self.root))
+        self.assertEqual(held.returncode, 2, held.stdout + held.stderr)
+        self.assertIn(f"Another bump-apps.sh (pid {other.pid}) is moving {self.root}", held.stderr)
+        self.assertNotIn("== app", held.stdout)
+        self.assertEqual((lock / "pid").read_text("utf8"), f"{other.pid}\n", "the other run's lock stays")
+        (lock / "pid").unlink()
+        starting = self.bump_apps("0.5.0", str(self.root))
+        self.assertEqual(starting.returncode, 2, "a lock with no pid yet is held too")
+        self.assertIn(str(lock), starting.stderr, "named, to remove when no run holds it")
+        ended = subprocess.Popen([sys.executable, "-c", ""])
+        ended.wait()
+        (lock / "pid").write_text(f"{ended.pid}\n", "utf8")
+        takeover.mkdir()
+        racing = self.bump_apps("0.5.0", str(self.root))
+        self.assertEqual(racing.returncode, 2, "another run is taking the dead run's lock over")
+        self.assertIn(str(takeover), racing.stderr)
+        self.assertEqual((lock / "pid").read_text("utf8"), f"{ended.pid}\n", "left to that run")
+        takeover.rmdir()
+        for gone in (ended.pid, os.getpid()):  # a run that ended, and a pid now another program's
+            lock.mkdir(exist_ok=True)
+            (lock / "pid").write_text(f"{gone}\n", "utf8")
+            stale = self.bump_apps("0.5.0", str(self.root))
+            self.assertIn(f"Took over {self.root}'s lock from pid {gone}", stale.stdout, stale.stderr)
+            self.assertIn("== app", stale.stdout)
+            self.assertEqual(stale.returncode, 0, stale.stdout + stale.stderr)
+            self.assertFalse(lock.exists(), "and let go at the end")
+            self.assertFalse(takeover.exists())
 
     @unittest.skipIf(WINDOWS, NO_SHEBANG)
     def test_bump_apps_waits_once_first_or_passes_no_wait_on(self):
@@ -473,42 +681,40 @@ class BumpTests(PinsTestCase):
             f'#!/bin/sh\necho "$*" >> "{log}"\ncase " $* " in *" --wait-only "*) [ -z "$GIVE_UP" ] || exit 3 ;; esac\n'
             f'exec "{sys.executable}" "$@"\n', "utf8")
         (fakes / "python3").chmod(0o755)
-        path = f"{fakes}{os.pathsep}{os.environ.get('PATH', '')}"
+        path, tools = f"{fakes}{os.pathsep}{os.environ.get('PATH', '')}", self.newest_checkout()
         for args in (("--no-wait", "0.5.0", str(self.root)), ("0.5.0", "--no-wait", str(self.root)),
                      ("0.5.0", str(self.root), "--no-wait")):
             log.write_text("", "utf8")
-            result = self.bump_apps(*args, PATH=path)
+            result = self.bump_apps(*args, tools=tools, PATH=path)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("ok             app", result.stdout)
             self.assertIn("companion.py bump --no-wait 0.5.0\n", log.read_text("utf8"), args)
             self.assertNotIn("--wait-only", log.read_text("utf8"), args)
         log.write_text("", "utf8")
-        self.assertEqual(self.bump_apps("0.5.0", str(self.root), PATH=path).returncode, 0)
-        calls, tool = log.read_text("utf8").splitlines(), TOOLS / "companion.py"
+        self.assertEqual(self.bump_apps("0.5.0", str(self.root), tools=tools, PATH=path).returncode, 0)
+        calls, tool = log.read_text("utf8").splitlines(), tools / "companion.py"
         self.assertEqual([call for call in calls if " bump " in call],
                          [f"{tool} bump --wait-only 0.5.0 {self.root}", f"{tool} bump 0.5.0"],
                          "one wait for every app first, then each bump")
         log.write_text("", "utf8")
-        given_up = self.bump_apps("0.5.0", str(self.root), PATH=path, GIVE_UP="1")
+        given_up = self.bump_apps("0.5.0", str(self.root), tools=tools, PATH=path, GIVE_UP="1")
         self.assertEqual(given_up.returncode, 3, "the wait's own status")
         self.assertNotIn("== app", given_up.stdout)
         self.assertNotIn("bump 0.5.0", log.read_text("utf8"))
+        self.assertFalse((self.root / ".laching-bump-apps.lock").exists(), "the lock, outside Git in the app, let go")
         usage = self.bump_apps("--no-wait")
         self.assertEqual(usage.returncode, 2)
         self.assertIn("bump-apps.sh --no-wait 0.9.1", usage.stderr)
         self.assertIn("bump-apps.sh --report", self.bump_apps("--help").stdout, "the usage's last line")
 
     def test_bump_apps_finds_the_apps_next_to_its_checkout_but_not_worktrees(self):
-        tools = self.root.parent / "checkout" / "tools"
-        tools.mkdir(parents=True)
-        for name in ("bump-apps.sh", "companion.py", "companion.schema.json", "conform.py"):
-            (tools / name).write_bytes((TOOLS / name).read_bytes())
+        tools = self.newest_checkout()
+        git(tools.parent, "tag", "v0.7.0")  # in this checkout alone: the app's bump fails, once the apps are found
         worktree = self.root.parent / "app-worktree"
         worktree.mkdir()
         (worktree / "companion.json").write_text("{}", "utf8")
         (worktree / ".git").write_text("gitdir: elsewhere\n", "utf8")
-        result = subprocess.run(["bash", str(tools / "bump-apps.sh"), "0.7.0"], capture_output=True, encoding="utf8",
-                                env={key: value for key, value in os.environ.items() if key != "COMPANION_ROOT"})
+        result = self.bump_apps("0.7.0", tools=tools)
         self.assertIn("Skipping app-worktree: a git worktree", result.stdout)
         self.assertIn("bump failed    app", result.stdout)
         self.assertNotIn("== app-worktree", result.stdout)

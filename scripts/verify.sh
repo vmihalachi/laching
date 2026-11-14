@@ -18,8 +18,10 @@
 #   tools/**, Tests/Fixtures/**,        the tools' Python tests (with --fast, the ones that cover the changed paths:
 #   scripts/{release,verify,            tools/tests/covering.py), fixture art current
 #   fixture-art}.sh, release.yml,
+#   tools.yml,
 #   windows-{app,release,core}.yml,
 #   .github/hooks/laching.json,
+#   .githooks/**,
 #   {dotnet,web}/README.md and
 #   Directory.Build.targets
 #   tools/landing/**                    @laching/landing: types, lint, format, tests (Node 24)
@@ -37,7 +39,7 @@ while [ $# -gt 0 ]; do
     --all) all=1 ;;
     --staged) mode=staged ;;
     --version) [ $# -ge 2 ] || { echo "--version needs X.Y.Z (see --help)" >&2; exit 2; }; version="$2"; shift ;;
-    -h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1 (see --help)" >&2; exit 2 ;;
   esac
   shift
@@ -52,10 +54,12 @@ dotnet='^dotnet/|^conformance/|^Tests/LachingCompanionTests/Resources/|^Tests/La
 kotlin='^kotlin/'
 # release.sh, verify.sh and release.yml are what test_release runs (verify.sh test_scripts too), and the packages'
 # READMEs and the build files that pack them what it reads; fixture-art.sh is what the fixture art check runs. The
-# Windows workflows are what test_windows runs or reads, and laching.json what test_conform reads.
+# Windows workflows are what test_windows runs or reads, laching.json what test_conform reads, and .githooks/ what
+# test_githooks commits through. tools.yml's paths list the same files, and test_covering reads both, so tools.yml
+# itself is here too.
 tools='^tools/|^Tests/Fixtures/|^scripts/(release|verify|fixture-art)\.sh$|^\.github/workflows/release\.yml$'
-tools+='|^\.github/hooks/laching\.json$'
-tools+='|^\.github/workflows/windows-(app|release|core)\.yml$'
+tools+='|^\.github/hooks/laching\.json$|^\.githooks/'
+tools+='|^\.github/workflows/(tools|windows-(app|release|core))\.yml$'
 tools+='|^(dotnet|web)/(README\.md|Directory\.Build\.targets)$'
 web='^web/'
 tailwind='^web/(src/Laching\.Web\.Tailwind/|tests/Laching\.Web\.Tailwind\.Sample/|scripts/tailwind-sample\.sh$)'

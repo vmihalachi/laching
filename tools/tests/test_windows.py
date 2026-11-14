@@ -589,7 +589,8 @@ class AppWorkflowTests(unittest.TestCase):
 
     def test_covering_maps_each_workflow_to_these_tests(self):
         # covering.py's map: a workflow these tests read or run names them, not every test or none. Whether a changed
-        # workflow reaches the tools tests at all is verify.sh's tools= pattern and tools.yml's paths, not checked here.
+        # workflow reaches the tools tests at all (verify.sh's tools= pattern and tools.yml's paths) is
+        # test_covering.test_every_file_mapped_outside_tools_reaches_the_tools_tests.
         import covering
 
         for name in ("windows-app.yml", "windows-release.yml", "windows-core.yml"):
