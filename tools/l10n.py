@@ -170,8 +170,16 @@ TAG_RE = re.compile(r"</?[A-Za-z][^>]*>")
 # The conversions that print a number, and of those the integers (a plural counts one of these).
 NUMBER_CONVERSIONS = set("dDiuUoOxXfFeEgGaA")
 INTEGER_CONVERSIONS = set("dDiuUoOxX")
-# A `%` with printf's space flag, which in a UI string is text: "100% done", "0% data sent".
+# A `%` with printf's space flag, as "100% done" reads to printf. Apple formats only a string that takes arguments, so
+# in one with no other specifier ("100% on-device, 0% data sent") it's text (`plain`), and beside a number it's a
+# specifier that takes an argument (`%lld % fatto` prints "5 0,000000atto"): a percent sign there is `%%`.
 LITERAL_PERCENT_RE = re.compile(r"%(?:\d+\$)?[-+#0]* ")
+
+
+def plain(text: str) -> bool:
+    """Whether Apple prints `text` as it is: nothing in it but `%` before a space (LITERAL_PERCENT_RE) looks like a
+    specifier, so it takes no argument (a `%%` or a `%#@name@` takes the string's arguments, and so formats it)."""
+    return all(LITERAL_PERCENT_RE.match(m.group(0)) for m in SPEC_RE.finditer(text))
 
 
 # ---------------------------------------------------------------------------------------------- I/O
@@ -272,12 +280,14 @@ def git_show(ref: str, path: Path) -> str | None:
 def arguments(text: str) -> list[tuple[int, str, bool]]:
     """The arguments `text`'s format specifiers take, numbered as Apple counts them: (number, specifier, whether it
     gives its position). A positionless one takes the one after the last positionless one, whatever the others take;
-    `%%` takes none, and neither does a `%#@name@` substitution here, since its argNum comes from the catalog, or a `%`
-    before a space, the text of "100% done" (LITERAL_PERCENT_RE), which a translation may move as it likes."""
+    `%%` takes none, and neither does a `%#@name@` substitution here, since its argNum comes from the catalog, nor
+    anything in a `plain` string ("100% on-device, 0% data sent"), which Apple doesn't format."""
     out, count = [], 0
+    if plain(text):
+        return out
     for m in SPEC_RE.finditer(text):
         token = m.group(0)
-        if m.group(2) == "%" or (m.group(2) == "@" and "#" in token) or LITERAL_PERCENT_RE.match(token):
+        if m.group(2) == "%" or (m.group(2) == "@" and "#" in token):
             continue
         if m.group(1):
             out.append((int(m.group(1)), token, True))
@@ -308,7 +318,9 @@ def markup(text: str) -> list[str]:
 
 def token_problem(english: str, translated: str) -> str | None:
     if specifiers(english) != specifiers(translated):
-        return f"format specifiers {specifiers(english)} != {specifiers(translated)}"
+        percent = any(LITERAL_PERCENT_RE.match(token) for _, token, _ in arguments(translated))
+        hint = ": a percent sign beside a number is %%" if percent else ""
+        return f"format specifiers {specifiers(english)} != {specifiers(translated)}{hint}"
     if markup(english) != markup(translated):
         return f"placeholders/tags {markup(english)} != {markup(translated)}"
     return None
@@ -332,7 +344,17 @@ def form_number_problem(form: str) -> str | None:
         return f"holds another substitution, {nested.group(0)}, which the ports can't take"
     tokens = FORM_TOKEN_RE.finditer(form)
     if loose := [m.group(0) for m in tokens if m.group(0) != "%arg" and m.group(2) != "%" and not m.group(1)]:
+        if percent := [token for token in loose if LITERAL_PERCENT_RE.match(token)]:
+            return f"{percent[0]!r} is a specifier to Apple, beside the string's arguments, and prints one that isn't there: write the percent sign as %%"
         return f"{', '.join(loose)} needs its position, as %2$lld"
+    return None
+
+
+def percent_problem(text: str) -> str | None:
+    """A `%` before a space that Apple reads as a specifier, since `text` takes arguments, or None: in a `plain`
+    string it's text."""
+    if percent := [token for _, token, _ in arguments(text) if LITERAL_PERCENT_RE.match(token)]:
+        return f"{percent[0]!r} is a specifier to Apple, beside the string's arguments, and prints one that isn't there: write the percent sign as %%"
     return None
 
 
@@ -556,14 +578,21 @@ def plural_problem(forms) -> str | None:
     return None
 
 
-def placement_problem(value: str, counts: dict[str, int | None]) -> str | None:
-    """Why Apple can't place a string's numbers around its substitutions ({name: argNum}), or None:
-    - one without an argNum, which Xcode always writes (Apple would take the next argument, the ports can't tell);
+def placement_problem(value: str, subs: dict[str, dict]) -> str | None:
+    """Why Apple can't place a string's numbers around its substitutions ({name: {argNum, formatSpecifier, …}}), or
+    None:
+    - one without an argNum or a formatSpecifier, which Xcode always writes (without an argNum Apple takes the next
+      argument and the ports can't tell which; without a formatSpecifier the build fails);
     - `%N$#@name@` at another argument than its argNum: Apple picks the plural form by argument N but prints argNum's;
     - a number without a position that takes a substitution's argument: Apple numbers positionless specifiers without
       counting the substitution, so `%#@hours@, %lld min` prints the hours twice."""
-    if unnumbered := [name for name, number in counts.items() if number is None]:
-        return f"%#@{unnumbered[0]}@ has no argNum: give it the number of the argument it counts, as Xcode writes it"
+    for name, sub in subs.items():
+        if sub.get("argNum") is None:
+            return f"%#@{name}@ has no argNum: give it the number of the argument it counts, as Xcode writes it"
+        if not sub.get("formatSpecifier"):
+            return (f"%#@{name}@ has no formatSpecifier: give it the conversion of the number it counts, as lld, as "
+                    "Xcode writes it")
+    counts = {name: sub["argNum"] for name, sub in subs.items()}
     for m in re.finditer(r"%(\d+)\$#@([A-Za-z0-9_]+)@", value):
         position, name = int(m.group(1)), m.group(2)
         if counts.get(name, position) != position:
@@ -578,20 +607,23 @@ def placement_problem(value: str, counts: dict[str, int | None]) -> str | None:
 
 
 def number_problem(entry: dict) -> str | None:
-    """Why Apple can't place a number in a catalog entry, in any language, or None: a plural over two numbers
-    (`plural_problem`), a number misplaced around a substitution (`placement_problem`), or one a substitution's form
-    doesn't place (`form_number_problem`). The source language is read first, so a mistake every translation copies
-    is named where it's made."""
+    """Why Apple can't place a number in a catalog entry, in any language, or None: a `%` before a space it reads as
+    a specifier (`percent_problem`), a plural over two numbers (`plural_problem`), a number misplaced around a
+    substitution (`placement_problem`), or one a substitution's form doesn't place (`form_number_problem`). The source
+    language is read first, so a mistake every translation copies is named where it's made."""
     localizations = entry.get("localizations", {})
     for lang in sorted(localizations, key=lambda code: code != SOURCE):
         loc = localizations[lang]
         units = loc.get("variations", {}).get("plural", {}).values()
         forms = [unit.get("stringUnit", {}).get("value", "") for unit in units]
+        value = loc.get("stringUnit", {}).get("value", "")
+        for text in [*forms, value]:
+            if why := percent_problem(text):
+                return f"{lang} {text!r}: {why}"
         if why := plural_problem(forms):
             return f"{lang} {' / '.join(repr(form) for form in dict.fromkeys(forms))} is {why}"
         subs = loc.get("substitutions", {})
-        value = loc.get("stringUnit", {}).get("value", "")
-        if why := placement_problem(value, {name: sub.get("argNum") for name, sub in subs.items()}):
+        if why := placement_problem(value, subs):
             return f"{lang} {value!r}: {why}"
         for name, sub in subs.items():
             for cat, unit in sub.get("variations", {}).get("plural", {}).items():
@@ -853,8 +885,7 @@ def validate_item(key: str, item: dict, entry: dict, lang: str) -> list[str]:
         problems = ["value must be a string"]
     else:
         problems = [p] if (p := token_problem(english, value)) else []
-        counts = {name: sub["argNum"] for name, sub in english_subs.items()}
-        if english_subs and (why := placement_problem(value, counts)):
+        if english_subs and (why := placement_problem(value, english_subs)):
             problems.append(why)
     given = item.get("substitutions") or {}
     for name, sub in english_subs.items():
@@ -1113,14 +1144,17 @@ def form_to_net(form: str, arg: int, text: str) -> str:
 def to_net_format(text: str, substitutions: dict | None = None, variant: str | None = None) -> str:
     """Apple format → .NET composite format. `%lld`/`%@` become `{n}` in order, `%2$@` becomes
     `{1}`, `%%` becomes `%`, braces are doubled. A `%#@name@` substitution is replaced by its
-    `variant` (a plural category), converted by `form_to_net`."""
+    `variant` (a plural category), converted by `form_to_net`. A `plain` string keeps its `%`s, as Apple prints it."""
     out, index, pos = [], 0, 0
     pattern = re.compile(SUBST_RE.pattern + "|" + SPEC_RE.pattern)
+    literal = plain(text)
     for m in pattern.finditer(text):
         out.append(text[pos:m.start()].replace("{", "{{").replace("}", "}}"))
         pos = m.end()
         token = m.group(0)
-        if token == "%%":
+        if literal:
+            out.append(token)
+        elif token == "%%":
             out.append("%")
         elif m.group(1):
             sub = (substitutions or {}).get(m.group(1))
