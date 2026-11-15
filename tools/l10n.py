@@ -266,8 +266,23 @@ def git_show(ref: str, path: Path) -> str | None:
 
 
 def specifiers(text: str) -> list[str]:
-    # Positional indices (%1$@) are dropped so translations may reorder arguments.
-    return sorted(re.sub(r"^%\d+\$", "%", m.group(0)) for m in SPEC_RE.finditer(text) if m.group(2) != "%")
+    """The format specifiers in `text`, each with the argument it takes: a positionless one is numbered as Apple
+    counts it (`%@ moved %lld` holds `%1$@` and `%2$lld`), so a translation may reorder arguments with positions but
+    never hand one to another specifier. A `%#@name@` substitution is `%#@`: its argNum comes from the catalog, and
+    Apple's count skips it."""
+    out, count = [], 0
+    for m in SPEC_RE.finditer(text):
+        token = m.group(0)
+        if m.group(2) == "%":
+            continue
+        if m.group(2) == "@" and "#" in token:
+            out.append("%#@")
+        elif m.group(1):
+            out.append(token)
+        else:
+            count += 1
+            out.append(f"%{count}${token[1:]}")
+    return sorted(out)
 
 
 def markup(text: str) -> list[str]:
@@ -288,16 +303,20 @@ FORM_TOKEN_RE = re.compile(r"%arg|" + SPEC_RE.pattern)
 
 def form_specifiers(form: str) -> list[str]:
     """The format specifiers in a substitution's plural form besides `%arg`, positions kept: the form is spliced into
-    its string, so a number there names its argument (`%2$lld`) and a translation can't move it."""
+    its string, so a number there names its argument (`%2$lld`) and a translation can't renumber it."""
     return sorted(m.group(0) for m in FORM_TOKEN_RE.finditer(form) if m.group(0) != "%arg" and m.group(2) != "%")
 
 
 def form_problem(english: str, translated: str) -> str | None:
     """Why a substitution's translated plural form doesn't match its English one (`other`): none when it does."""
-    if not any(m.group(0) == "%arg" for m in FORM_TOKEN_RE.finditer(translated)):
+    tokens = list(FORM_TOKEN_RE.finditer(translated))
+    if not any(m.group(0) == "%arg" for m in tokens):
         return "needs %arg"
     if form_specifiers(english) != form_specifiers(translated):
         return f"format specifiers {form_specifiers(english)} != {form_specifiers(translated)}"
+    if loose := [m.group(0) for m in tokens
+                 if m.group(0) != "%arg" and m.group(2) != "%" and not m.group(1) and "#" not in m.group(0)]:
+        return f"{', '.join(loose)} needs its position, as %2$lld"
     if markup(english) != markup(translated):
         return f"placeholders/tags {markup(english)} != {markup(translated)}"
     return None
@@ -353,13 +372,16 @@ def english_form(sub: dict) -> str:
 
 def substitution_issues(entry: dict, lang: str) -> list[str]:
     """Each source substitution must have every plural category `lang` uses, filled in, each form with `%arg` and the
-    English form's other specifiers."""
+    English form's other specifiers, and count the argument the English counts, as the same type."""
     english = english_substitutions(entry)
     if not english:
         return []
     subs = entry.get("localizations", {}).get(lang, {}).get("substitutions", {})
     issues = []
     for name, sub in english.items():
+        if name in subs:
+            issues += [f"substitution {name}: {field} {subs[name].get(field)!r} != {sub[field]!r}"
+                       for field in ("argNum", "formatSpecifier") if subs[name].get(field) != sub[field]]
         plural = subs.get(name, {}).get("variations", {}).get("plural", {})
         forms = {cat: unit.get("stringUnit", {}).get("value") for cat, unit in plural.items()}
         missing = [cat for cat in categories_for(lang) if not forms.get(cat)]
@@ -487,6 +509,20 @@ def stale_keys() -> dict[str, list[str]]:
     }
 
 
+def ambiguous_plurals() -> dict[str, list[str]]:
+    """The keys whose plural variations, in any language, hold more than one integer specifier: Xcode can't tell which
+    one the plural counts ("Cannot reliably infer argument number…"), even with positions. A substitution says it."""
+    def ambiguous(entry: dict) -> bool:
+        return any(len(INT_SPEC_RE.findall(unit.get("stringUnit", {}).get("value", ""))) > 1
+                   for loc in entry.get("localizations", {}).values()
+                   for unit in loc.get("variations", {}).get("plural", {}).values())
+
+    return {
+        section: [key for key, entry in load_catalog(path)["strings"].items() if ambiguous(entry)]
+        for section, path in CATALOGS.items()
+    }
+
+
 def cmd_status(args) -> int:
     return report(args, strict=False)
 
@@ -500,7 +536,8 @@ def cmd_check(args) -> int:
 
 
 def report(args, strict: bool) -> int:
-    """The gaps per language (one line per problem with `args.verbose`) and the stale keys; with `strict`, 1 on any."""
+    """The gaps per language (one line per problem with `args.verbose`), the stale keys and the plurals over two
+    numbers; with `strict`, 1 on any."""
     report = collect(args.since)
     total = 0
     for lang, sections in report.items():
@@ -516,6 +553,14 @@ def report(args, strict: bool) -> int:
         if keys:
             total += len(keys)
             print(f"stale in {CATALOGS[section].name}: {len(keys)} (run `prune` if the code no longer uses them)")
+            if args.verbose:
+                for key in keys:
+                    print(f"  {key!r}")
+    for section, keys in ambiguous_plurals().items():
+        if keys:
+            total += len(keys)
+            print(f"plural over two numbers in {CATALOGS[section].name}: {len(keys)} (Xcode can't tell which one "
+                  "counts: count it through a substitution, `%#@name@`)")
             if args.verbose:
                 for key in keys:
                     print(f"  {key!r}")
@@ -596,8 +641,9 @@ def work_item(key: str, entry: dict, lang: str, issues: list[str]) -> dict:
         }
     elif isinstance(english, dict):
         item["categories"] = categories
-    elif isinstance(english, str) and INT_SPEC_RE.search(english) and not current:
-        # New keys with a count: the English plural variants may still need creating.
+    elif isinstance(english, str) and len(INT_SPEC_RE.findall(english)) == 1 and not current:
+        # New keys with a count: the English plural variants may still need creating. Not with two numbers: a plural
+        # there can't say which one counts (`ambiguous_plurals`), so it takes a substitution, made in the catalog.
         item["en_plural"] = {"one": "", "other": english}
         item["categories"] = categories
     if current:
@@ -914,7 +960,7 @@ PO_PLURAL_KIND = {
     "zh-Hans": "none",
 }
 
-SUBST_RE = re.compile(r"%#@([A-Za-z0-9_]+)@")
+SUBST_RE = re.compile(r"%(?:\d+\$)?#@([A-Za-z0-9_]+)@")  # `%#@name@`, or with Apple's compiled position, `%1$#@name@`
 CLDR_ORDER = ["zero", "one", "two", "few", "many", "other"]
 
 
@@ -953,7 +999,10 @@ RESW_NAME_PREFIX = 200
 def form_to_net(form: str, arg: int, text: str) -> str:
     """A substitution's plural form → .NET composite format: `%arg` becomes `{arg}`, a number with its position
     (`%2$lld`) `{1}`, `%%` `%`, braces are doubled. A number without a position fails: Apple splices the form into
-    `text`, so which argument it would take isn't the form's to say."""
+    `text`, so which argument it would take isn't the form's to say; so does a substitution inside the form."""
+    if nested := SUBST_RE.search(form):
+        fail(f"the substitution form {form!r} of {text!r} holds another substitution, {nested.group(0)}, "
+             "which the ports can't take")
     out, pos = [], 0
     for m in FORM_TOKEN_RE.finditer(form):
         out.append(form[pos:m.start()].replace("{", "{{").replace("}", "}}"))

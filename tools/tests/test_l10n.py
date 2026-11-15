@@ -199,6 +199,48 @@ class GapTests(L10nTestCase):
         ])
         self.assertEqual(l10n.form_problem("%arg lines", "100%%arg"), "needs %arg", "%%arg is a percent sign and arg")
         self.assertEqual(l10n.form_problem("%arg of %2$@", "%arg {x} %2$@"), "placeholders/tags [] != ['{x}']")
+        self.assertIsNone(l10n.form_problem("%arg lines, 100%%", "%arg righe, 100%%"), "%% isn't a number")
+        self.assertEqual(l10n.form_problem("%arg of %lld", "%arg di %lld"), "%lld needs its position, as %2$lld",
+                         "the ports can't place it, even when the English has it so")
+        swapped = localization({"one": "%arg di %2$lld ottenuto", "other": "%arg di %2$lld ottenuti"})
+        swapped["substitutions"]["earned"].update(argNum=2, formatSpecifier="@")
+        self.assertEqual(l10n.catalog_issues(key, {"localizations": {"en": english, "it": swapped}}, "it"), [
+            "substitution earned: argNum 2 != 1",
+            "substitution earned: formatSpecifier '@' != 'lld'",
+        ])
+
+    def test_a_translation_keeps_each_argument_where_the_english_has_it(self):
+        """Positions may reorder arguments, but a specifier never takes another one's: Apple numbers positionless
+        specifiers on their own, so `%#@hours@, %lld min` would show the hours twice, and a type swap crashes."""
+        self.assertIsNone(l10n.token_problem("%@ moved %lld", "%2$lld spostati da %1$@"))
+        self.assertEqual(l10n.token_problem("%@ moved %lld", "%lld spostati da %@"),
+                         "format specifiers ['%1$@', '%2$lld'] != ['%1$lld', '%2$@']")
+        self.assertEqual(l10n.token_problem("%#@hours@, %2$lld min", "%#@hours@, %lld min"),
+                         "format specifiers ['%#@', '%2$lld'] != ['%#@', '%1$lld']")
+        self.assertEqual(l10n.token_problem("%#@hours@, %2$lld min", "%#@hours@, %1$lld min"),
+                         "format specifiers ['%#@', '%2$lld'] != ['%#@', '%1$lld']")
+        self.assertIsNone(l10n.token_problem("%#@hours@, %2$lld min", "%1$#@hours@, %2$lld min"))
+        self.assertIsNone(l10n.token_problem("100%% of %lld", "%lld al 100%%"))
+
+    def test_a_plural_over_two_numbers_is_reported(self):
+        """Xcode can't tell which number a plural over two counts, positions or not; and export offers no English
+        plural to create for one, so translators don't make another."""
+        def unit(value):
+            return {"stringUnit": {"state": "translated", "value": value}}
+
+        catalog = l10n.load_catalog(l10n.CATALOGS["app"])
+        catalog["strings"]["%lld of %lld earned"] = {"localizations": {
+            "en": {"variations": {"plural": {"one": unit("%lld of %lld earned"), "other": unit("%lld of %lld earned")}}},
+            "ja": {"variations": {"plural": {"other": unit("%1$lld / %2$lld 獲得")}}},
+        }}
+        l10n.dump_catalog(l10n.CATALOGS["app"], catalog)
+        self.assertEqual(l10n.ambiguous_plurals()["app"], ["%lld of %lld earned"])
+        status, out = quiet(l10n.cmd_status, self.args())
+        self.assertEqual(status, 0)
+        self.assertIn("plural over two numbers in Localizable.xcstrings: 1 (Xcode can't tell which one counts", out)
+        self.assertIn("  '%lld of %lld earned'", out)
+        self.assertNotIn("en_plural", l10n.work_item("%lld of %lld done", {}, "de", ["missing"]))
+        self.assertIn("en_plural", l10n.work_item("%lld done", {}, "de", ["missing"]), "one number may still count")
 
     def test_export_and_apply(self):
         out = self.root / "work"
@@ -499,17 +541,30 @@ class ExportTests(L10nTestCase):
             return {"earned": {"argNum": 1, "formatSpecifier": "lld", "variations": {"plural": {
                 "one": {"stringUnit": {"value": one}}, "other": {"stringUnit": {"value": other}}}}}}
 
-        earned = subs("%arg di %2$lld ottenuto", "%arg di %2$lld ottenuti, 100%% {x}")
+        earned = subs("%arg di %2$lld ottenuto", "%arg di %2$lld ottenuti, {x} 100%% {y}")
         self.assertEqual(l10n.to_net_format("%#@earned@", earned, "one"), "{0} di {1} ottenuto")
-        self.assertEqual(l10n.to_net_format("%#@earned@", earned, "other"), "{0} di {1} ottenuti, 100% {{x}}")
-        self.assertEqual(l10n.to_net_format("%#@earned@", earned, "few"), "{0} di {1} ottenuti, 100% {{x}}",
+        self.assertEqual(l10n.to_net_format("%#@earned@", earned, "other"), "{0} di {1} ottenuti, {{x}} 100% {{y}}",
+                         "braces are doubled before and after each token")
+        self.assertEqual(l10n.to_net_format("%#@earned@", earned, "few"), "{0} di {1} ottenuti, {{x}} 100% {{y}}",
                          "a category the language lacks takes its other form")
         self.assertEqual(l10n.to_net_format("%#@earned@, %2$lld", subs("%arg", "%arg"), "one"), "{0}, {1}")
-        err = io.StringIO()
-        with redirect_stderr(err), self.assertRaises(SystemExit) as caught:
-            l10n.to_net_format("%#@earned@", subs("%arg di %lld", "%arg di %2$lld"), "one")
-        self.assertEqual(caught.exception.code, 2)
-        self.assertIn("%lld in the substitution form '%arg di %lld' of '%#@earned@' needs its position", err.getvalue())
+        self.assertEqual(l10n.to_net_format("%1$#@earned@ (%2$lld)", earned, "one"), "{0} di {1} ottenuto ({1})",
+                         "Apple's compiled form, with the substitution's position")
+        left = {"left": {**subs("%arg more break to go!", "%arg more breaks to go!")["earned"], "argNum": 2}}
+        self.assertEqual(l10n.to_net_format("%1$lld done, %#@left@", left, "one"), "{0} done, {1} more break to go!",
+                         "%arg is the argument argNum names")
+
+        def failure(text, substitutions):
+            err = io.StringIO()
+            with redirect_stderr(err), self.assertRaises(SystemExit) as caught:
+                l10n.to_net_format(text, substitutions, "one")
+            self.assertEqual(caught.exception.code, 2)
+            return err.getvalue()
+
+        self.assertIn("%lld in the substitution form '%arg di %lld' of '%#@earned@' needs its position",
+                      failure("%#@earned@", subs("%arg di %lld", "%arg di %2$lld")))
+        self.assertIn("the substitution form '%arg di %#@total@' of '%#@earned@' holds another substitution, %#@total@",
+                      failure("%#@earned@", subs("%arg di %#@total@", "%arg")))
 
     def test_resw_is_valid_and_names_are_unique(self):
         for path, text in self.resw.items():
