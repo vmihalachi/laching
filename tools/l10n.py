@@ -167,7 +167,9 @@ def in_scope(key: str, lang: str) -> bool:
 SPEC_RE = re.compile(r"%(?:(\d+)\$)?[-+ #0]*\d*(?:\.\d+)?(?:hh|h|ll|l|q|z|t|j)?([@dDiuUxXoOfFeEgGcCsSpaA%])")
 BRACE_RE = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
 TAG_RE = re.compile(r"</?[A-Za-z][^>]*>")
-INT_SPEC_RE = re.compile(r"%(?:\d+\$)?(?:ll|l|q|z)?[diu]")
+# The conversions that print a number, and of those the integers (a plural counts one of these).
+NUMBER_CONVERSIONS = set("dDiuUoOxXfFeEgGaA")
+INTEGER_CONVERSIONS = set("dDiuUoOxX")
 
 
 # ---------------------------------------------------------------------------------------------- I/O
@@ -265,23 +267,35 @@ def git_show(ref: str, path: Path) -> str | None:
 # ------------------------------------------------------------------------------------- validation
 
 
+def arguments(text: str) -> list[tuple[int, str, bool]]:
+    """The arguments `text`'s format specifiers take, numbered as Apple counts them: (number, specifier, whether it
+    gives its position). A positionless one takes the one after the last positionless one, whatever the others take;
+    `%%` takes none, and neither does a `%#@name@` substitution here, since its argNum comes from the catalog."""
+    out, count = [], 0
+    for m in SPEC_RE.finditer(text):
+        token = m.group(0)
+        if m.group(2) == "%" or (m.group(2) == "@" and "#" in token):
+            continue
+        if m.group(1):
+            out.append((int(m.group(1)), token, True))
+        else:
+            count += 1
+            out.append((count, token, False))
+    return out
+
+
+def numbers(text: str) -> dict[int, str]:
+    """The arguments `text` prints as numbers, each once however often it's printed: {Apple's number: conversion}."""
+    return {number: token[-1] for number, token, _ in arguments(text) if token[-1] in NUMBER_CONVERSIONS}
+
+
 def specifiers(text: str) -> list[str]:
     """The format specifiers in `text`, each with the argument it takes: a positionless one is numbered as Apple
     counts it (`%@ moved %lld` holds `%1$@` and `%2$lld`), so a translation may reorder arguments with positions but
     never hand one to another specifier. A `%#@name@` substitution is `%#@`: its argNum comes from the catalog, and
     Apple's count skips it."""
-    out, count = [], 0
-    for m in SPEC_RE.finditer(text):
-        token = m.group(0)
-        if m.group(2) == "%":
-            continue
-        if m.group(2) == "@" and "#" in token:
-            out.append("%#@")
-        elif m.group(1):
-            out.append(token)
-        else:
-            count += 1
-            out.append(f"%{count}${token[1:]}")
+    out = ["%#@" for m in SPEC_RE.finditer(text) if m.group(2) == "@" and "#" in m.group(0)]
+    out += [token if positioned else f"%{number}${token[1:]}" for number, token, positioned in arguments(text)]
     return sorted(out)
 
 
@@ -314,8 +328,9 @@ def form_problem(english: str, translated: str) -> str | None:
         return "needs %arg"
     if form_specifiers(english) != form_specifiers(translated):
         return f"format specifiers {form_specifiers(english)} != {form_specifiers(translated)}"
-    if loose := [m.group(0) for m in tokens
-                 if m.group(0) != "%arg" and m.group(2) != "%" and not m.group(1) and "#" not in m.group(0)]:
+    if nested := SUBST_RE.search(translated):
+        return f"holds another substitution, {nested.group(0)}, which the ports can't take"
+    if loose := [m.group(0) for m in tokens if m.group(0) != "%arg" and m.group(2) != "%" and not m.group(1)]:
         return f"{', '.join(loose)} needs its position, as %2$lld"
     if markup(english) != markup(translated):
         return f"placeholders/tags {markup(english)} != {markup(translated)}"
@@ -509,16 +524,31 @@ def stale_keys() -> dict[str, list[str]]:
     }
 
 
-def ambiguous_plurals() -> dict[str, list[str]]:
-    """The keys whose plural variations, in any language, hold more than one integer specifier: Xcode can't tell which
-    one the plural counts ("Cannot reliably infer argument number…"), even with positions. A substitution says it."""
-    def ambiguous(entry: dict) -> bool:
-        return any(len(INT_SPEC_RE.findall(unit.get("stringUnit", {}).get("value", ""))) > 1
-                   for loc in entry.get("localizations", {}).values()
-                   for unit in loc.get("variations", {}).get("plural", {}).values())
+def number_problem(entry: dict) -> str | None:
+    """Why Apple can't place a number in a catalog entry, in any language (the first found), or None:
+    - a plural variation over two numbers: Xcode can't tell which one counts ("Cannot reliably infer argument
+      number…"), even with positions, or fails the build (a whole number and a fraction); a substitution says which;
+    - a number without a position that takes a substitution's argument: Apple numbers positionless specifiers without
+      counting the substitution, so `%#@hours@, %lld min` prints the hours twice."""
+    for lang, loc in entry.get("localizations", {}).items():
+        for unit in loc.get("variations", {}).get("plural", {}).values():
+            value = unit.get("stringUnit", {}).get("value", "")
+            if len(numbers(value)) > 1:
+                return (f"{lang} {value!r} is a plural over {len(numbers(value))} numbers, so Xcode can't tell which "
+                        "one counts: count it through a substitution, %#@name@")
+        counted = {sub.get("argNum"): name for name, sub in loc.get("substitutions", {}).items()}
+        value = loc.get("stringUnit", {}).get("value", "")
+        for number, token, positioned in arguments(value):
+            if not positioned and number in counted:
+                return (f"{lang} {value!r}: {token} takes argument {number}, which %#@{counted[number]}@ counts, as "
+                        "Apple numbers it: give it the position it means, as %2$lld")
+    return None
 
+
+def number_problems() -> dict[str, dict[str, str]]:
+    """Every catalog's entries with a number Apple can't place (`number_problem`), each with why."""
     return {
-        section: [key for key, entry in load_catalog(path)["strings"].items() if ambiguous(entry)]
+        section: {key: why for key, entry in load_catalog(path)["strings"].items() if (why := number_problem(entry))}
         for section, path in CATALOGS.items()
     }
 
@@ -536,8 +566,8 @@ def cmd_check(args) -> int:
 
 
 def report(args, strict: bool) -> int:
-    """The gaps per language (one line per problem with `args.verbose`), the stale keys and the plurals over two
-    numbers; with `strict`, 1 on any."""
+    """The gaps per language (one line per problem with `args.verbose`), the stale keys and the numbers Apple can't
+    place (each with why); with `strict`, 1 on any."""
     report = collect(args.since)
     total = 0
     for lang, sections in report.items():
@@ -556,14 +586,12 @@ def report(args, strict: bool) -> int:
             if args.verbose:
                 for key in keys:
                     print(f"  {key!r}")
-    for section, keys in ambiguous_plurals().items():
-        if keys:
-            total += len(keys)
-            print(f"plural over two numbers in {CATALOGS[section].name}: {len(keys)} (Xcode can't tell which one "
-                  "counts: count it through a substitution, `%#@name@`)")
-            if args.verbose:
-                for key in keys:
-                    print(f"  {key!r}")
+    for section, problems in number_problems().items():
+        if problems:
+            total += len(problems)
+            print(f"numbers Apple can't place in {CATALOGS[section].name}: {len(problems)}")
+            for key, why in problems.items():
+                print(f"  {key!r}: {why}")
     return 1 if total and strict else 0
 
 
@@ -641,9 +669,10 @@ def work_item(key: str, entry: dict, lang: str, issues: list[str]) -> dict:
         }
     elif isinstance(english, dict):
         item["categories"] = categories
-    elif isinstance(english, str) and len(INT_SPEC_RE.findall(english)) == 1 and not current:
+    elif isinstance(english, str) and not current and len(counted := numbers(english)) == 1 \
+            and set(counted.values()) <= INTEGER_CONVERSIONS:
         # New keys with a count: the English plural variants may still need creating. Not with two numbers: a plural
-        # there can't say which one counts (`ambiguous_plurals`), so it takes a substitution, made in the catalog.
+        # there can't say which one counts (`number_problem`), so it takes a substitution, made in the catalog.
         item["en_plural"] = {"one": "", "other": english}
         item["categories"] = categories
     if current:
@@ -1036,8 +1065,12 @@ def to_net_format(text: str, substitutions: dict | None = None, variant: str | N
             sub = (substitutions or {}).get(m.group(1))
             if sub is None or variant is None:
                 fail(f"unresolved substitution {token} in {text!r}")
-            arg = sub.get("argNum", index + 1) - 1
-            index = max(index, arg + 1)
+            # Its argNum says which argument it counts; Apple's positionless count goes on past it, so
+            # `noch %#@left@, %lld fertig` (left counting argument 2) prints argument 1 at `%lld`.
+            if "argNum" in sub:
+                arg = sub["argNum"] - 1
+            else:
+                arg, index = index, index + 1
             units = sub["variations"]["plural"]
             unit = units.get(variant) or units["other"]
             out.append(form_to_net(unit["stringUnit"]["value"], arg, text))

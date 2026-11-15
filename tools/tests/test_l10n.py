@@ -202,6 +202,10 @@ class GapTests(L10nTestCase):
         self.assertIsNone(l10n.form_problem("%arg lines, 100%%", "%arg righe, 100%%"), "%% isn't a number")
         self.assertEqual(l10n.form_problem("%arg of %lld", "%arg di %lld"), "%lld needs its position, as %2$lld",
                          "the ports can't place it, even when the English has it so")
+        self.assertEqual(l10n.form_problem("%arg (%#x)", "%arg (%#x)"), "%#x needs its position, as %2$lld",
+                         "a # flag isn't a substitution")
+        self.assertEqual(l10n.form_problem("%arg of %#@total@", "%arg di %#@total@"),
+                         "holds another substitution, %#@total@, which the ports can't take")
         swapped = localization({"one": "%arg di %2$lld ottenuto", "other": "%arg di %2$lld ottenuti"})
         swapped["substitutions"]["earned"].update(argNum=2, formatSpecifier="@")
         self.assertEqual(l10n.catalog_issues(key, {"localizations": {"en": english, "it": swapped}}, "it"), [
@@ -223,24 +227,57 @@ class GapTests(L10nTestCase):
         self.assertIsNone(l10n.token_problem("100%% of %lld", "%lld al 100%%"))
 
     def test_a_plural_over_two_numbers_is_reported(self):
-        """Xcode can't tell which number a plural over two counts, positions or not; and export offers no English
-        plural to create for one, so translators don't make another."""
+        """Xcode can't tell which number a plural over two counts, positions or not, or can't build it (a whole number
+        and a fraction); and export offers no English plural to create for one, so translators don't make another."""
         def unit(value):
             return {"stringUnit": {"state": "translated", "value": value}}
 
+        def plural(value, lang="en"):
+            return {"localizations": {lang: {"variations": {"plural": {"one": unit(value), "other": unit(value)}}}}}
+
+        cases = {
+            "%lld of %lld earned": True, "%02lld:%02lld": True, "%lld breaks, %.1f min": True, "%lld:%02lld": True,
+            "%1$lld min (%1$lld)": False, "%lld min (%1$lld)": False, "%lld at 100%%d": False, "%lld of %@": False,
+        }
+        for value, ambiguous in cases.items():
+            self.assertEqual(l10n.number_problem(plural(value)) is not None, ambiguous, value)
+        self.assertEqual(l10n.number_problem(plural("%1$lld / %2$lld 獲得", "ja")),
+                         "ja '%1$lld / %2$lld 獲得' is a plural over 2 numbers, so Xcode can't tell which one counts: "
+                         "count it through a substitution, %#@name@")
+
         catalog = l10n.load_catalog(l10n.CATALOGS["app"])
         catalog["strings"]["%lld of %lld earned"] = {"localizations": {
-            "en": {"variations": {"plural": {"one": unit("%lld of %lld earned"), "other": unit("%lld of %lld earned")}}},
-            "ja": {"variations": {"plural": {"other": unit("%1$lld / %2$lld 獲得")}}},
-        }}
+            **plural("%lld of %lld earned")["localizations"], **plural("%1$lld / %2$lld 獲得", "ja")["localizations"]}}
         l10n.dump_catalog(l10n.CATALOGS["app"], catalog)
-        self.assertEqual(l10n.ambiguous_plurals()["app"], ["%lld of %lld earned"])
+        self.assertEqual(list(l10n.number_problems()["app"]), ["%lld of %lld earned"])
         status, out = quiet(l10n.cmd_status, self.args())
         self.assertEqual(status, 0)
-        self.assertIn("plural over two numbers in Localizable.xcstrings: 1 (Xcode can't tell which one counts", out)
-        self.assertIn("  '%lld of %lld earned'", out)
-        self.assertNotIn("en_plural", l10n.work_item("%lld of %lld done", {}, "de", ["missing"]))
-        self.assertIn("en_plural", l10n.work_item("%lld done", {}, "de", ["missing"]), "one number may still count")
+        self.assertIn("numbers Apple can't place in Localizable.xcstrings: 1\n  '%lld of %lld earned': en '%lld of "
+                      "%lld earned' is a plural over 2 numbers", out)
+        for key, offered in {"%lld of %lld done": False, "%lld breaks, %.1f min": False, "%lld:%02lld": False,
+                             "%.1f min": False, "%lld done": True, "%02lld min": True, "%lld of %@": True,
+                             "%lld at 100%%d": True}.items():
+            self.assertEqual("en_plural" in l10n.work_item(key, {}, "de", ["missing"]), offered, key)
+
+    def test_a_number_without_a_position_never_takes_a_substitutions_argument(self):
+        """Apple numbers positionless specifiers without counting a substitution, so `%#@hours@, %lld min` prints the
+        hours twice: reported in any language, the English too, since every translation matches it."""
+        def localization(value, arg=1):
+            forms = {cat: {"stringUnit": {"state": "translated", "value": "%arg hr"}} for cat in ("one", "other")}
+            return {"stringUnit": {"state": "translated", "value": value},
+                    "substitutions": {"hours": {"argNum": arg, "formatSpecifier": "lld",
+                                                "variations": {"plural": forms}}}}
+
+        self.assertEqual(l10n.number_problem({"localizations": {"en": localization("%#@hours@, %lld min")}}),
+                         "en '%#@hours@, %lld min': %lld takes argument 1, which %#@hours@ counts, as Apple numbers it: "
+                         "give it the position it means, as %2$lld")
+        self.assertIn("de ", l10n.number_problem({"localizations": {
+            "en": localization("%#@hours@, %2$lld min"), "de": localization("%lld Min., %#@hours@")}}))
+        self.assertIn("%@ takes argument 1", l10n.number_problem({"localizations": {"en": localization("%@: %#@hours@")}}),
+                      "an object is an argument too")
+        for fine, arg in (("%#@hours@, %2$lld min", 1), ("%1$#@hours@ (%1$lld)", 1), ("%@: %#@hours@", 2),
+                          ("noch %#@hours@, %lld fertig", 2)):
+            self.assertIsNone(l10n.number_problem({"localizations": {"de": localization(fine, arg)}}), fine)
 
     def test_export_and_apply(self):
         out = self.root / "work"
@@ -553,6 +590,12 @@ class ExportTests(L10nTestCase):
         left = {"left": {**subs("%arg more break to go!", "%arg more breaks to go!")["earned"], "argNum": 2}}
         self.assertEqual(l10n.to_net_format("%1$lld done, %#@left@", left, "one"), "{0} done, {1} more break to go!",
                          "%arg is the argument argNum names")
+        self.assertEqual(l10n.to_net_format("noch %#@left@, %lld fertig", left, "one"),
+                         "noch {1} more break to go!, {0} fertig",
+                         "a positionless number takes argument 1, as on Apple: the count goes on past the substitution")
+        unnumbered = {"earned": {key: value for key, value in earned["earned"].items() if key != "argNum"}}
+        self.assertEqual(l10n.to_net_format("%@: %#@earned@", unnumbered, "one"), "{0}: {1} di {1} ottenuto",
+                         "without an argNum, a substitution takes the next argument")
 
         def failure(text, substitutions):
             err = io.StringIO()

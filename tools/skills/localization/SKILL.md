@@ -25,6 +25,12 @@ language) are in the app's `DESIGN.md` and `.agents/notes/localization.md` when 
   Its source text is in its own language (an Italian-only joke is written in Italian).
 - Recorded voices say exactly the catalog text: a changed line is *pending* in every voiced language until it's
   re-recorded (`voice` skill); users never hear it meanwhile.
+- **A phrase with two numbers counts one through a substitution.** A plural over both (`%lld of %lld earned`) makes
+  Xcode warn that it can't tell which number counts, positions or not (a whole number and a fraction fail the build),
+  and `check` reports it. Its English value is `%#@earned@`, a substitution (argNum and formatSpecifier of the counted
+  number) whose forms hold `%arg` for that number and the other with its position (`%arg of %2$lld earned`);
+  translations keep both. Beside a substitution, give every number its position: Apple counts a positionless one
+  without the substitution, so `%#@hours@, %lld min` prints the hours twice (`check` reports that too).
 
 ## Steps
 
