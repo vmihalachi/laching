@@ -1,6 +1,6 @@
 name: Release
 
-# Releases are made on demand: Actions → Release → Run workflow, on master, with dry_run first: the plan job prints the
+# Releases are made on demand: Actions → Release → Run workflow, on main, with dry_run first: the plan job prints the
 # plan (the next version and why, whether NuGet and @laching/landing ship) and stops before anything is built or
 # written. One tag per release; the Swift package and the Kotlin build take the tag, NuGet and npm a new version only
 # when their code changed since their last one. The plan is scripts/release.sh's, the same by hand: `plan` numbers the
@@ -13,7 +13,7 @@ name: Release
 # checks the version strings (scripts/verify.sh --version); core, windows, web and landing test and pack that same
 # bumped tree; swift, kotlin and tools run swift.yml, kotlin.yml and tools.yml on every release, on the planned commit
 # (the bump edits only version strings); only then does the tag job push the "X.Y.Z: release" commit and its vX.Y.Z
-# tag, in one atomic push onto the master that was planned (when master moved meanwhile it pushes nothing: dispatch
+# tag, in one atomic push onto the main that was planned (when main moved meanwhile it pushes nothing: dispatch
 # again). After the push, npm publishes @laching/landing and publish pushes the packages to NuGet.org, makes the GitHub
 # release and waits until NuGet.org lists the packages, so a green run means the apps can bump; both are re-runnable on
 # their own. NuGet through Trusted Publishing (OIDC: no stored key; nuget.org → your account → Trusted
@@ -37,7 +37,7 @@ on:
 permissions:
   contents: read
 
-# One release at a time, a run waiting behind it planned from master as it is then; a dry run never waits or cancels.
+# One release at a time, a run waiting behind it planned from main as it is then; a dry run never waits or cancels.
 concurrency:
   group: ${{ inputs.dry_run && format('release-dry-{0}', github.run_id) || 'release' }}
   cancel-in-progress: false
@@ -80,8 +80,8 @@ jobs:
           set -euo pipefail
           out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; }
           say() { echo "$1" | tee -a "$GITHUB_STEP_SUMMARY"; }
-          if [ "$DRY_RUN" != true ] && [ "$GITHUB_REF" != refs/heads/master ]; then
-            echo "A release runs on master, not $GITHUB_REF (a dry run runs anywhere)"
+          if [ "$DRY_RUN" != true ] && [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "A release runs on main, not $GITHUB_REF (a dry run runs anywhere)"
             exit 1
           fi
           plan=$(scripts/release.sh plan --bump "$BUMP")  # set -e stops here when it fails; inside the read it wouldn't
@@ -376,10 +376,10 @@ jobs:
           [ "$(git write-tree)" = "$TREE" ] || { echo "the bump doesn't give the planned tree"; exit 1; }
           git commit -qm "$VERSION: release"
           git tag -a "v$VERSION" -m "Laching $VERSION"
-          # Both land, on the master that was planned and tested, or neither does.
-          if ! git push -q --atomic origin HEAD:refs/heads/master "refs/tags/v$VERSION"; then
-            if [ "$(git ls-remote origin refs/heads/master | cut -f1)" != "$BASE" ]; then
-              echo "master moved since the plan: nothing was pushed; dispatch the release again"
+          # Both land, on the main that was planned and tested, or neither does.
+          if ! git push -q --atomic origin HEAD:refs/heads/main "refs/tags/v$VERSION"; then
+            if [ "$(git ls-remote origin refs/heads/main | cut -f1)" != "$BASE" ]; then
+              echo "main moved since the plan: nothing was pushed; dispatch the release again"
             else
               echo "origin refused the release commit and v$VERSION (a branch or tag rule, or the tag exists): nothing was pushed"
             fi
@@ -388,7 +388,7 @@ jobs:
           echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "Released $VERSION: v$VERSION at $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
           # The site's version label (a push of ours starts nothing); a failure here strands nothing.
-          gh workflow run pages.yml --ref master || echo "::warning::Couldn't start pages.yml: run it by hand"
+          gh workflow run pages.yml --ref main || echo "::warning::Couldn't start pages.yml: run it by hand"
 
   # @laching/landing to npm through Trusted Publishing (OIDC: no stored token; provenance attached), published directly:
   # the human gate is the release's dispatch. npmjs.com holds one trusted publisher for the package: repository

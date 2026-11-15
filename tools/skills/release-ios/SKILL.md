@@ -23,7 +23,7 @@ update the review notes, push the release commits and tag, and start the release
 it shows something unexpected (another platform's version, screenshots being replaced, a version in an unexpected
 state); a gate that refuses stops the release until it passes, never to be worked around. Still the owner's: new store
 screenshots (ask first), credentials (never handle them), and submitting for review. When another session's unpushed
-commits sit on top, push only the release's own: `git push origin <sha>:refs/heads/master`.
+commits sit on top, push only the release's own: `git push origin <sha>:refs/heads/main`.
 
 ## 1. Decide the version
 

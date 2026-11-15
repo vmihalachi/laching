@@ -79,7 +79,7 @@ plan() {
     elif [ "$prs" -gt 0 ]; then
       level=patch why="patch: none of the $prs pull request$([ "$prs" -eq 1 ] || echo s) merged is labelled breaking"
     else
-      level=patch why="patch: no pull request merged, only commits pushed to master"
+      level=patch why="patch: no pull request merged, only commits pushed to main"
     fi
   fi
   version=$(echo "$previous" | awk -F. -v level="$level" '{

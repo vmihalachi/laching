@@ -20,7 +20,7 @@ release commits and tag, and run the release workflow without stopping to ask. R
 shows something unexpected (images being replaced, a pending submission, a visibility or publish mode that changed).
 Still the owner's: new Store screenshots (ask first), credentials (never handle them), and sending the submission to
 certification (`push-microsoft.py commit`, `-Store submit`, **Submit**). When another session's unpushed commits sit
-on top, push only the release's own: `git push origin <sha>:refs/heads/master`.
+on top, push only the release's own: `git push origin <sha>:refs/heads/main`.
 
 ## 1. Version
 

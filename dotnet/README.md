@@ -44,16 +44,16 @@ The packages ship no strings, product ids or window lists: the app passes them i
 ## A companion app on Windows
 
 On `Laching.Windows.Companion` a WinUI 3 app is a model, its views and three small files.
-[`dotnet/Fixture.App`](https://github.com/vmihalachi/laching/tree/master/dotnet/Fixture.App) is the whole of one, over
+[`dotnet/Fixture.App`](https://github.com/vmihalachi/laching/tree/main/dotnet/Fixture.App) is the whole of one, over
 the fixture bank, and the
-[repository's README](https://github.com/vmihalachi/laching/blob/master/README.md#a-companion-app-on-windows) shows its
+[repository's README](https://github.com/vmihalachi/laching/blob/main/README.md#a-companion-app-on-windows) shows its
 `Program.cs` and `App`.
 
 The app keeps its words, its look (a `CompanionPalette` of `ThemedColor`s), Home, onboarding, the tray panel's layout,
 its own settings and windows, and the MSIX manifest. Its project imports
-[`tools/windows/companion.targets`](https://github.com/vmihalachi/laching/blob/master/tools/windows/companion.targets)
+[`tools/windows/companion.targets`](https://github.com/vmihalachi/laching/blob/main/tools/windows/companion.targets)
 from a `laching/` git submodule: x64 and ARM64, Debug unpackaged and every other configuration an MSIX with Native AOT.
-The [tools](https://github.com/vmihalachi/laching/blob/master/tools/README.md) beside it take screenshots, smoke-test
+The [tools](https://github.com/vmihalachi/laching/blob/main/tools/README.md) beside it take screenshots, smoke-test
 the package and lint the WinUI code that breaks only under Native AOT. Keep the model free of WinUI and its tests run
 on any OS.
 
@@ -61,6 +61,6 @@ on any OS.
 
 - [The repository](https://github.com/vmihalachi/laching): the Swift and Kotlin sides, and how the three stay
   identical.
-- [Getting started](https://github.com/vmihalachi/laching/blob/master/docs/getting-started.md): a new companion app
+- [Getting started](https://github.com/vmihalachi/laching/blob/main/docs/getting-started.md): a new companion app
   from zero.
-- [License](https://github.com/vmihalachi/laching/blob/master/LICENSE): MIT.
+- [License](https://github.com/vmihalachi/laching/blob/main/LICENSE): MIT.

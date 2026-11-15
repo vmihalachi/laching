@@ -16,7 +16,7 @@
     <Authors>Vlad Mihalachi</Authors>
     <Copyright>© 2026 Vlad Mihalachi</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/vmihalachi/laching/tree/master/web</PackageProjectUrl>
+    <PackageProjectUrl>https://github.com/vmihalachi/laching/tree/main/web</PackageProjectUrl>
     <RepositoryUrl>https://github.com/vmihalachi/laching</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>

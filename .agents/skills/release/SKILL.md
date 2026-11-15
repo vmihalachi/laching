@@ -12,7 +12,7 @@ version or tags.
 
 ## Cut one
 
-1. Dispatch **`release.yml`** (Actions → Release → Run workflow, on `master`) with **`dry_run`** checked. Its summary
+1. Dispatch **`release.yml`** (Actions → Release → Run workflow, on `main`) with **`dry_run`** checked. Its summary
    prints the plan and the run stops before writing anything:
    - `Plan: release X.Y.Z (why)` (`scripts/release.sh plan`): the next minor while `0.x` (major from 1.0) when a pull
      request merged since the last tag is labelled `breaking`, else the next patch; `Nothing to release` when nothing
@@ -25,11 +25,11 @@ version or tags.
 
    ```sh
    git fetch --tags
-   git diff --name-only "$(git describe --tags --abbrev=0 origin/master)" origin/master -- dotnet tools/windows
+   git diff --name-only "$(git describe --tags --abbrev=0 origin/main)" origin/main -- dotnet tools/windows
    ```
 
    When it lists a file, in a worktree or clone of one app made for this, beside this checkout so that its `../laching`
-   is this one (up to date with `origin/master`), its `laching` submodule initialised: never a checkout other sessions
+   is this one (up to date with `origin/main`), its `laching` submodule initialised: never a checkout other sessions
    share, since `link` rewrites its pins until `unlink` and the smoke builds and packs from it. In that app:
 
    ```sh
@@ -38,7 +38,7 @@ version or tags.
    python3 laching/tools/companion.py unlink
    ```
 
-   Dispatch without `dry_run` only once the smoke passed; a failure is fixed on `master` first. No VM on this Mac: leave
+   Dispatch without `dry_run` only once the smoke passed; a failure is fixed on `main` first. No VM on this Mac: leave
    the release to a machine that has one rather than tag untried. There is no hosted stand-in for the smoke yet: an
    app's Windows workflow on GitHub's runners builds the Laching release it pins, never this checkout.
 3. Dispatch it again without `dry_run`. The `bump` input (default `auto`) forces `patch`, `minor` or `major`. The
@@ -50,8 +50,8 @@ from that same bumped tree, when the web packages ship the web job tests (agains
 and the landing job packs `@laching/landing`. On every release the swift, kotlin and tools jobs run `swift.yml`,
 `kotlin.yml` (the vectors check included) and `tools.yml` (the tools tests) on the planned commit, and the tag waits for
 all three green. Only then does the
-tag job push the `X.Y.Z: release` commit and its `vX.Y.Z` tag to `master`, in one atomic push onto the commit that was
-planned (if `master` moved meanwhile it pushes nothing: dispatch again), and start the site's deploy. A red test or a
+tag job push the `X.Y.Z: release` commit and its `vX.Y.Z` tag to `main`, in one atomic push onto the commit that was
+planned (if `main` moved meanwhile it pushes nothing: dispatch again), and start the site's deploy. A red test or a
 refused push therefore spends no tag. After the tag, `npm` publishes the landing and `publish` pushes the packages
 through Trusted Publishing and makes the GitHub release: GitHub's notes from the merged pull requests' titles
 (*Breaking* first, `.github/release.yml`) and a *Packages* list of what shipped. If either fails, re-run that job.
@@ -100,7 +100,7 @@ plain `scripts/verify.sh` checks they agree:
 | `web/Directory.Build.props` | `LachingWebVersion`: the web packages', at or below the tag |
 
 Tags are protected and never move: the run stops before writing anything when `vX.Y.Z` exists, and a release that
-fails after its tag is spent, so fix `master` and release the next number.
+fails after its tag is spent, so fix `main` and release the next number.
 
 ## Move the apps
 

@@ -6,7 +6,7 @@ name: Web
 on:
   push:
     branches:
-      - master
+      - main
     paths:
       - "web/**"
       - "tools/windows/dotnet-sdk.ps1"

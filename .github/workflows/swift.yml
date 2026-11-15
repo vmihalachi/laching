@@ -4,12 +4,12 @@ name: Swift
 # conformance vectors are current. macOS minutes bill at 10x, so the paths stay narrow. The linux job builds the
 # pure products (LachingCore, LachingCompanion, LachingTesting) without Apple frameworks and runs
 # LachingCoreTests and LachingCompanionTests there; the other test targets are macOS-only and build empty. The macOS
-# job builds incrementally from a cached .build everywhere but on master, which builds clean. release.yml calls it
+# job builds incrementally from a cached .build everywhere but on main, which builds clean. release.yml calls it
 # (workflow_call) with the commit it plans to tag, and tags nothing unless both jobs pass.
 on:
   push:
     branches:
-      - master
+      - main
     paths:
       - "Package.swift"
       - "Sources/**"
@@ -36,7 +36,7 @@ on:
 permissions:
   contents: read
 
-# Called, github.workflow and github.ref are the caller's ("Release", master): a call gets a group of its own, which
+# Called, github.workflow and github.ref are the caller's ("Release", main): a call gets a group of its own, which
 # no push or other call cancels, and cancels nothing.
 concurrency:
   group: >-
@@ -90,11 +90,11 @@ jobs:
           toolchain=$({ xcodebuild -version; swift --version; } 2>&1 | shasum -a 256 | cut -c1-16)
           echo "prefix=swift-$RUNNER_OS-$RUNNER_ARCH-$toolchain-" >> "$GITHUB_OUTPUT"
 
-      # Branches and pull requests start from the newest .build for this toolchain (their own, else master's). Master
-      # never restores one: it builds clean and saves the cache the branches start from, so no cache can pass master.
+      # Branches and pull requests start from the newest .build for this toolchain (their own, else main's). Main
+      # never restores one: it builds clean and saves the cache the branches start from, so no cache can pass main.
       - name: Restore .build
         id: restore
-        if: github.ref != 'refs/heads/master'
+        if: github.ref != 'refs/heads/main'
         uses: actions/cache/restore@v6
         with:
           path: .build

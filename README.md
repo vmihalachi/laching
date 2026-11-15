@@ -205,10 +205,10 @@ under *Commands* in [`AGENTS.md`](AGENTS.md), which coding agents read first. To
 
 ## Releases
 
-Releases are made on demand: Actions → Release → Run workflow (`release.yml`, on master), with `dry_run` first to see
+Releases are made on demand: Actions → Release → Run workflow (`release.yml`, on main), with `dry_run` first to see
 the plan. The number comes from the pull requests merged since the last tag: a patch, or a minor while 0.x (a major
 from 1.0) when one is labelled `breaking`; the `bump` input can ask for another. Once what ships has been tested and
-packed, the run commits the bump to master as `X.Y.Z: release` and tags it. Which sides get a new version is the versioning rule in
+packed, the run commits the bump to main as `X.Y.Z: release` and tags it. Which sides get a new version is the versioning rule in
 [`docs/conventions.md`](docs/conventions.md). When the .NET packages changed since `LachingVersion`
 (`dotnet/Directory.Build.props`), the run packs all six at X.Y.Z and pushes them to NuGet.org through
 [Trusted Publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing) (no stored key: a policy on

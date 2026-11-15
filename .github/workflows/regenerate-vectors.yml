@@ -3,7 +3,7 @@ name: Regenerate vectors
 # Runs the Swift vector generator on a Mac (the reference platform) and commits the result when it differs,
 # for sessions that have no Mac at hand. Manual only: Actions → Regenerate vectors → Run workflow, on a branch.
 # It pushes to the branch it runs on, so the first step refuses the default branch: a vector change reaches
-# master through a pull request, with CI on it, never from a dispatch.
+# main through a pull request, with CI on it, never from a dispatch.
 on:
   workflow_dispatch:
 

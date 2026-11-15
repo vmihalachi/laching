@@ -79,7 +79,7 @@ In a Linux container only the .NET side and the Kotlin side's `:core` and `:test
 and build need the SDK, so `kotlin.yml` runs them). Verify Swift through `swift.yml` (push a branch, dispatch the
 workflow, read the failed job's log). Vectors need the Swift code to regenerate: without a Mac, dispatch
 `regenerate-vectors.yml` on your branch and pull the commit it pushes. It refuses the default branch (its first step
-fails there), so a vector change reaches `master` only through a pull request.
+fails there), so a vector change reaches `main` only through a pull request.
 
 ## Planned work
 

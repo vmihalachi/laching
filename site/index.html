@@ -255,7 +255,7 @@
     </div>
 
     <p class="footnote">The package ships no strings, product ids or window lists. Your app passes them in, already localized.</p>
-    <p class="footnote">Building a companion? <a href="https://github.com/vmihalachi/laching/tree/master/tools"><code>tools/</code></a> has the scripts and agent skills that go with it: localization, phrase sync, recorded voices, character art, sounds, screenshots, the store listing and checks, and <code>@laching/landing</code> on npm for the landing page. You vendor them as a submodule and run them on your machine; none of them ship in your app.</p>
+    <p class="footnote">Building a companion? <a href="https://github.com/vmihalachi/laching/tree/main/tools"><code>tools/</code></a> has the scripts and agent skills that go with it: localization, phrase sync, recorded voices, character art, sounds, screenshots, the store listing and checks, and <code>@laching/landing</code> on npm for the landing page. You vendor them as a submodule and run them on your machine; none of them ship in your app.</p>
   </div>
 </section>
 
@@ -381,7 +381,7 @@ includeBuild(<span class="s">"../laching/kotlin"</span>) {
 
 <span class="c">// then, per module</span>
 implementation(<span class="s">"laching:core"</span>)</code></pre>
-        <p>The app's build includes the Kotlin modules from the submodule, checked out at the release's tag. <code>laching.core</code> and <code>laching.testing</code> are plain Kotlin on the JVM, so their tests run on any machine; <code>laching.android</code> is the Android library. <a href="https://github.com/vmihalachi/laching/blob/master/docs/getting-started.md">docs/getting-started.md</a> has the whole setup.</p>
+        <p>The app's build includes the Kotlin modules from the submodule, checked out at the release's tag. <code>laching.core</code> and <code>laching.testing</code> are plain Kotlin on the JVM, so their tests run on any machine; <code>laching.android</code> is the Android library. <a href="https://github.com/vmihalachi/laching/blob/main/docs/getting-started.md">docs/getting-started.md</a> has the whole setup.</p>
       </div>
     </div>
   </div>
@@ -392,7 +392,7 @@ implementation(<span class="s">"laching:core"</span>)</code></pre>
     <div class="split-copy">
       <h2>And for the website: Laching.Web</h2>
       <p>Six NuGet packages for small ASP.NET Core and Blazor sites on Azure Container Apps behind Cloudflare. They share nothing with the app packages, and no app here uses them; Adjudeca runs on them.</p>
-      <p>.NET 11. One version for all six, which moves only in a Laching release that changed them. <a href="https://github.com/vmihalachi/laching/blob/master/web/README.md">web/README.md</a> has the details.</p>
+      <p>.NET 11. One version for all six, which moves only in a Laching release that changed them. <a href="https://github.com/vmihalachi/laching/blob/main/web/README.md">web/README.md</a> has the details.</p>
 <pre tabindex="0"><code>dotnet add package Laching.Web.AspNetCore
 dotnet add package Laching.Web.Jobs</code></pre>
     </div>
@@ -463,7 +463,7 @@ dotnet add package Laching.Web.Jobs</code></pre>
       <li><a href="https://github.com/vmihalachi/laching">Source</a></li>
       <li><a href="https://github.com/vmihalachi/laching/releases">Releases</a></li>
       <li><a href="https://www.nuget.org/packages/Laching.Core">NuGet</a></li>
-      <li><a href="https://github.com/vmihalachi/laching/blob/master/LICENSE">License</a></li>
+      <li><a href="https://github.com/vmihalachi/laching/blob/main/LICENSE">License</a></li>
     </ul>
   </div>
 </footer>

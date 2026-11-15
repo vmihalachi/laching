@@ -5,7 +5,7 @@
 #
 #   scripts/verify.sh                    # working-tree changes vs HEAD, plus untracked files
 #   scripts/verify.sh --staged           # staged files (the pre-commit hook)
-#   scripts/verify.sh --base origin/master
+#   scripts/verify.sh --base origin/main
 #   scripts/verify.sh -- path/a path/b   # explicit paths (the agent Stop hook)
 #   scripts/verify.sh --fast ...         # only the checks that take seconds (no xcodebuild, swift/dotnet test, landing build)
 #   scripts/verify.sh --all              # every check, regardless of what changed

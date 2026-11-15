@@ -67,7 +67,7 @@ class ReleaseTests(unittest.TestCase):
 
     def git(self, *args: str) -> str:
         env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-        command = ["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "-c", "init.defaultBranch=master",
+        command = ["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "-c", "init.defaultBranch=main",
                    "-c", "tag.gpgSign=false", "-c", "commit.gpgSign=false", *args]
         return subprocess.run(command, cwd=self.root, env=env, check=True,
                               capture_output=True, encoding="utf8").stdout.strip()
@@ -117,7 +117,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(self.out("plan"), "none (no commits since v0.13.0)")
         self.change("docs/a.md", pr=101)
         self.change("docs/b.md", pr=101)
-        self.change("docs/c.md")  # pushed to master, no pull request
+        self.change("docs/c.md")  # pushed to main, no pull request
         self.assertEqual(self.out("plan"), "release 0.13.1 (patch: none of the 1 pull request merged is labelled "
                                            "breaking; 3 commits since v0.13.0)")
         self.change("docs/d.md", pr=102, labels=("enhancement", "breaking"))
@@ -240,7 +240,7 @@ class ReleaseTests(unittest.TestCase):
                     if lines[n].strip() and not lines[n].startswith(" " * (indent + 2))), len(lines))
         output, summary = self.tmp / "output", self.tmp / "summary"
         output.write_text("", "utf8")
-        variables = self.env(GITHUB_REPOSITORY="vmihalachi/laching", GITHUB_REF="refs/heads/master", BUMP="auto",
+        variables = self.env(GITHUB_REPOSITORY="vmihalachi/laching", GITHUB_REF="refs/heads/main", BUMP="auto",
                              DRY_RUN="false", GITHUB_OUTPUT=str(output), GITHUB_STEP_SUMMARY=str(summary))
         script = "\n".join(line[indent + 2:] for line in lines[start:end])
         result = subprocess.run(["bash", "-e", "-c", script], cwd=cwd or self.root, env={**variables, **env},
@@ -272,7 +272,7 @@ class ReleaseTests(unittest.TestCase):
         origin = self.tmp / "origin.git"
         subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
         self.git("remote", "set-url", "origin", str(origin))
-        self.git("push", "-q", "origin", "HEAD:refs/heads/master", "v0.13.0")
+        self.git("push", "-q", "origin", "HEAD:refs/heads/main", "v0.13.0")
         return origin
 
     def remote(self, origin: Path, *args: str) -> str:
@@ -281,7 +281,7 @@ class ReleaseTests(unittest.TestCase):
     def test_a_dry_run_writes_nothing_and_a_release_runs_on_master(self):
         origin = self.origin()
         self.change("dotnet/Laching.Windows/Tray.cs", pr=110)
-        self.git("push", "-q", "origin", "HEAD:refs/heads/master")
+        self.git("push", "-q", "origin", "HEAD:refs/heads/main")
         head = self.git("rev-parse", "HEAD")
         result, outputs, summary = self.plan(DRY_RUN="true")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -289,11 +289,11 @@ class ReleaseTests(unittest.TestCase):
         for line in ("Plan: release 0.13.1 (patch:", "NuGet: ship (", "Web packages: skip (", "@laching/landing: no (",
                      "Dry run: nothing"):
             self.assertIn(line, summary)
-        self.assertEqual(self.remote(origin, "rev-parse", "master"), head)
+        self.assertEqual(self.remote(origin, "rev-parse", "main"), head)
         self.assertEqual(self.remote(origin, "tag", "--list", "v0.13.1"), "")
         refused, _, _ = self.plan(GITHUB_REF="refs/heads/feature")
         self.assertEqual(refused.returncode, 1)
-        self.assertIn("A release runs on master", refused.stdout)
+        self.assertIn("A release runs on main", refused.stdout)
 
     def test_the_tag_is_pushed_only_after_the_builds_with_the_tree_they_tested(self):
         # Nothing before the tag job writes to the repository, and the tag job waits for every build to pass.
@@ -323,14 +323,14 @@ class ReleaseTests(unittest.TestCase):
 
         origin = self.origin()
         self.change("dotnet/Laching.Core/Clock.cs", pr=110)
-        self.git("push", "-q", "origin", "HEAD:refs/heads/master")
+        self.git("push", "-q", "origin", "HEAD:refs/heads/main")
         head = self.git("rev-parse", "HEAD")
         result, plan, _ = self.plan()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual({key: plan[key] for key in ("release", "version", "previous", "base", "nuget", "web", "landing")},
                          {"release": "true", "version": "0.13.1", "previous": "0.13.0", "base": head, "nuget": "true",
                           "web": "false", "landing": "false"})
-        self.assertEqual(self.remote(origin, "rev-parse", "master"), head, "the plan pushes nothing")
+        self.assertEqual(self.remote(origin, "rev-parse", "main"), head, "the plan pushes nothing")
         self.assertEqual(self.remote(origin, "tag", "--list", "v0.13.1"), "")
 
         jobs = {"VERSION": plan["version"], "TREE": plan["tree"], "BASE": plan["base"]}
@@ -342,13 +342,13 @@ class ReleaseTests(unittest.TestCase):
         result, tag = self.step("Commit the bump and tag it, in one push", self.checkout(origin, head, "tag"),
                                 FAKE_GH_WORKFLOW_STATUS="1", **jobs)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(self.remote(origin, "log", "-1", "--format=%s", "master"), "0.13.1: release")
+        self.assertEqual(self.remote(origin, "log", "-1", "--format=%s", "main"), "0.13.1: release")
         self.assertEqual(self.remote(origin, "rev-parse", "v0.13.1^{commit}"), tag["ref"])
-        self.assertEqual(self.remote(origin, "rev-parse", "master"), tag["ref"])
-        self.assertIn("workflow run pages.yml --ref master", (self.tmp / "pulls.log").read_text("utf8"))
+        self.assertEqual(self.remote(origin, "rev-parse", "main"), tag["ref"])
+        self.assertIn("workflow run pages.yml --ref main", (self.tmp / "pulls.log").read_text("utf8"))
         self.assertIn(">0.13.1</LachingVersion>", self.remote(origin, "show", "v0.13.1:dotnet/Directory.Build.props"))
 
-        self.git("pull", "-q", "--tags", "origin", "master")
+        self.git("pull", "-q", "--tags", "origin", "main")
         result, outputs, summary = self.plan()
         self.assertEqual(outputs, {"release": "false"}, result.stdout + result.stderr)
         self.assertIn("Nothing to release: none (no commits since v0.13.1)", summary)
@@ -356,17 +356,17 @@ class ReleaseTests(unittest.TestCase):
     def test_the_tag_job_pushes_nothing_when_master_moved_since_the_plan(self):
         origin = self.origin()
         self.change("docs/a.md", pr=110)
-        self.git("push", "-q", "origin", "HEAD:refs/heads/master")
+        self.git("push", "-q", "origin", "HEAD:refs/heads/main")
         head = self.git("rev-parse", "HEAD")
         _, plan, _ = self.plan()
         self.change("docs/b.md", pr=111)
-        self.git("push", "-q", "origin", "HEAD:refs/heads/master")  # merged while the builds ran
+        self.git("push", "-q", "origin", "HEAD:refs/heads/main")  # merged while the builds ran
         moved = self.git("rev-parse", "HEAD")
         result, outputs = self.step("Commit the bump and tag it, in one push", self.checkout(origin, head, "tag"),
                                     VERSION=plan["version"], TREE=plan["tree"], BASE=plan["base"])
         self.assertEqual(result.returncode, 1)
-        self.assertIn("master moved since the plan: nothing was pushed; dispatch the release again", result.stdout)
-        self.assertEqual((self.remote(origin, "rev-parse", "master"), self.remote(origin, "tag", "--list", "v0.13.1")),
+        self.assertIn("main moved since the plan: nothing was pushed; dispatch the release again", result.stdout)
+        self.assertEqual((self.remote(origin, "rev-parse", "main"), self.remote(origin, "tag", "--list", "v0.13.1")),
                          (moved, ""))
         self.assertEqual(outputs, {})
 
@@ -415,7 +415,7 @@ class ReleaseTests(unittest.TestCase):
     def test_the_plan_never_moves_a_tag(self):
         origin = self.origin()
         self.change("docs/a.md", pr=111)
-        self.git("push", "-q", "origin", "HEAD:refs/heads/master")
+        self.git("push", "-q", "origin", "HEAD:refs/heads/main")
         self.git("tag", "v0.13.1", "HEAD~1")
         self.git("push", "-q", "origin", "v0.13.1")
         self.git("tag", "-d", "v0.13.1")

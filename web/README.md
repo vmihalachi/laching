@@ -93,4 +93,4 @@ changed since `LachingWebVersion`.
 
 ## License
 
-[MIT](https://github.com/vmihalachi/laching/blob/master/LICENSE). © 2026 Vlad Mihalachi.
+[MIT](https://github.com/vmihalachi/laching/blob/main/LICENSE). © 2026 Vlad Mihalachi.

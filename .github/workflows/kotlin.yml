@@ -6,7 +6,7 @@ name: Kotlin
 on:
   push:
     branches:
-      - master
+      - main
     paths:
       - "kotlin/**"
       - "conformance/**"
@@ -27,7 +27,7 @@ on:
 permissions:
   contents: read
 
-# Called, github.workflow and github.ref are the caller's ("Release", master): a call gets a group of its own, which
+# Called, github.workflow and github.ref are the caller's ("Release", main): a call gets a group of its own, which
 # no push or other call cancels, and cancels nothing.
 concurrency:
   group: >-
