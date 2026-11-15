@@ -8,8 +8,6 @@
 
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting.Azure.AppContainers" />
-    <!-- Aspire's MessagePack, raised past GHSA-qhrr-8q5h-9q3h (< 2.5.303) until Aspire references a fixed one. -->
-    <PackageReference Include="MessagePack" />
   </ItemGroup>
 
   <ItemGroup>
