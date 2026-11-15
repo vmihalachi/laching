@@ -104,7 +104,8 @@ BASE_RULES = (
     "(English singular, same specifiers) and give `value` as a plural object; otherwise leave `en_plural` alone and "
     "give a string. If an item has `substitutions`, its `en` holds a `%#@name@` token that stands for a counted "
     "phrase: keep the token in `value`, and for each name fill `substitutions.<name>.value` with every key in "
-    "`categories`, each containing `%arg` where the number goes (see `substitutions.<name>.en`)."
+    "`categories`, each containing `%arg` where the number goes (see `substitutions.<name>.en`) and any other "
+    "specifier exactly as `substitutions.<name>.en` writes it, position included (%2$lld stays %2$lld)."
 )
 
 
@@ -281,6 +282,27 @@ def token_problem(english: str, translated: str) -> str | None:
     return None
 
 
+# A token in a substitution's plural form: its `%arg`, or a format specifier (with SPEC_RE's groups).
+FORM_TOKEN_RE = re.compile(r"%arg|" + SPEC_RE.pattern)
+
+
+def form_specifiers(form: str) -> list[str]:
+    """The format specifiers in a substitution's plural form besides `%arg`, positions kept: the form is spliced into
+    its string, so a number there names its argument (`%2$lld`) and a translation can't move it."""
+    return sorted(m.group(0) for m in FORM_TOKEN_RE.finditer(form) if m.group(0) != "%arg" and m.group(2) != "%")
+
+
+def form_problem(english: str, translated: str) -> str | None:
+    """Why a substitution's translated plural form doesn't match its English one (`other`): none when it does."""
+    if not any(m.group(0) == "%arg" for m in FORM_TOKEN_RE.finditer(translated)):
+        return "needs %arg"
+    if form_specifiers(english) != form_specifiers(translated):
+        return f"format specifiers {form_specifiers(english)} != {form_specifiers(translated)}"
+    if markup(english) != markup(translated):
+        return f"placeholders/tags {markup(english)} != {markup(translated)}"
+    return None
+
+
 def categories_for(lang: str) -> list[str]:
     return PLURAL_CATEGORIES.get(lang, DEFAULT_CATEGORIES)
 
@@ -324,18 +346,27 @@ def english_substitutions(entry: dict) -> dict:
     }
 
 
+def english_form(sub: dict) -> str:
+    """The English plural form a substitution's translations are checked against: its `other`."""
+    return sub["plural"].get("other", next(iter(sub["plural"].values())))
+
+
 def substitution_issues(entry: dict, lang: str) -> list[str]:
-    """Each source substitution must have every plural category `lang` uses, filled in."""
+    """Each source substitution must have every plural category `lang` uses, filled in, each form with `%arg` and the
+    English form's other specifiers."""
     english = english_substitutions(entry)
     if not english:
         return []
     subs = entry.get("localizations", {}).get(lang, {}).get("substitutions", {})
     issues = []
-    for name in english:
+    for name, sub in english.items():
         plural = subs.get(name, {}).get("variations", {}).get("plural", {})
-        missing = [cat for cat in categories_for(lang) if not plural.get(cat, {}).get("stringUnit", {}).get("value")]
+        forms = {cat: unit.get("stringUnit", {}).get("value") for cat, unit in plural.items()}
+        missing = [cat for cat in categories_for(lang) if not forms.get(cat)]
         if missing:
             issues.append(f"substitution {name}: missing {', '.join(missing)}")
+        issues += [f"substitution {name} {cat}: {problem}" for cat, form in forms.items()
+                   if form and (problem := form_problem(english_form(sub), form))]
     return issues
 
 
@@ -690,11 +721,12 @@ def validate_item(key: str, item: dict, entry: dict, lang: str) -> list[str]:
     else:
         problems = [p] if (p := token_problem(english, value)) else []
     given = item.get("substitutions") or {}
-    for name in english_subs:
+    for name, sub in english_subs.items():
         sub_value = (given.get(name) or {}).get("value") or {}
         if missing := [cat for cat in categories_for(lang) if not sub_value.get(cat)]:
             problems.append(f"substitution {name}: missing {', '.join(missing)}")
-        problems += [f"substitution {name} {cat}: needs %arg" for cat, text in sub_value.items() if text and "%arg" not in text]
+        problems += [f"substitution {name} {cat}: {p}" for cat, text in sub_value.items()
+                     if text and (p := form_problem(english_form(sub), text))]
     return problems
 
 
@@ -918,10 +950,31 @@ RESW_NAME_MAX = 240
 RESW_NAME_PREFIX = 200
 
 
+def form_to_net(form: str, arg: int, text: str) -> str:
+    """A substitution's plural form → .NET composite format: `%arg` becomes `{arg}`, a number with its position
+    (`%2$lld`) `{1}`, `%%` `%`, braces are doubled. A number without a position fails: Apple splices the form into
+    `text`, so which argument it would take isn't the form's to say."""
+    out, pos = [], 0
+    for m in FORM_TOKEN_RE.finditer(form):
+        out.append(form[pos:m.start()].replace("{", "{{").replace("}", "}}"))
+        pos = m.end()
+        token = m.group(0)
+        if token == "%arg":
+            out.append("{%d}" % arg)
+        elif token == "%%":
+            out.append("%")
+        elif m.group(1):
+            out.append("{%d}" % (int(m.group(1)) - 1))
+        else:
+            fail(f"{token} in the substitution form {form!r} of {text!r} needs its position, as %2$lld")
+    out.append(form[pos:].replace("{", "{{").replace("}", "}}"))
+    return "".join(out)
+
+
 def to_net_format(text: str, substitutions: dict | None = None, variant: str | None = None) -> str:
     """Apple format → .NET composite format. `%lld`/`%@` become `{n}` in order, `%2$@` becomes
     `{1}`, `%%` becomes `%`, braces are doubled. A `%#@name@` substitution is replaced by its
-    `variant` (a plural category) with `%arg` as the substitution's argument."""
+    `variant` (a plural category), converted by `form_to_net`."""
     out, index, pos = [], 0, 0
     pattern = re.compile(SUBST_RE.pattern + "|" + SPEC_RE.pattern)
     for m in pattern.finditer(text):
@@ -938,8 +991,7 @@ def to_net_format(text: str, substitutions: dict | None = None, variant: str | N
             index = max(index, arg + 1)
             units = sub["variations"]["plural"]
             unit = units.get(variant) or units["other"]
-            inner = unit["stringUnit"]["value"].replace("{", "{{").replace("}", "}}")
-            out.append(re.sub(r"%arg", "{%d}" % arg, inner))
+            out.append(form_to_net(unit["stringUnit"]["value"], arg, text))
         elif m.group(2):
             out.append("{%d}" % (int(m.group(2)) - 1))
         else:

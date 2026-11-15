@@ -179,6 +179,27 @@ class GapTests(L10nTestCase):
         self.assertEqual(l10n.catalog_issues("%lld lines muted", entry, "de"), [])
         self.assertEqual(l10n.substitution_issues({"localizations": {"en": {}}}, "it"), [], "no substitutions, nothing to check")
 
+    def test_a_number_in_a_substitution_form_keeps_its_position(self):
+        """A form is spliced into its string, so `%2$lld` there names the second argument: check wants every form to
+        hold `%arg` and the English form's other specifiers, positions included."""
+        def localization(forms):
+            plural = {cat: {"stringUnit": {"state": "translated", "value": form}} for cat, form in forms.items()}
+            return {"stringUnit": {"state": "translated", "value": "%#@earned@"},
+                    "substitutions": {"earned": {"argNum": 1, "formatSpecifier": "lld", "variations": {"plural": plural}}}}
+
+        key = "%lld of %lld earned"
+        english = localization({"one": "%arg of %2$lld earned", "other": "%arg of %2$lld earned"})
+        italian = localization({"one": "%arg di %2$lld ottenuto", "other": "%arg di %2$lld ottenuti"})
+        self.assertEqual(l10n.catalog_issues(key, {"localizations": {"en": english, "it": italian}}, "it"), [])
+        german = localization({"one": "%arg von %1$lld erhalten", "other": "%2$lld erhalten", "few": "%arg von %lld"})
+        self.assertEqual(l10n.catalog_issues(key, {"localizations": {"en": english, "de": german}}, "de"), [
+            "substitution earned one: format specifiers ['%2$lld'] != ['%1$lld']",
+            "substitution earned other: needs %arg",
+            "substitution earned few: format specifiers ['%2$lld'] != ['%lld']",
+        ])
+        self.assertEqual(l10n.form_problem("%arg lines", "100%%arg"), "needs %arg", "%%arg is a percent sign and arg")
+        self.assertEqual(l10n.form_problem("%arg of %2$@", "%arg {x} %2$@"), "placeholders/tags [] != ['{x}']")
+
     def test_export_and_apply(self):
         out = self.root / "work"
         listed = quiet(l10n.cmd_export, self.args(out=str(out)))[1]
@@ -266,6 +287,41 @@ class GapTests(L10nTestCase):
         lines = entry["localizations"]["de"]["substitutions"]["lines"]
         self.assertEqual((lines["argNum"], lines["formatSpecifier"]), (1, "lld"))
         self.assertEqual(lines["variations"]["plural"]["other"]["stringUnit"]["value"], "%arg Zeilen")
+
+    def test_a_substitution_over_the_whole_phrase_round_trips(self):
+        """A substitution can hold the whole phrase and the string's other number (`%2$lld`), for a language whose
+        words agree after it: apply wants that number where the English form has it, and the ports get both."""
+        key = "%lld of %lld earned"
+
+        def unit(value):
+            return {"stringUnit": {"state": "translated", "value": value}}
+
+        catalog = l10n.load_catalog(l10n.CATALOGS["app"])
+        catalog["strings"][key] = {"localizations": {"en": {
+            **unit("%#@earned@"),
+            "substitutions": {"earned": {"argNum": 1, "formatSpecifier": "lld", "variations": {"plural": {
+                "one": unit("%arg of %2$lld earned"), "other": unit("%arg of %2$lld earned")}}}},
+        }}}
+        l10n.dump_catalog(l10n.CATALOGS["app"], catalog)
+        out = self.root / "work"
+        quiet(l10n.cmd_export, self.args(lang=["de"], out=str(out)))
+        work = json.loads((out / "de.json").read_text("utf8"))
+        item = work["app"][key]
+        self.assertEqual(item["substitutions"]["earned"]["en"]["other"], "%arg of %2$lld earned")
+        item["value"] = "%#@earned@"
+        item["substitutions"]["earned"]["value"] = {"one": "%arg von %lld erhalten", "other": "%arg von %2$lld erhalten"}
+        (out / "de.json").write_text(json.dumps(work, ensure_ascii=False), "utf8")
+        result, text = quiet(l10n.cmd_apply, SimpleNamespace(files=[str(out / "de.json")]))
+        self.assertEqual(result, 1)
+        self.assertIn("substitution earned one: format specifiers ['%2$lld'] != ['%lld']", text)
+        item["substitutions"]["earned"]["value"]["one"] = "%arg von %2$lld erhalten"
+        (out / "de.json").write_text(json.dumps(work, ensure_ascii=False), "utf8")
+        self.assertEqual(quiet(l10n.cmd_apply, SimpleNamespace(files=[str(out / "de.json")]))[0], 0)
+        units = {lang: {u["key"]: u for u in l10n.export_units(lang)}[key] for lang in ("en", "de")}
+        self.assertEqual(units["de"]["plural"], {"one": "{0} von {1} erhalten", "other": "{0} von {1} erhalten"})
+        self.assertEqual(units["de"]["countArg"], 0)
+        self.assertEqual(units["en"]["plural"], {"one": "{0} of {1} earned", "other": "{0} of {1} earned"})
+        self.assertEqual(l10n.stale_exports(), [], "apply wrote the ports' files")
 
 
 class ApplyExportsTests(L10nTestCase):
@@ -437,6 +493,23 @@ class ExportTests(L10nTestCase):
         plural = {u["key"]: u for u in self.units["de"]}["%lld lines"]
         self.assertEqual(plural["plural"], {"one": "{0} Zeile", "other": "{0} Zeilen"})
         self.assertEqual(l10n.to_net_format("%2$@ and %1$@, 100%% {x}"), "{1} and {0}, 100% {{x}}")
+
+    def test_a_substitution_form_converts_its_own_numbers(self):
+        def subs(one, other):
+            return {"earned": {"argNum": 1, "formatSpecifier": "lld", "variations": {"plural": {
+                "one": {"stringUnit": {"value": one}}, "other": {"stringUnit": {"value": other}}}}}}
+
+        earned = subs("%arg di %2$lld ottenuto", "%arg di %2$lld ottenuti, 100%% {x}")
+        self.assertEqual(l10n.to_net_format("%#@earned@", earned, "one"), "{0} di {1} ottenuto")
+        self.assertEqual(l10n.to_net_format("%#@earned@", earned, "other"), "{0} di {1} ottenuti, 100% {{x}}")
+        self.assertEqual(l10n.to_net_format("%#@earned@", earned, "few"), "{0} di {1} ottenuti, 100% {{x}}",
+                         "a category the language lacks takes its other form")
+        self.assertEqual(l10n.to_net_format("%#@earned@, %2$lld", subs("%arg", "%arg"), "one"), "{0}, {1}")
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit) as caught:
+            l10n.to_net_format("%#@earned@", subs("%arg di %lld", "%arg di %2$lld"), "one")
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("%lld in the substitution form '%arg di %lld' of '%#@earned@' needs its position", err.getvalue())
 
     def test_resw_is_valid_and_names_are_unique(self):
         for path, text in self.resw.items():
