@@ -186,21 +186,24 @@ SWIFT_SPECIFIERS = {"%@", "%lld", "%llu", "%ld", "%lu", "%lf", "%d", "%u", "%f"}
 # hyphen (`100%-Garantie`, `100%-os`, `50%-a`), which a specifier never has without a width.
 WORD_SPEC_RE = re.compile(r"%(-)?(?:hh|h|ll|l|q|z|t|j)?.")
 # A number right before a `%`, or with a space, a no-break space or a hyphen between (nb "50 %-grensen", de
-# "50-%-Grenze").
-AFTER_NUMBER_RE = re.compile(r"\d[ \u00a0\u202f-]?\Z")
+# "50-%-Grenze"), which group 1 holds.
+AFTER_NUMBER_RE = re.compile(r"\d([ \u00a0\u202f-])?\Z")
 
 
 def percent_sign(text: str, m: re.Match) -> bool:
     """Whether a SPEC_RE match in `text` is a percent sign, should the string take no arguments: `%%`, a `%` before a
-    space, or one after a number that starts a word ("100%ige", "50%OFF", "100%-Garantie", "50 %-grensen",
-    "50-%-Grenze") where Swift would write none ("Top 10%@", "U+00%X")."""
+    space, or one after a number that starts a word where Swift would write none ("Top 10%@", "U+00%X"): right after
+    it ("100%ige", "50%OFF", "100%-Garantie"), or after a space or hyphen when a hyphen follows ("50 %-grensen",
+    "50-%-Grenze"; "Zoom 1-%gx" is a `specifier:` value with a unit)."""
     token = m.group(0)
     if m.group(2) == "%" or LITERAL_PERCENT_RE.match(token):
         return True
-    if not AFTER_NUMBER_RE.search(text, 0, m.start()) or token in SWIFT_SPECIFIERS:
+    after = AFTER_NUMBER_RE.search(text, 0, m.start())
+    if not after or token in SWIFT_SPECIFIERS:
         return False
     word = WORD_SPEC_RE.fullmatch(token)
-    return word is not None and (word.group(1) is not None or text[m.end():m.end() + 1].isalpha())
+    return word is not None and (word.group(1) is not None
+                                 or after.group(1) is None and text[m.end():m.end() + 1].isalpha())
 
 
 def plain(text: str) -> bool:
