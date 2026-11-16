@@ -269,6 +269,12 @@ class GapTests(L10nTestCase):
         self.assertEqual(l10n.percent_problem("%arg file, 100%safe", True, form=True), f"'%s' {digit}",
                          "%s reads an argument as a C string")
         self.assertIsNone(l10n.percent_problem("Top 10%@", True), "what Swift writes for an interpolation")
+        for text in ("Room 1%02d", "Room 1%02d is 100%% ready", "Season 20%02d, %lld runs", "Lap 1%.1f", "Floors 1%02d"):
+            self.assertFalse(l10n.plain(text), f"{text!r}: Text's specifier: writes flags, width and precision too")
+            self.assertIsNone(l10n.percent_problem(text, True if text.startswith("Floors") else None), text)
+        self.assertEqual([l10n.to_net_format("Room 1%02d"), l10n.to_net_format("Room 1%02d is 100%% ready")],
+                         ["Room 1{0}", "Room 1{0} is 100% ready"])
+        self.assertIsNone(l10n.token_problem("Season 20%02d, %lld runs", "Saison 20%02d, %lld Läufe"))
         self.assertIsNone(l10n.percent_problem("%1$lld–%2$lld", True))
         self.assertIsNone(l10n.percent_problem("100%ige Sicherheit"), "a string that takes no arguments prints it as is")
         self.assertEqual(l10n.percent_problem("%lld % fatto"), f"'% f' {specifier}")
@@ -344,6 +350,9 @@ class GapTests(L10nTestCase):
         self.assertEqual(l10n.add_strings({"%lld items, 50%%OFF": {"plural": {
             "one": "One item, 50%OFF", "other": "%lld items, 50%%OFF"}}}),
             ([], [f"'%lld items, 50%%OFF': '%O' {digit}"]))
+        self.assertEqual(l10n.add_strings({"%lld left, 100%% done": {"plural": {
+            "one": "%lld left, 100%ige", "other": "%lld left, 100%% done"}}}),
+            ([], [f"'%lld left, 100%% done': '%i' {digit}"]), "the percent sign, not the two numbers it makes")
 
     def test_a_plural_over_two_numbers_is_reported(self):
         """Xcode reads a plural's forms together: it can't tell which of two numbers counts, positions or not, and

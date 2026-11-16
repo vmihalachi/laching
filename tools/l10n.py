@@ -179,16 +179,19 @@ INTEGER_CONVERSIONS = set("dDiuUoOxX")
 # data sent") every `%` is text, and in one that takes some this is a specifier (`%lld % fatto` prints
 # "5 0,000000atto"), so a percent sign there is `%%`.
 LITERAL_PERCENT_RE = re.compile(r"%(?:\d+\$)?[-+#0]* ")
-# What Swift writes for an interpolation, never a percent sign even right after a number (`Top 10\(name)`).
+# What Swift writes for an interpolation, never a percent sign even right after a number (`Top 10\(name)`); Text's
+# `specifier:` writes flags, width or precision too (`Room 1\(n, specifier: "%02d")`), which a word never does.
 SWIFT_SPECIFIERS = {"%@", "%lld", "%llu", "%ld", "%lu", "%lf", "%d", "%u", "%f"}
+BARE_SPEC_RE = re.compile(r"%(?:hh|h|ll|l|q|z|t|j)?.")  # a `%`, a length and a conversion: what `50%OFF` makes
 
 
 def percent_sign(text: str, m: re.Match) -> bool:
     """Whether a SPEC_RE match in `text` is a percent sign, should the string take no arguments: `%%`, a `%` before a
-    space, or a positionless one right after a digit ("100%ige", "50%OFF") that Swift wouldn't write."""
+    space, or a bare one right after a digit ("100%ige", "50%OFF") that Swift wouldn't write."""
     token = m.group(0)
     return (m.group(2) == "%" or bool(LITERAL_PERCENT_RE.match(token))
-            or (not m.group(1) and m.start() > 0 and text[m.start() - 1].isdigit() and token not in SWIFT_SPECIFIERS))
+            or (m.start() > 0 and text[m.start() - 1].isdigit() and token not in SWIFT_SPECIFIERS
+                and BARE_SPEC_RE.fullmatch(token) is not None))
 
 
 def plain(text: str) -> bool:
@@ -1028,9 +1031,10 @@ def add_strings(new: dict) -> tuple[list[str], list[str]]:
             if english_of(key, strings[key]) != english:
                 errors.append(f"{key!r}: already in the catalog with different English")
             continue
-        if isinstance(english, dict):
-            problem = (token_problem(key, english.get("other", "")) or plural_problem(english.values())
-                       or next((why for form in english.values() if (why := percent_problem(form, True))), None))
+        if isinstance(english, dict):  # a percent sign first: a `%i` it makes reads as another number
+            problem = (token_problem(key, english.get("other", ""))
+                       or next((why for form in english.values() if (why := percent_problem(form, True))), None)
+                       or plural_problem(english.values()))
         else:
             problem = token_problem(key, english) or percent_problem(english)
         if problem:
