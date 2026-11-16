@@ -19,6 +19,12 @@ REPO = TOOLS.parent
 FIXTURE_APP = HERE / "fixture-app"
 WINDOWS = os.name == "nt"
 
+# A git hook (the pre-commit's verify.sh) exports GIT_DIR, GIT_INDEX_FILE, GIT_WORK_TREE… pointing at the repository
+# being committed. Inherited, they'd turn every fixture's git (and the tools' own, run as subprocesses) on that
+# repository: a fixture's `git init --bare` re-initialized it as bare. A test that wants one sets it itself.
+for _key in [key for key in os.environ if key.startswith("GIT_")]:
+    del os.environ[_key]
+
 sys.path.insert(0, str(TOOLS))
 import companion  # noqa: E402
 
