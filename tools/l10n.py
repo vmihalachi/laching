@@ -193,8 +193,8 @@ AFTER_NUMBER_RE = re.compile(r"\d([ \u00a0\u202f-])?\Z")
 def percent_sign(text: str, m: re.Match) -> bool:
     """Whether a SPEC_RE match in `text` is a percent sign, should the string take no arguments: `%%`, a `%` before a
     space, or one after a number that starts a word where Swift would write none ("Top 10%@", "U+00%X"): right after
-    it ("100%ige", "50%OFF", "100%-Garantie"), or after a space or hyphen when a hyphen follows ("50 %-grensen",
-    "50-%-Grenze"; "Zoom 1-%gx" is a `specifier:` value with a unit)."""
+    it ("100%ige", "50%OFF", "100%-Garantie", and Korean's percentage point, "1%p"), or after a space or hyphen when a
+    hyphen follows ("50 %-grensen", "50-%-Grenze"; "Zoom 1-%gx" is a `specifier:` value with a unit)."""
     token = m.group(0)
     if m.group(2) == "%" or LITERAL_PERCENT_RE.match(token):
         return True
@@ -203,7 +203,7 @@ def percent_sign(text: str, m: re.Match) -> bool:
         return False
     word = WORD_SPEC_RE.fullmatch(token)
     return word is not None and (word.group(1) is not None
-                                 or after.group(1) is None and text[m.end():m.end() + 1].isalpha())
+                                 or after.group(1) is None and (text[m.end():m.end() + 1].isalpha() or token == "%p"))
 
 
 def plain(text: str) -> bool:
@@ -441,6 +441,8 @@ def form_problem(english: str, translated: str) -> str | None:
     """Why a substitution's translated plural form doesn't match its English one (`other`): none when it does."""
     if not any(m.group(0) == "%arg" for m in FORM_TOKEN_RE.finditer(translated)):
         return "needs %arg"
+    if why := percent_problem(translated, True, form=True):  # before the specifiers a percent sign would make
+        return why
     if form_specifiers(english) != form_specifiers(translated):
         return f"format specifiers {form_specifiers(english)} != {form_specifiers(translated)}"
     if problem := form_number_problem(translated):
@@ -1225,6 +1227,8 @@ def form_to_net(form: str, arg: int, text: str) -> str:
             out.append(token[1:])
         elif m.group(1):
             out.append("{%d}" % (int(m.group(1)) - 1))
+        elif why := percent_problem(form, True, form=True):  # a percent sign, written as check says
+            fail(f"the substitution form {form!r} of {text!r}: {why}")
         else:
             fail(f"{token} in the substitution form {form!r} of {text!r} needs its position, as %2$lld")
     out.append(form[pos:].replace("{", "{{").replace("}", "}}"))

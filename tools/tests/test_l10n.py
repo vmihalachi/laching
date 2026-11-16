@@ -289,6 +289,13 @@ class GapTests(L10nTestCase):
             self.assertTrue(l10n.plain(text), f"{text!r}: a hyphen after a number, a space or hyphen and a % is text")
         for translation in ("Over 50 %-grensen", "Över 50 %-gränsen", "Über der 50-%-Grenze", "Boven de 50 %-grens"):
             self.assertIsNone(l10n.token_problem("Above the 50% limit", translation), translation)
+        for text in ("지난주보다 1%p 상승", "2.5%p 상승", "10%p.", "1%p"):
+            self.assertTrue(l10n.plain(text), f"{text!r}: Korean's percentage point")
+        self.assertIsNone(l10n.token_problem("Up 1 percentage point", "지난주보다 1%p 상승"))
+        self.assertEqual(l10n.percent_problem("%lld회, 1%p 상승", True), f"'%p' {digit}", "Apple prints '3회, 10x7 상승'")
+        self.assertFalse(l10n.plain("Room 1 %p"), "with a space between, only a hyphenated % is text")
+        self.assertEqual(l10n.form_problem("%arg sessions above the 50%% limit", "%arg økter over 50 %-grensen"),
+                         f"'%-g' {digit}", "the percent sign, not the specifier it makes")
         self.assertEqual(l10n.percent_problem("%lld økter over 50 %-grensen", True), f"'%-g' {digit}",
                          "Apple prints '3 økter over 50 0rensen'")
         self.assertEqual(l10n.to_net_format("100%-free"), "100%-free")
@@ -867,6 +874,10 @@ class ExportTests(L10nTestCase):
                       failure("%#@earned@", subs("%arg di %lld", "%arg di %2$lld")))
         self.assertIn("the substitution form '%arg di %#@total@' of '%#@earned@' holds another substitution, %#@total@",
                       failure("%#@earned@", subs("%arg di %#@total@", "%arg")))
+        self.assertIn("the substitution form '%arg økt over 50 %-grensen' of '%#@earned@': '%-g' after a number is a "
+                      "specifier to Apple, not a percent sign: write the percent sign as %%",
+                      failure("%#@earned@", subs("%arg økt over 50 %-grensen", "%arg økter over 50 %%-grensen")),
+                      "the percent sign, as check says, not a position that would print a number")
         unnumbered = {"earned": {key: value for key, value in earned["earned"].items() if key != "argNum"}}
         self.assertIn("the substitution %#@earned@ in '%@: %#@earned@' has no argNum",
                       failure("%@: %#@earned@", unnumbered))
