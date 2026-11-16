@@ -275,11 +275,16 @@ class GapTests(L10nTestCase):
         self.assertEqual([l10n.to_net_format("Room 1%02d"), l10n.to_net_format("Room 1%02d is 100%% ready")],
                          ["Room 1{0}", "Room 1{0} is 100% ready"])
         self.assertIsNone(l10n.token_problem("Season 20%02d, %lld runs", "Saison 20%02d, %lld Läufe"))
-        for text in ("U+00%X", "Room 1%x", "Scale 1%g", "%@: U+00%X"):
-            self.assertFalse(l10n.plain(text), f"{text!r}: a bare specifier: value right after a digit, no word after it")
-        self.assertEqual(l10n.to_net_format("U+00%X"), "U+00{0}")
-        for text in ("100%-Garantie", "Get 50%-off", "50%-a az eszközön", "100%legit", "100%OK"):
-            self.assertTrue(l10n.plain(text), f"{text!r}: a hyphen or a word after a number's % is text")
+        for text in ("U+00%X", "U+00%X copied", "U+00%X.", "Room 1%x:", "Scale 1%g", "Level 1%lldb", "Size 2%fx"):
+            self.assertFalse(l10n.plain(text), f"{text!r}: what Swift writes right after a digit, no word after it")
+        self.assertEqual([l10n.to_net_format("U+00%X"), l10n.to_net_format("U+00%X copied")], ["U+00{0}", "U+00{0} copied"])
+        for text in ("100%-Garantie", "Get 50%-off", "50%-a az eszközön", "100%legit", "100%OK", "Over 50 %-grensen",
+                     "Over 50\u00a0%-grænsen", "Über der 50-%-Grenze", "100 %ige Sicherheit", "100\u202f%-garantie"):
+            self.assertTrue(l10n.plain(text), f"{text!r}: a hyphen or a word after a number's %, spaced or not, is text")
+        for translation in ("Over 50 %-grensen", "Över 50 %-gränsen", "Über der 50-%-Grenze", "Boven de 50 %-grens"):
+            self.assertIsNone(l10n.token_problem("Above the 50% limit", translation), translation)
+        self.assertEqual(l10n.percent_problem("%lld økter over 50 %-grensen", True), f"'%-g' {digit}",
+                         "Apple prints '3 økter over 50 0rensen'")
         self.assertEqual(l10n.to_net_format("100%-free"), "100%-free")
         self.assertIsNone(l10n.token_problem("100% on-device", "100%-os adatvédelem"))
         self.assertIsNone(l10n.token_problem("100% on-device", "100%-garantie op het apparaat"))
