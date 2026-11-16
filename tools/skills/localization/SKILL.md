@@ -33,6 +33,10 @@ language) are in the app's `DESIGN.md` and `.agents/notes/localization.md` when 
   substitution, give every number its position: Apple counts a positionless one without the substitution, so
   `%#@hours@, %lld min` prints the hours twice. `check` reports that too, and a substitution with no argNum or placed
   at another argument than its argNum.
+- **A percent sign is written as the source writes it.** Apple formats a string only when the call passes arguments,
+  which the source decides for every language: where it has a specifier, a plural or a substitution, a percent sign
+  is `%%` (a `%` before a space prints a missing argument, and a `%` that starts no specifier is dropped); where it
+  has none, a plain `%` (a `%%` shows twice). `check` reports both; landing strings aren't printf, so their `%` is free.
 
 ## Steps
 
