@@ -35,8 +35,9 @@ language) are in the app's `DESIGN.md` and `.agents/notes/localization.md` when 
   at another argument than its argNum.
 - **A percent sign is written as the source writes it.** Apple formats a string only when the call passes arguments,
   which the source decides for every language: where it has a specifier, a plural or a substitution, a percent sign
-  is `%%` (a `%` before a space prints a missing argument, and a `%` that starts no specifier is dropped); where it
-  has none, a plain `%` (a `%%` shows twice). `check` reports both; landing strings aren't printf, so their `%` is free.
+  is `%%` (a `%` before a space or right after a number reads an argument, `50%OFF` prints "505FF", and a `%` that
+  starts no specifier is dropped); where it has none, a plain `%` (a `%%` shows twice). `check` reports both; landing
+  strings aren't printf, so their `%` is free.
 
 ## Steps
 

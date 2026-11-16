@@ -249,17 +249,28 @@ class GapTests(L10nTestCase):
 
     def test_a_percent_sign_is_written_as_the_source_writes_it(self):
         """Apple formats a string only when the call passes arguments, as the source decides for every language: then a
-        percent sign is `%%` (a `%` before a space prints a missing argument, one that starts no specifier is dropped),
-        and without arguments a plain `%` (`%%` shows twice). A plural form is always formatted, even without a number."""
+        percent sign is `%%` (a `%` before a space or right after a number is a specifier, one that starts no specifier
+        is dropped), and without arguments a plain `%` (`%%` shows twice). A plural form is always formatted, even
+        without a number."""
         stray = "Apple drops a % that starts no specifier, at times with the letter after it: write the percent sign as %%"
         specifier = "is a specifier to Apple, beside the string's arguments, and prints one that isn't there: write the " \
                     "percent sign as %%"
         twice = "Apple prints a string that takes no arguments as it is, so %% shows twice: write one %"
+        digit = "after a number is a specifier to Apple, not a percent sign: write the percent sign as %%"
         self.assertEqual(l10n.percent_problem("Batterie à %lld %"), f"'%': {stray}", "Apple prints 'Batterie à 5 '")
         self.assertEqual(l10n.percent_problem("%lld % mehr"), f"'% m': {stray}")
         self.assertEqual(l10n.percent_problem("%lld %, puis"), f"'%, ': {stray}")
         self.assertEqual(l10n.percent_problem("100 %, puis %lld"), f"'%, ': {stray}", "before a specifier too")
-        self.assertEqual(l10n.percent_problem("%lld % % sûr"), "'% %' prints a single %: write the percent sign as %%")
+        self.assertEqual(l10n.percent_problem("%lld % % sûr"), "'% %' prints as ' %': write the percent sign as %%")
+        self.assertEqual(l10n.percent_problem("%lld %5% x"), "'%5%' prints as '5%': write the percent sign as %%",
+                         "Apple drops the first %, and prints what follows it")
+        self.assertEqual(l10n.percent_problem("One item, 50%OFF", True), f"'%O' {digit}", "Apple prints '505FF'")
+        self.assertEqual(l10n.percent_problem("%lld left, 100%ige"), f"'%i' {digit}", "Apple prints '1000ge'")
+        self.assertEqual(l10n.percent_problem("%arg file, 100%safe", True, form=True), f"'%s' {digit}",
+                         "%s reads an argument as a C string")
+        self.assertIsNone(l10n.percent_problem("Top 10%@", True), "what Swift writes for an interpolation")
+        self.assertIsNone(l10n.percent_problem("%1$lld–%2$lld", True))
+        self.assertIsNone(l10n.percent_problem("100%ige Sicherheit"), "a string that takes no arguments prints it as is")
         self.assertEqual(l10n.percent_problem("%lld % fatto"), f"'% f' {specifier}")
         self.assertEqual(l10n.percent_problem("%#@n@, 100% fatto"), f"'% f' {specifier}", "a substitution formats")
         self.assertEqual(l10n.percent_problem("%arg al 100% fatto", True, form=True), f"'% f' {specifier}")
@@ -298,6 +309,10 @@ class GapTests(L10nTestCase):
         self.assertEqual(l10n.number_problem(effort, "%lld exercises at 100%% effort"),
                          f"en 'One exercise at 100% effort': '% e' {specifier}",
                          "every plural form is formatted, so '% e' is %e with a space flag, reading a missing double")
+        safe = {"localizations": {"en": {"variations": {"plural": {
+            "one": unit("One file, 100%safe"), "other": unit("%lld files, 100%% safe")}}}}}
+        self.assertEqual(l10n.number_problem(safe, "%lld files, 100%% safe"), f"en 'One file, 100%safe': '%s' {digit}",
+                         "a numberless form is formatted too: at a count of one Apple crashes there")
 
         self.assertEqual(l10n.validate_item("100% sure", {"value": "Sûr à 100 %%"}, plain, "fr"), [twice])
         self.assertEqual(l10n.validate_item("100% sure", {"value": "100%ige Sicherheit"}, plain, "de"), [])
@@ -310,6 +325,10 @@ class GapTests(L10nTestCase):
         self.assertEqual(l10n.validate_item("%lld exercises at 100%% effort", {"value": {
             "one": "%lld exercice à 100 %", "other": "%lld exercices à 100 %%"}}, effort, "fr"), [
             f"one: '%': {stray}"], "a stray % takes no argument, so only percent_problem sees it")
+        self.assertEqual(l10n.validate_item("%lld exercises at 100%% effort", {"value": {
+            "one": "%lld exercice, 50%OFF", "other": "%lld exercices à 100 %% d'effort"}}, effort, "fr"), [
+            "one: format specifiers ['%1$lld'] != ['%1$lld', '%2$O']: a percent sign beside a number is %%"],
+            "in a formatted translation '%O' after a number counts as an argument")
         promoted = {"en_plural": {"one": "One left, 100% done"}, "value": {"one": "x", "other": "y"}}
         self.assertEqual(l10n.validate_item("%lld left, 100%% done", promoted, {}, "it"), [
             "en_plural.one: format specifiers ['%1$lld'] != []: a percent sign beside a number is %%"])
@@ -322,6 +341,9 @@ class GapTests(L10nTestCase):
                                               "other": "%lld exercises at 100%% effort"}}})
         self.assertEqual((added, errors), ([], [f"'%lld% done': '% d' {specifier}",
                                                 f"'%lld exercises at 100%% effort': '% e' {specifier}"]))
+        self.assertEqual(l10n.add_strings({"%lld items, 50%%OFF": {"plural": {
+            "one": "One item, 50%OFF", "other": "%lld items, 50%%OFF"}}}),
+            ([], [f"'%lld items, 50%%OFF': '%O' {digit}"]))
 
     def test_a_plural_over_two_numbers_is_reported(self):
         """Xcode reads a plural's forms together: it can't tell which of two numbers counts, positions or not, and
@@ -789,10 +811,13 @@ class ExportTests(L10nTestCase):
                          "'% d' is a specifier to Apple, beside the string's arguments, and prints one that isn't "
                          "there: write the percent sign as %%")
         self.assertEqual(l10n.to_net_format("%2$@ %@ %lld"), "{1} {0} {1}")
-        self.assertEqual(l10n.to_net_format("%lld % % sûr"), "{0} % sûr", "'% %' prints one %, as on Apple")
+        self.assertEqual(l10n.to_net_format("%lld % % sûr"), "{0}  % sûr", "'% %' prints ' %', as on Apple")
+        self.assertEqual(l10n.to_net_format("%lld moves, 10%-20% faster"), "{0} moves, 10-20% faster",
+                         "Apple drops a flagged percent sign's first %, and check reports it")
+        self.assertEqual(l10n.form_to_net("%arg moves, 10%-20% faster", 0, "x"), "{0} moves, 10-20% faster")
         self.assertEqual(l10n.to_net_format("Today 50%OFF"), "Today 50%OFF", "Swift writes a bare literal as it is")
         self.assertEqual(l10n.to_net_format("%#@earned@", subs("%arg at 100% %", "%arg at 100%%"), "one"),
-                         "{0} at 100%")
+                         "{0} at 100 %")
         self.assertEqual(l10n.to_net_format("One left, 100%% done", literal=False), "One left, 100% done",
                          "a numberless plural form is formatted all the same")
         self.assertEqual(l10n.to_net_format("Sûr à 100 %%"), "Sûr à 100 %%", "a plain string is exported as Apple shows it")

@@ -391,8 +391,9 @@ def percent_problem(text: str, formatted: bool | None = None, form: bool = False
     else `text`'s own (`plain`).
     - Formatted, a percent sign is `%%`: a `%` before a space is a specifier with printf's space flag and prints an
       argument that isn't there (`%lld % fatto` prints "5 0,000000atto"), one that starts no specifier is dropped, at
-      times with the letter after it (`%lld % neu` prints "5 eu", `%lld %` "5 "), and a percent sign with printf's
-      flags or width (`% %`, `%5%`) prints one `%`.
+      times with the letter after it (`%lld % neu` prints "5 eu", `%lld %` "5 "), one right after a number reads an
+      argument too, where Swift wouldn't write it (`50%OFF` prints "505FF"), and a percent sign with printf's flags or
+      width prints what follows its first `%` (`%5%` prints "5%").
     - Not formatted, Apple prints `%%` as it is, twice."""
     if formatted is None:
         formatted = not plain(text)
@@ -405,12 +406,14 @@ def percent_problem(text: str, formatted: bool | None = None, form: bool = False
         pos, token = m.end(), m.group(0)
         if token == "%arg" or token == "%%" or SUBST_RE.fullmatch(token):
             continue
-        spec = SPEC_RE.fullmatch(token)
+        spec = SPEC_RE.match(text, m.start())
         if spec.group(2) == "%":
-            return f"{token!r} prints a single %: write the percent sign as %%"
+            return f"{token!r} prints as {token[1:]!r}: write the percent sign as %%"
         if LITERAL_PERCENT_RE.match(token):
             return (f"{token!r} is a specifier to Apple, beside the string's arguments, and prints one that isn't "
                     "there: write the percent sign as %%")
+        if percent_sign(text, spec):
+            return f"{token!r} after a number is a specifier to Apple, not a percent sign: write the percent sign as %%"
     else:
         stray = text.find("%", pos)
     if stray >= 0:
@@ -1153,7 +1156,7 @@ PO_PLURAL_KIND = {
     "zh-Hans": "none",
 }
 
-CLDR_ORDER =["zero", "one", "two", "few", "many", "other"]
+CLDR_ORDER = ["zero", "one", "two", "few", "many", "other"]
 
 
 def cldr_sorted(plural: dict) -> dict:
@@ -1202,8 +1205,8 @@ def form_to_net(form: str, arg: int, text: str) -> str:
         token = m.group(0)
         if token == "%arg":
             out.append("{%d}" % arg)
-        elif m.group(2) == "%":  # `%%`, or with printf's flags (`% %`), as Apple prints it
-            out.append("%")
+        elif m.group(2) == "%":  # `%%` prints `%`, and with printf's flags what follows its first `%`, as on Apple
+            out.append(token[1:])
         elif m.group(1):
             out.append("{%d}" % (int(m.group(1)) - 1))
         else:
@@ -1226,8 +1229,8 @@ def to_net_format(text: str, substitutions: dict | None = None, variant: str | N
         token = m.group(0)
         if literal:
             out.append(token)
-        elif m.group(3) == "%":  # `%%`, or with printf's flags (`% %`), as Apple prints it
-            out.append("%")
+        elif m.group(3) == "%":  # `%%` prints `%`, and with printf's flags what follows its first `%`, as on Apple
+            out.append(token[1:])
         elif m.group(1):
             sub = (substitutions or {}).get(m.group(1))
             if sub is None or variant is None:
