@@ -180,18 +180,24 @@ INTEGER_CONVERSIONS = set("dDiuUoOxX")
 # "5 0,000000atto"), so a percent sign there is `%%`.
 LITERAL_PERCENT_RE = re.compile(r"%(?:\d+\$)?[-+#0]* ")
 # What Swift writes for an interpolation, never a percent sign even right after a number (`Top 10\(name)`); Text's
-# `specifier:` writes flags, width or precision too (`Room 1\(n, specifier: "%02d")`), which a word never does.
+# `specifier:` writes any specifier there (`Room 1\(n, specifier: "%02d")`, `U+00\(code, specifier: "%X")`).
 SWIFT_SPECIFIERS = {"%@", "%lld", "%llu", "%ld", "%lu", "%lf", "%d", "%u", "%f"}
-BARE_SPEC_RE = re.compile(r"%(?:hh|h|ll|l|q|z|t|j)?.")  # a `%`, a length and a conversion: what `50%OFF` makes
+# What a percent sign makes before a word: a `%`, a length and a conversion (`50%OFF`, `100%ige`), or the same with a
+# hyphen (`100%-Garantie`, `100%-os`, `50%-a`), which a specifier never has without a width.
+WORD_SPEC_RE = re.compile(r"%(-)?(?:hh|h|ll|l|q|z|t|j)?.")
 
 
 def percent_sign(text: str, m: re.Match) -> bool:
     """Whether a SPEC_RE match in `text` is a percent sign, should the string take no arguments: `%%`, a `%` before a
-    space, or a bare one right after a digit ("100%ige", "50%OFF") that Swift wouldn't write."""
+    space, or one right after a digit that starts a word ("100%ige", "50%OFF", "100%-Garantie") where Swift would
+    write none ("Top 10%@", "U+00%X")."""
     token = m.group(0)
-    return (m.group(2) == "%" or bool(LITERAL_PERCENT_RE.match(token))
-            or (m.start() > 0 and text[m.start() - 1].isdigit() and token not in SWIFT_SPECIFIERS
-                and BARE_SPEC_RE.fullmatch(token) is not None))
+    if m.group(2) == "%" or LITERAL_PERCENT_RE.match(token):
+        return True
+    if m.start() == 0 or not text[m.start() - 1].isdigit() or token in SWIFT_SPECIFIERS:
+        return False
+    word = WORD_SPEC_RE.fullmatch(token)
+    return word is not None and (word.group(1) is not None or text[m.end():m.end() + 1].isalpha())
 
 
 def plain(text: str) -> bool:

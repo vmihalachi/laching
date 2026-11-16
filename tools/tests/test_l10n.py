@@ -275,6 +275,15 @@ class GapTests(L10nTestCase):
         self.assertEqual([l10n.to_net_format("Room 1%02d"), l10n.to_net_format("Room 1%02d is 100%% ready")],
                          ["Room 1{0}", "Room 1{0} is 100% ready"])
         self.assertIsNone(l10n.token_problem("Season 20%02d, %lld runs", "Saison 20%02d, %lld Läufe"))
+        for text in ("U+00%X", "Room 1%x", "Scale 1%g", "%@: U+00%X"):
+            self.assertFalse(l10n.plain(text), f"{text!r}: a bare specifier: value right after a digit, no word after it")
+        self.assertEqual(l10n.to_net_format("U+00%X"), "U+00{0}")
+        for text in ("100%-Garantie", "Get 50%-off", "50%-a az eszközön", "100%legit", "100%OK"):
+            self.assertTrue(l10n.plain(text), f"{text!r}: a hyphen or a word after a number's % is text")
+        self.assertEqual(l10n.to_net_format("100%-free"), "100%-free")
+        self.assertIsNone(l10n.token_problem("100% on-device", "100%-os adatvédelem"))
+        self.assertIsNone(l10n.token_problem("100% on-device", "100%-garantie op het apparaat"))
+        self.assertEqual(l10n.percent_problem("%lld elem, 100%-os", True), f"'%-o' {digit}", "Apple prints '10017141s'")
         self.assertIsNone(l10n.percent_problem("%1$lld–%2$lld", True))
         self.assertIsNone(l10n.percent_problem("100%ige Sicherheit"), "a string that takes no arguments prints it as is")
         self.assertEqual(l10n.percent_problem("%lld % fatto"), f"'% f' {specifier}")
@@ -353,6 +362,9 @@ class GapTests(L10nTestCase):
         self.assertEqual(l10n.add_strings({"%lld left, 100%% done": {"plural": {
             "one": "%lld left, 100%ige", "other": "%lld left, 100%% done"}}}),
             ([], [f"'%lld left, 100%% done': '%i' {digit}"]), "the percent sign, not the two numbers it makes")
+        self.assertEqual(l10n.add_strings({"%lld left, 100%% free": {"plural": {
+            "one": "%lld left, 100%-free", "other": "%lld left, 100%% free"}}}),
+            ([], [f"'%lld left, 100%% free': '%-f' {digit}"]))
 
     def test_a_plural_over_two_numbers_is_reported(self):
         """Xcode reads a plural's forms together: it can't tell which of two numbers counts, positions or not, and
