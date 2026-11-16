@@ -179,6 +179,328 @@ class GapTests(L10nTestCase):
         self.assertEqual(l10n.catalog_issues("%lld lines muted", entry, "de"), [])
         self.assertEqual(l10n.substitution_issues({"localizations": {"en": {}}}, "it"), [], "no substitutions, nothing to check")
 
+    def test_a_number_in_a_substitution_form_keeps_its_position(self):
+        """A form is spliced into its string, so `%2$lld` there names the second argument: check wants every form to
+        hold `%arg` and the English form's other specifiers, positions included."""
+        def localization(forms):
+            plural = {cat: {"stringUnit": {"state": "translated", "value": form}} for cat, form in forms.items()}
+            return {"stringUnit": {"state": "translated", "value": "%#@earned@"},
+                    "substitutions": {"earned": {"argNum": 1, "formatSpecifier": "lld", "variations": {"plural": plural}}}}
+
+        key = "%lld of %lld earned"
+        english = localization({"one": "%arg of %2$lld earned", "other": "%arg of %2$lld earned"})
+        italian = localization({"one": "%arg di %2$lld ottenuto", "other": "%arg di %2$lld ottenuti"})
+        self.assertEqual(l10n.catalog_issues(key, {"localizations": {"en": english, "it": italian}}, "it"), [])
+        german = localization({"one": "%arg von %1$lld erhalten", "other": "%2$lld erhalten", "few": "%arg von %lld"})
+        self.assertEqual(l10n.catalog_issues(key, {"localizations": {"en": english, "de": german}}, "de"), [
+            "substitution earned one: format specifiers ['%2$lld'] != ['%1$lld']",
+            "substitution earned other: needs %arg",
+            "substitution earned few: format specifiers ['%2$lld'] != ['%lld']",
+        ])
+        self.assertEqual(l10n.form_problem("%arg lines", "100%%arg"), "needs %arg", "%%arg is a percent sign and arg")
+        self.assertEqual(l10n.form_problem("%arg of %2$@", "%arg {x} %2$@"), "placeholders/tags [] != ['{x}']")
+        self.assertIsNone(l10n.form_problem("%arg lines, 100%%", "%arg righe, 100%%"), "%% isn't a number")
+        self.assertEqual(l10n.form_problem("%arg of %lld", "%arg di %lld"), "%lld needs its position, as %2$lld",
+                         "the ports can't place it, even when the English has it so")
+        self.assertEqual(l10n.form_problem("%arg (%#x)", "%arg (%#x)"), "%#x needs its position, as %2$lld",
+                         "a # flag isn't a substitution")
+        self.assertEqual(l10n.form_problem("%arg of %#@total@", "%arg di %#@total@"),
+                         "holds another substitution, %#@total@, which the ports can't take")
+        swapped = localization({"one": "%arg di %2$lld ottenuto", "other": "%arg di %2$lld ottenuti"})
+        swapped["substitutions"]["earned"].update(argNum=2, formatSpecifier="@")
+        self.assertEqual(l10n.catalog_issues(key, {"localizations": {"en": english, "it": swapped}}, "it"), [
+            "substitution earned: argNum 2 != 1",
+            "substitution earned: formatSpecifier '@' != 'lld'",
+        ])
+
+    def test_a_translation_keeps_each_argument_where_the_english_has_it(self):
+        """Positions may reorder arguments, but a specifier never takes another one's: Apple numbers positionless
+        specifiers on their own, so `%#@hours@, %lld min` would show the hours twice, and a type swap crashes."""
+        self.assertIsNone(l10n.token_problem("%@ moved %lld", "%2$lld spostati da %1$@"))
+        self.assertEqual(l10n.token_problem("%@ moved %lld", "%lld spostati da %@"),
+                         "format specifiers ['%1$@', '%2$lld'] != ['%1$lld', '%2$@']")
+        self.assertEqual(l10n.token_problem("%#@hours@, %2$lld min", "%#@hours@, %lld min"),
+                         "format specifiers ['%#@', '%2$lld'] != ['%#@', '%1$lld']")
+        self.assertEqual(l10n.token_problem("%#@hours@, %2$lld min", "%#@hours@, %1$lld min"),
+                         "format specifiers ['%#@', '%2$lld'] != ['%#@', '%1$lld']")
+        self.assertIsNone(l10n.token_problem("%#@hours@, %2$lld min", "%1$#@hours@, %2$lld min"))
+        self.assertIsNone(l10n.token_problem("100%% of %lld", "%lld al 100%%"))
+        self.assertIsNone(l10n.token_problem("100% on-device, 0% data sent", "0% dati inviati, 100% sul dispositivo"),
+                          "Apple prints a string with no arguments as it is, so a % before a space is text there")
+        self.assertEqual(l10n.token_problem("%lld%% done", "%lld % terminé"),
+                         "format specifiers ['%1$lld'] != ['%1$lld', '%2$ te']: a percent sign beside a number is %%",
+                         "beside an argument, Apple reads `% te` as a specifier and prints '5 0,000000E+00rminé'")
+        self.assertIn("['%1$lld', '%2$ d']: a percent sign beside a number is %%",
+                      l10n.token_problem("%lld at 50%% off", "%lld à 50 % de réduction"))
+        self.assertEqual([l10n.plain(text) for text in ("100% sure", "0% data, 100% sure", "100%% sure", "%lld% done",
+                                                        "%#@n@ at 100% done", "no number", "Today 50%OFF",
+                                                        "100%ige Sicherheit", "Top 10%@", "%@ sicuro", "100%1$@", "Top 10%#@n@")],
+                         [True, True, True, False, False, True, True, True, False, False, False, False],
+                         "a % after a digit is a percent sign unless Swift would write it: `Top 10\\(name)`")
+        self.assertIsNone(l10n.token_problem("100% sure", "100%ige Sicherheit"), "neither takes an argument")
+        self.assertEqual(l10n.token_problem("Done", "%@ fatto"), "format specifiers [] != ['%1$@']")
+        self.assertEqual(l10n.token_problem("100% sure", "%@ à 100 % sûr"), "format specifiers [] != ['%1$@', '%2$ s']",
+                         "no hint for a percent sign where the English takes no argument")
+        self.assertEqual(l10n.token_problem("%lld%% sure", "%lld, 100%ige Sicherheit"),
+                         "format specifiers ['%1$lld'] != ['%1$lld', '%2$i']: a percent sign beside a number is %%")
+        self.assertEqual(l10n.token_problem("%lld%% done", "Fatto al 100%%"), "format specifiers ['%1$lld'] != []",
+                         "no hint when the percent sign is already %%")
+        self.assertEqual(l10n.specifiers("%@ %2$@ %@"), ["%1$@", "%2$@", "%2$@"], "Apple's count skips %2$@")
+
+    def test_a_percent_sign_is_written_as_the_source_writes_it(self):
+        """Apple formats a string only when the call passes arguments, as the source decides for every language: then a
+        percent sign is `%%` (a `%` before a space or right after a number is a specifier, one that starts no specifier
+        is dropped), and without arguments a plain `%` (`%%` shows twice). A plural form is always formatted, even
+        without a number."""
+        stray = "Apple drops a % that starts no specifier, at times with the letter after it: write the percent sign as %%"
+        specifier = "is a specifier to Apple, beside the string's arguments, and prints one that isn't there: write the " \
+                    "percent sign as %%"
+        twice = "Apple prints a string that takes no arguments as it is, so %% shows twice: write one %"
+        digit = "after a number is a specifier to Apple, not a percent sign: write the percent sign as %%"
+        self.assertEqual(l10n.percent_problem("Batterie à %lld %"), f"'%': {stray}", "Apple prints 'Batterie à 5 '")
+        self.assertEqual(l10n.percent_problem("%lld % mehr"), f"'% m': {stray}")
+        self.assertEqual(l10n.percent_problem("%lld %, puis"), f"'%, ': {stray}")
+        self.assertEqual(l10n.percent_problem("100 %, puis %lld"), f"'%, ': {stray}", "before a specifier too")
+        self.assertEqual(l10n.percent_problem("%lld % % sûr"), "'% %' prints as ' %': write the percent sign as %%")
+        self.assertEqual(l10n.percent_problem("%lld %5% x"), "'%5%' prints as '5%': write the percent sign as %%",
+                         "Apple drops the first %, and prints what follows it")
+        self.assertEqual(l10n.percent_problem("One item, 50%OFF", True), f"'%O' {digit}", "Apple prints '505FF'")
+        self.assertEqual(l10n.percent_problem("%lld left, 100%ige"), f"'%i' {digit}", "Apple prints '1000ge'")
+        self.assertEqual(l10n.percent_problem("%arg file, 100%safe", True, form=True), f"'%s' {digit}",
+                         "%s reads an argument as a C string")
+        self.assertIsNone(l10n.percent_problem("Top 10%@", True), "what Swift writes for an interpolation")
+        for text in ("Room 1%02d", "Room 1%02d is 100%% ready", "Season 20%02d, %lld runs", "Lap 1%.1f", "Floors 1%02d"):
+            self.assertFalse(l10n.plain(text), f"{text!r}: Text's specifier: writes flags, width and precision too")
+            self.assertIsNone(l10n.percent_problem(text, True if text.startswith("Floors") else None), text)
+        self.assertEqual([l10n.to_net_format("Room 1%02d"), l10n.to_net_format("Room 1%02d is 100%% ready")],
+                         ["Room 1{0}", "Room 1{0} is 100% ready"])
+        self.assertIsNone(l10n.token_problem("Season 20%02d, %lld runs", "Saison 20%02d, %lld Läufe"))
+        for text in ("U+00%X", "U+00%X copied", "U+00%X.", "Room 1%x:", "Scale 1%g", "Level 1%lldb", "Size 2%fx"):
+            self.assertFalse(l10n.plain(text), f"{text!r}: what Swift writes right after a digit, no word after it")
+        for text in ("Zoom 1-%gx", "Speed 0.5-%gx", "Set 1 %gkg", "Up to 1\u00a0%gx"):
+            self.assertFalse(l10n.plain(text), f"{text!r}: a specifier: value with a unit, after a number and a space or hyphen")
+        self.assertEqual(l10n.to_net_format("Set 1 %gkg"), "Set 1 {0}kg")
+        self.assertIsNone(l10n.percent_problem("Zoom 1-%gx, %lld more", True))
+        self.assertEqual([l10n.to_net_format("U+00%X"), l10n.to_net_format("U+00%X copied")], ["U+00{0}", "U+00{0} copied"])
+        for text in ("100%-Garantie", "Get 50%-off", "50%-a az eszközön", "100%legit", "100%OK", "100%ige Sicherheit"):
+            self.assertTrue(l10n.plain(text), f"{text!r}: a hyphen or a word right after a number's % is text")
+        for text in ("Over 50 %-grensen", "Over 50\u00a0%-grænsen", "Über der 50-%-Grenze", "100\u202f%-garantie",
+                     "50 %-os kedvezmény"):
+            self.assertTrue(l10n.plain(text), f"{text!r}: a hyphen after a number, a space or hyphen and a % is text")
+        for translation in ("Over 50 %-grensen", "Över 50 %-gränsen", "Über der 50-%-Grenze", "Boven de 50 %-grens"):
+            self.assertIsNone(l10n.token_problem("Above the 50% limit", translation), translation)
+        for text in ("지난주보다 1%p 상승", "2.5%p 상승", "10%p.", "1%p"):
+            self.assertTrue(l10n.plain(text), f"{text!r}: Korean's percentage point")
+        self.assertIsNone(l10n.token_problem("Up 1 percentage point", "지난주보다 1%p 상승"))
+        self.assertEqual(l10n.percent_problem("%lld회, 1%p 상승", True), f"'%p' {digit}", "Apple prints '3회, 10x7 상승'")
+        self.assertFalse(l10n.plain("Room 1 %p"), "with a space between, only a hyphenated % is text")
+        self.assertEqual(l10n.form_problem("%arg sessions above the 50%% limit", "%arg økter over 50 %-grensen"),
+                         f"'%-g' {digit}", "the percent sign, not the specifier it makes")
+        self.assertEqual(l10n.percent_problem("%lld økter over 50 %-grensen", True), f"'%-g' {digit}",
+                         "Apple prints '3 økter over 50 0rensen'")
+        self.assertEqual(l10n.to_net_format("100%-free"), "100%-free")
+        self.assertIsNone(l10n.token_problem("100% on-device", "100%-os adatvédelem"))
+        self.assertIsNone(l10n.token_problem("100% on-device", "100%-garantie op het apparaat"))
+        self.assertEqual(l10n.percent_problem("%lld elem, 100%-os", True), f"'%-o' {digit}", "Apple prints '10017141s'")
+        self.assertIsNone(l10n.percent_problem("%1$lld–%2$lld", True))
+        self.assertIsNone(l10n.percent_problem("100%ige Sicherheit"), "a string that takes no arguments prints it as is")
+        self.assertEqual(l10n.percent_problem("%lld % fatto"), f"'% f' {specifier}")
+        self.assertEqual(l10n.percent_problem("%#@n@, 100% fatto"), f"'% f' {specifier}", "a substitution formats")
+        self.assertEqual(l10n.percent_problem("%arg al 100% fatto", True, form=True), f"'% f' {specifier}")
+        self.assertIsNone(l10n.percent_problem("%arg al 100%% fatto", True, form=True))
+        self.assertIsNone(l10n.percent_problem("%lld%% done"))
+        self.assertIsNone(l10n.percent_problem("%1$#@n@ (%2$lld%%)"))
+        self.assertIsNone(l10n.percent_problem("100% sure"))
+        self.assertEqual(l10n.percent_problem("100%% sure"), twice)
+        self.assertEqual(l10n.percent_problem("Sûr à 100 %%", False), twice)
+        self.assertEqual(l10n.percent_problem("One at 100% effort", True), f"'% e' {specifier}")
+
+        def unit(value):
+            return {"stringUnit": {"state": "translated", "value": value}}
+
+        days = {"localizations": {"en": {"variations": {"plural": {"one": unit("A day"), "other": unit("Days")}}}}}
+        self.assertEqual([l10n.formats(days, "streak.days"), l10n.formats({"localizations": {"en": unit("100% sure")}}),
+                          l10n.formats({}, "%lld%% done"), l10n.formats({}, "100% sure"), l10n.formats({})],
+                         [True, False, True, False, None], "a plural formats, whatever its key")
+        own = {"localizations": {"en": unit("Done"), "it": {"stringUnit": {"state": "translated",
+               "value": "%#@n@ fatto al 100%%"}, "substitutions": {"n": {"argNum": 1, "formatSpecifier": "lld",
+               "variations": {"plural": {"one": unit("%arg"), "other": unit("%arg")}}}}}}}
+        self.assertIsNone(l10n.number_problem(own, "Done"), "a value with a substitution formats, whatever the English")
+
+        plain = {"localizations": {"en": unit("100% sure"), "it": unit("Sicuro al 100%"),
+                                   "de": unit("100%ige Sicherheit")}}
+        self.assertIsNone(l10n.number_problem(plain, "100% sure"))
+        plain["localizations"]["fr"] = unit("Sûr à 100 %%")
+        self.assertEqual(l10n.number_problem(plain, "100% sure"), f"fr 'Sûr à 100 %%': {twice}")
+        bare = {"localizations": {"fr": unit("Sûr à 100 %")}}
+        self.assertIsNone(l10n.number_problem(bare, "100% sure"), "without an en unit the key is the English")
+        self.assertEqual(l10n.number_problem(bare, "%lld % done"), f"en '%lld % done': '% d' {specifier}")
+        formatted = {"localizations": {"en": unit("%lld%% done"), "fr": unit("%lld % fait")}}
+        self.assertEqual(l10n.number_problem(formatted, "%lld%% done"), f"fr '%lld % fait': '% f' {specifier}")
+        effort = {"localizations": {"en": {"variations": {"plural": {
+            "one": unit("One exercise at 100% effort"), "other": unit("%lld exercises at 100%% effort")}}}}}
+        self.assertEqual(l10n.number_problem(effort, "%lld exercises at 100%% effort"),
+                         f"en 'One exercise at 100% effort': '% e' {specifier}",
+                         "every plural form is formatted, so '% e' is %e with a space flag, reading a missing double")
+        safe = {"localizations": {"en": {"variations": {"plural": {
+            "one": unit("One file, 100%safe"), "other": unit("%lld files, 100%% safe")}}}}}
+        self.assertEqual(l10n.number_problem(safe, "%lld files, 100%% safe"), f"en 'One file, 100%safe': '%s' {digit}",
+                         "a numberless form is formatted too: at a count of one Apple crashes there")
+
+        self.assertEqual(l10n.validate_item("100% sure", {"value": "Sûr à 100 %%"}, plain, "fr"), [twice])
+        self.assertEqual(l10n.validate_item("100% sure", {"value": "100%ige Sicherheit"}, plain, "de"), [])
+        self.assertEqual(l10n.validate_item("%lld%% done", {"value": "%lld %, fait"}, formatted, "fr"),
+                         [f"'%, ': {stray}"])
+        self.assertEqual(l10n.validate_item("%lld exercises at 100%% effort", {"value": {
+            "one": "Un exercice à 100 % d'effort", "other": "%lld exercices à 100 %% d'effort"}}, effort, "fr"), [
+            "one: format specifiers ['%1$lld'] != []: a percent sign beside a number is %%"],
+            "a translated form keeps the number, and the hint names the percent sign")
+        self.assertEqual(l10n.validate_item("%lld exercises at 100%% effort", {"value": {
+            "one": "%lld exercice à 100 %", "other": "%lld exercices à 100 %%"}}, effort, "fr"), [
+            f"one: '%': {stray}"], "a stray % takes no argument, so only percent_problem sees it")
+        self.assertEqual(l10n.validate_item("%lld exercises at 100%% effort", {"value": {
+            "one": "%lld exercice, 50%OFF", "other": "%lld exercices à 100 %% d'effort"}}, effort, "fr"), [
+            "one: format specifiers ['%1$lld'] != ['%1$lld', '%2$O']: a percent sign beside a number is %%"],
+            "in a formatted translation '%O' after a number counts as an argument")
+        promoted = {"en_plural": {"one": "One left, 100% done"}, "value": {"one": "x", "other": "y"}}
+        self.assertEqual(l10n.validate_item("%lld left, 100%% done", promoted, {}, "it"), [
+            "en_plural.one: format specifiers ['%1$lld'] != []: a percent sign beside a number is %%"])
+        promoted["en_plural"]["one"] = "%lld left, 100%"
+        self.assertEqual(l10n.validate_item("%lld left, 100%% done", promoted, {}, "it"), [f"en_plural.one: '%': {stray}"])
+
+        added, errors = l10n.add_strings({"%lld% done": {"en": "%lld% done"},
+                                          "%lld exercises at 100%% effort": {"plural": {
+                                              "one": "One exercise at 100% effort",
+                                              "other": "%lld exercises at 100%% effort"}}})
+        self.assertEqual((added, errors), ([], [f"'%lld% done': '% d' {specifier}",
+                                                f"'%lld exercises at 100%% effort': '% e' {specifier}"]))
+        self.assertEqual(l10n.add_strings({"%lld items, 50%%OFF": {"plural": {
+            "one": "One item, 50%OFF", "other": "%lld items, 50%%OFF"}}}),
+            ([], [f"'%lld items, 50%%OFF': '%O' {digit}"]))
+        self.assertEqual(l10n.add_strings({"%lld left, 100%% done": {"plural": {
+            "one": "%lld left, 100%ige", "other": "%lld left, 100%% done"}}}),
+            ([], [f"'%lld left, 100%% done': '%i' {digit}"]), "the percent sign, not the two numbers it makes")
+        self.assertEqual(l10n.add_strings({"%lld left, 100%% free": {"plural": {
+            "one": "%lld left, 100%-free", "other": "%lld left, 100%% free"}}}),
+            ([], [f"'%lld left, 100%% free': '%-f' {digit}"]))
+
+    def test_a_plural_over_two_numbers_is_reported(self):
+        """Xcode reads a plural's forms together: it can't tell which of two numbers counts, positions or not, and
+        can't build one number spelled two ways; export offers no English plural to create for either, and neither
+        `add` nor `apply` writes one."""
+        def unit(value):
+            return {"stringUnit": {"state": "translated", "value": value}}
+
+        def plural(value, lang="en", one=None):
+            forms = {"one": unit(value if one is None else one), "other": unit(value)}
+            return {"localizations": {lang: {"variations": {"plural": forms}}}}
+
+        cases = {
+            "%lld of %lld earned": True, "%02lld:%02lld": True, "%lld breaks, %.1f min": True, "%lld:%02lld": True,
+            "%lld and %1$ld": True, "%1$lld of %1$02lld": True,
+            "%1$lld min (%1$lld)": False, "%lld min (%1$lld)": False, "%lld at 100%%d": False, "%lld of %@": False,
+            "%lld done, 100%% sure": False, "%lld done, 100% sure": True, "%lld done, 100% done": True,
+        }
+        for value, ambiguous in cases.items():
+            self.assertEqual(l10n.number_problem(plural(value)) is not None, ambiguous, value)
+        self.assertEqual(l10n.number_problem(plural("%1$lld / %2$lld 獲得", "ja")),
+                         "ja '%1$lld / %2$lld 獲得' is a plural over 2 numbers, so Xcode can't tell which one counts: "
+                         "count it through a substitution, %#@name@")
+        self.assertEqual(l10n.number_problem(plural("%2$lld items", one="%lld item")),
+                         "en '%lld item' / '%2$lld items' is a plural over 2 numbers, so Xcode can't tell which one "
+                         "counts: count it through a substitution, %#@name@", "one number in each form")
+        self.assertEqual(l10n.number_problem(plural("%1$lld items", one="%ld item")),
+                         "en '%ld item' / '%1$lld items' is a plural spelling its number two ways, %ld and %lld, which "
+                         "fails Xcode's build: spell it one way")
+        self.assertIn("and spelled two ways (%.1f, %lld) it fails the build",
+                      l10n.number_problem(plural("%lld breaks, %.1f min")))
+        self.assertIsNone(l10n.number_problem(plural("%lld breaks", one="one break")), "a form may hold no number")
+        self.assertEqual(l10n.number_problem(plural("%lld done, 100% sure")),
+                         "en '%lld done, 100% sure': '% s' is a specifier to Apple, beside the string's arguments, and "
+                         "prints one that isn't there: write the percent sign as %%", "Apple prints '5 done, 100(null)ure'")
+
+        catalog = l10n.load_catalog(l10n.CATALOGS["app"])
+        catalog["strings"]["%lld of %lld earned"] = {"localizations": {
+            **plural("%lld of %lld earned")["localizations"], **plural("%1$lld / %2$lld 獲得", "ja")["localizations"]}}
+        l10n.dump_catalog(l10n.CATALOGS["app"], catalog)
+        self.assertEqual(list(l10n.number_problems()["app"]), ["%lld of %lld earned"])
+        status, out = quiet(l10n.cmd_status, self.args())
+        self.assertEqual(status, 0)
+        self.assertIn("numbers Apple can't place in Localizable.xcstrings: 1\n  '%lld of %lld earned': en '%lld of "
+                      "%lld earned' is a plural over 2 numbers", out)
+        for key, offered in {"%lld of %lld done": False, "%lld breaks, %.1f min": False, "%lld:%02lld": False,
+                             "%.1f min": False, "%lld and %1$ld": False, "%lld done": True, "%02lld min": True,
+                             "%lld of %@": True, "%lld at 100%%d": True, "%lld left, 100%% sure": True,
+                             "%lld left, 100% done": False}.items():
+            self.assertEqual("en_plural" in l10n.work_item(key, {}, "de", ["missing"]), offered, key)
+
+        added, errors = l10n.add_strings({"%lld of %lld on Windows": {"plural": {
+            "one": "%lld of %lld on Windows", "other": "%lld of %lld on Windows"}}})
+        self.assertEqual((added, errors), ([], [
+            "'%lld of %lld on Windows': a plural over 2 numbers, so Xcode can't tell which one counts: count it through "
+            "a substitution, %#@name@"]))
+        promoted = {"en_plural": {"one": "%ld break", "other": "%lld breaks"}, "value": {"one": "x", "other": "y"}}
+        self.assertEqual(l10n.validate_item("%lld breaks", promoted, {}, "it"), [
+            "en_plural.one: format specifiers ['%1$lld'] != ['%1$ld']"])
+        two = "a plural over 2 numbers, so Xcode can't tell which one counts: count it through a substitution, %#@name@"
+        promoted = {"en_plural": {"one": "%lld of %lld"}, "value": {"one": "%lld di %lld", "other": "%lld di %lld"}}
+        self.assertEqual(l10n.validate_item("%lld of %lld", promoted, {}, "it"), [f"en_plural.one: {two}"])
+        self.assertEqual(l10n.validate_item("%lld of %lld", {"value": {"one": "%lld di %lld", "other": "%lld di %lld"}},
+                                            plural("%lld of %lld"), "it"), [two], "nor apply a translation of one")
+
+    def test_a_number_without_a_position_never_takes_a_substitutions_argument(self):
+        """Apple numbers positionless specifiers without counting a substitution, so `%#@hours@, %lld min` prints the
+        hours twice: reported in any language, the English too, since every translation matches it."""
+        def localization(value, arg=1):
+            forms = {cat: {"stringUnit": {"state": "translated", "value": "%arg hr"}} for cat in ("one", "other")}
+            return {"stringUnit": {"state": "translated", "value": value},
+                    "substitutions": {"hours": {"argNum": arg, "formatSpecifier": "lld",
+                                                "variations": {"plural": forms}}}}
+
+        self.assertEqual(l10n.number_problem({"localizations": {"en": localization("%#@hours@, %lld min")}}),
+                         "en '%#@hours@, %lld min': %lld takes argument 1, which %#@hours@ counts, as Apple numbers it: "
+                         "give it the position it means, as %2$lld")
+        self.assertIn("de ", l10n.number_problem({"localizations": {
+            "en": localization("%#@hours@, %2$lld min"), "de": localization("%lld Min., %#@hours@")}}))
+        self.assertIn("%@ takes argument 1", l10n.number_problem({"localizations": {"en": localization("%@: %#@hours@")}}),
+                      "an object is an argument too")
+        for fine, arg in (("%#@hours@, %2$lld min", 1), ("%1$#@hours@ (%1$lld)", 1), ("%@: %#@hours@", 2),
+                          ("noch %#@hours@, %lld fertig", 2), ("%2$#@hours@ (%1$@)", 2)):
+            self.assertIsNone(l10n.number_problem({"localizations": {"de": localization(fine, arg)}}), fine)
+
+        self.assertEqual(l10n.number_problem({"localizations": {
+            "en": localization("%#@hours@, %2$lld min"), "de": localization("%2$#@hours@, %2$lld Min.")}}),
+            "de '%2$#@hours@, %2$lld Min.': %2$#@hours@ picks its plural form by argument 2 but prints argument 1, its "
+            "argNum: give it the same position, or none")
+        unnumbered = localization("%#@hours@")
+        del unnumbered["substitutions"]["hours"]["argNum"]
+        self.assertEqual(l10n.number_problem({"localizations": {"en": unnumbered}}),
+                         "en '%#@hours@': %#@hours@ has no argNum: give it the number of the argument it counts, as "
+                         "Xcode writes it")
+        self.assertEqual(l10n.catalog_issues("%lld hr", {"localizations": {"en": unnumbered, "de": localization("%#@hours@")}},
+                                             "de"), ["substitution hours: argNum 1 != None"], "no KeyError")
+        unspecified = localization("%#@hours@")
+        del unspecified["substitutions"]["hours"]["formatSpecifier"]
+        self.assertEqual(l10n.number_problem({"localizations": {"en": unspecified}}),
+                         "en '%#@hours@': %#@hours@ has no formatSpecifier: give it the conversion of the number it "
+                         "counts, as lld, as Xcode writes it", "xcstringstool fails the build without one")
+        item = {"value": "%#@hours@", "substitutions": {"hours": {"value": {"one": "%arg Std.", "other": "%arg Std."}}}}
+        self.assertEqual(l10n.validate_item("%lld hr", item, {"localizations": {"en": unspecified}}, "de"), [
+            "%#@hours@ has no formatSpecifier: give it the conversion of the number it counts, as lld, as Xcode "
+            "writes it"], "so apply never writes a null one")
+
+        loose = localization("%#@hours@")
+        loose["substitutions"]["hours"]["variations"]["plural"]["other"]["stringUnit"]["value"] = "%arg of %lld"
+        self.assertEqual(l10n.number_problem({"localizations": {"de": loose, "en": loose}}),
+                         "en substitution hours other '%arg of %lld': %lld needs its position, as %2$lld",
+                         "the English is read first, so the form every translation copies is named where it's made")
+
+        english = {"localizations": {"en": localization("%#@hours@, %lld min")}}
+        item = {"value": "%#@hours@, %lld Min.", "substitutions": {"hours": {"value": {"one": "%arg Std.",
+                                                                                         "other": "%arg Std."}}}}
+        self.assertEqual(l10n.validate_item("%lld hr, %lld min", item, english, "de"), [
+            "%lld takes argument 1, which %#@hours@ counts, as Apple numbers it: give it the position it means, as %2$lld"])
+
     def test_export_and_apply(self):
         out = self.root / "work"
         listed = quiet(l10n.cmd_export, self.args(out=str(out)))[1]
@@ -267,6 +589,41 @@ class GapTests(L10nTestCase):
         self.assertEqual((lines["argNum"], lines["formatSpecifier"]), (1, "lld"))
         self.assertEqual(lines["variations"]["plural"]["other"]["stringUnit"]["value"], "%arg Zeilen")
 
+    def test_a_substitution_over_the_whole_phrase_round_trips(self):
+        """A substitution can hold the whole phrase and the string's other number (`%2$lld`), for a language whose
+        words agree after it: apply wants that number where the English form has it, and the ports get both."""
+        key = "%lld of %lld earned"
+
+        def unit(value):
+            return {"stringUnit": {"state": "translated", "value": value}}
+
+        catalog = l10n.load_catalog(l10n.CATALOGS["app"])
+        catalog["strings"][key] = {"localizations": {"en": {
+            **unit("%#@earned@"),
+            "substitutions": {"earned": {"argNum": 1, "formatSpecifier": "lld", "variations": {"plural": {
+                "one": unit("%arg of %2$lld earned"), "other": unit("%arg of %2$lld earned")}}}},
+        }}}
+        l10n.dump_catalog(l10n.CATALOGS["app"], catalog)
+        out = self.root / "work"
+        quiet(l10n.cmd_export, self.args(lang=["de"], out=str(out)))
+        work = json.loads((out / "de.json").read_text("utf8"))
+        item = work["app"][key]
+        self.assertEqual(item["substitutions"]["earned"]["en"]["other"], "%arg of %2$lld earned")
+        item["value"] = "%#@earned@"
+        item["substitutions"]["earned"]["value"] = {"one": "%arg von %lld erhalten", "other": "%arg von %2$lld erhalten"}
+        (out / "de.json").write_text(json.dumps(work, ensure_ascii=False), "utf8")
+        result, text = quiet(l10n.cmd_apply, SimpleNamespace(files=[str(out / "de.json")]))
+        self.assertEqual(result, 1)
+        self.assertIn("substitution earned one: format specifiers ['%2$lld'] != ['%lld']", text)
+        item["substitutions"]["earned"]["value"]["one"] = "%arg von %2$lld erhalten"
+        (out / "de.json").write_text(json.dumps(work, ensure_ascii=False), "utf8")
+        self.assertEqual(quiet(l10n.cmd_apply, SimpleNamespace(files=[str(out / "de.json")]))[0], 0)
+        units = {lang: {u["key"]: u for u in l10n.export_units(lang)}[key] for lang in ("en", "de")}
+        self.assertEqual(units["de"]["plural"], {"one": "{0} von {1} erhalten", "other": "{0} von {1} erhalten"})
+        self.assertEqual(units["de"]["countArg"], 0)
+        self.assertEqual(units["en"]["plural"], {"one": "{0} of {1} earned", "other": "{0} of {1} earned"})
+        self.assertEqual(l10n.stale_exports(), [], "apply wrote the ports' files")
+
 
 class ApplyExportsTests(L10nTestCase):
     """`apply` leaves the ports' exports in line with the catalog it wrote, so `check` passes with no export step."""
@@ -341,6 +698,14 @@ class ApplyExportsTests(L10nTestCase):
         self.assertEqual(self.apply(self.translated()), (0, "applied 3, skipped 0 empty, rejected 0\n", ""))
         self.assertEqual(quiet(l10n.cmd_check, self.args(verbose=False)), (0, "de: ok\nit: ok\n"))
         self.assertFalse((self.root / "windows" / "Fixture.App").exists(), "nothing but the catalog is written")
+        catalog = l10n.load_catalog(l10n.CATALOGS["app"])
+        unit = {"stringUnit": {"state": "translated", "value": "%lld of %lld"}}
+        catalog["strings"]["%lld of %lld"] = {"shouldTranslate": False, "localizations": {
+            "en": {"variations": {"plural": {"one": unit, "other": unit}}}}}
+        l10n.dump_catalog(l10n.CATALOGS["app"], catalog)
+        result, out = quiet(l10n.cmd_check, self.args(verbose=False))
+        self.assertEqual((result, out.splitlines()[:3]), (1, [
+            "de: ok", "it: ok", "numbers Apple can't place in Localizable.xcstrings: 1"]), "a number problem alone fails check")
 
     def test_a_string_no_port_can_take_fails_apply_after_the_catalog_is_written(self):
         def unit(value):
@@ -437,6 +802,85 @@ class ExportTests(L10nTestCase):
         plural = {u["key"]: u for u in self.units["de"]}["%lld lines"]
         self.assertEqual(plural["plural"], {"one": "{0} Zeile", "other": "{0} Zeilen"})
         self.assertEqual(l10n.to_net_format("%2$@ and %1$@, 100%% {x}"), "{1} and {0}, 100% {{x}}")
+
+    def test_a_percent_sign_exports_as_apple_prints_it(self):
+        def unit(value):
+            return {"stringUnit": {"state": "translated", "value": value}}
+
+        catalog = l10n.load_catalog(l10n.CATALOGS["app"])
+        catalog["strings"]["%lld left, 100%% done"] = {"localizations": {"en": {"variations": {"plural": {
+            "one": unit("One left, 100%% done"), "other": unit("%lld left, 100%% done")}}},
+            "it": unit("Tutto fatto al 100%%"), "de": unit("Zu 100%% fertig")}}
+        catalog["strings"]["100% sure"] = {"localizations": {"en": unit("100% sure"), "it": unit("Sicuro al 100%")}}
+        l10n.dump_catalog(l10n.CATALOGS["app"], catalog)
+        exported = {lang: {u["key"]: u for u in l10n.export_units(lang)} for lang in ("en", "it")}
+        self.assertEqual(exported["en"]["%lld left, 100%% done"]["plural"],
+                         {"one": "One left, 100% done", "other": "{0} left, 100% done"},
+                         "Apple formats every plural form, even one without the number")
+        self.assertEqual(exported["it"]["%lld left, 100%% done"]["value"], "Tutto fatto al 100%",
+                         "a translation without the plural is formatted as its source is")
+        self.assertEqual((exported["en"]["100% sure"]["value"], exported["it"]["100% sure"]["value"]),
+                         ("100% sure", "Sicuro al 100%"))
+
+    def test_a_substitution_form_converts_its_own_numbers(self):
+        def subs(one, other):
+            return {"earned": {"argNum": 1, "formatSpecifier": "lld", "variations": {"plural": {
+                "one": {"stringUnit": {"value": one}}, "other": {"stringUnit": {"value": other}}}}}}
+
+        earned = subs("%arg di %2$lld ottenuto", "%arg di %2$lld ottenuti, {x} 100%% {y}")
+        self.assertEqual(l10n.to_net_format("%#@earned@", earned, "one"), "{0} di {1} ottenuto")
+        self.assertEqual(l10n.to_net_format("%#@earned@", earned, "other"), "{0} di {1} ottenuti, {{x}} 100% {{y}}",
+                         "braces are doubled before and after each token")
+        self.assertEqual(l10n.to_net_format("%#@earned@", earned, "few"), "{0} di {1} ottenuti, {{x}} 100% {{y}}",
+                         "a category the language lacks takes its other form")
+        self.assertEqual(l10n.to_net_format("%#@earned@, %2$lld", subs("%arg", "%arg"), "one"), "{0}, {1}")
+        self.assertEqual(l10n.to_net_format("%1$#@earned@ (%2$lld)", earned, "one"), "{0} di {1} ottenuto ({1})",
+                         "Apple's compiled form, with the substitution's position")
+        left = {"left": {**subs("%arg more break to go!", "%arg more breaks to go!")["earned"], "argNum": 2}}
+        self.assertEqual(l10n.to_net_format("%1$lld done, %#@left@", left, "one"), "{0} done, {1} more break to go!",
+                         "%arg is the argument argNum names")
+        self.assertEqual(l10n.to_net_format("noch %#@left@, %lld fertig", left, "one"),
+                         "noch {1} more break to go!, {0} fertig",
+                         "a positionless number takes argument 1, as on Apple: the count goes on past the substitution")
+        self.assertEqual(l10n.to_net_format("%@ %2$@ %@"), "{0} {1} {1}", "Apple's count skips %2$@")
+        self.assertEqual(l10n.to_net_format("100% on-device, 0% data sent"), "100% on-device, 0% data sent",
+                         "Apple prints a string with no arguments as it is, and so do the ports")
+        self.assertEqual(l10n.to_net_format("%lld % fatto"), "{0} {1}atto", "as Apple reads it, and check reports it")
+        self.assertEqual(l10n.form_number_problem("%arg, 100% done"),
+                         "'% d' is a specifier to Apple, beside the string's arguments, and prints one that isn't "
+                         "there: write the percent sign as %%")
+        self.assertEqual(l10n.to_net_format("%2$@ %@ %lld"), "{1} {0} {1}")
+        self.assertEqual(l10n.to_net_format("%lld % % sûr"), "{0}  % sûr", "'% %' prints ' %', as on Apple")
+        self.assertEqual(l10n.to_net_format("%lld moves, 10%-20% faster"), "{0} moves, 10-20% faster",
+                         "Apple drops a flagged percent sign's first %, and check reports it")
+        self.assertEqual(l10n.form_to_net("%arg moves, 10%-20% faster", 0, "x"), "{0} moves, 10-20% faster")
+        self.assertEqual(l10n.to_net_format("Today 50%OFF"), "Today 50%OFF", "Swift writes a bare literal as it is")
+        self.assertEqual(l10n.to_net_format("%#@earned@", subs("%arg at 100% %", "%arg at 100%%"), "one"),
+                         "{0} at 100 %")
+        self.assertEqual(l10n.to_net_format("One left, 100%% done", literal=False), "One left, 100% done",
+                         "a numberless plural form is formatted all the same")
+        self.assertEqual(l10n.to_net_format("Sûr à 100 %%"), "Sûr à 100 %%", "a plain string is exported as Apple shows it")
+        self.assertIsNone(l10n.markup_problem("Battery 8%", "Batterie 8 %"), "a landing string's % isn't printf")
+        self.assertEqual(l10n.markup_problem("{n} at 8%", "8 % pour"), "placeholders/tags ['{n}'] != []")
+
+        def failure(text, substitutions):
+            err = io.StringIO()
+            with redirect_stderr(err), self.assertRaises(SystemExit) as caught:
+                l10n.to_net_format(text, substitutions, "one")
+            self.assertEqual(caught.exception.code, 2)
+            return err.getvalue()
+
+        self.assertIn("%lld in the substitution form '%arg di %lld' of '%#@earned@' needs its position",
+                      failure("%#@earned@", subs("%arg di %lld", "%arg di %2$lld")))
+        self.assertIn("the substitution form '%arg di %#@total@' of '%#@earned@' holds another substitution, %#@total@",
+                      failure("%#@earned@", subs("%arg di %#@total@", "%arg")))
+        self.assertIn("the substitution form '%arg økt over 50 %-grensen' of '%#@earned@': '%-g' after a number is a "
+                      "specifier to Apple, not a percent sign: write the percent sign as %%",
+                      failure("%#@earned@", subs("%arg økt over 50 %-grensen", "%arg økter over 50 %%-grensen")),
+                      "the percent sign, as check says, not a position that would print a number")
+        unnumbered = {"earned": {key: value for key, value in earned["earned"].items() if key != "argNum"}}
+        self.assertIn("the substitution %#@earned@ in '%@: %#@earned@' has no argNum",
+                      failure("%@: %#@earned@", unnumbered))
 
     def test_resw_is_valid_and_names_are_unique(self):
         for path, text in self.resw.items():

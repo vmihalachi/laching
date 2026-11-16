@@ -25,6 +25,19 @@ language) are in the app's `DESIGN.md` and `.agents/notes/localization.md` when 
   Its source text is in its own language (an Italian-only joke is written in Italian).
 - Recorded voices say exactly the catalog text: a changed line is *pending* in every voiced language until it's
   re-recorded (`voice` skill); users never hear it meanwhile.
+- **A phrase with two numbers counts one through a substitution.** A plural over both (`%lld of %lld earned`) makes
+  Xcode warn that it can't tell which number counts, positions or not, even with one number in each form (spelled two
+  ways, as `%lld:%02lld` or a whole number and a fraction, it fails the build), and `check` reports it. Its English
+  value is `%#@earned@`, a substitution (argNum and formatSpecifier of the counted number) whose forms hold `%arg` for
+  that number and the other with its position (`%arg of %2$lld earned`); translations keep both. Beside a
+  substitution, give every number its position: Apple counts a positionless one without the substitution, so
+  `%#@hours@, %lld min` prints the hours twice. `check` reports that too, and a substitution with no argNum or placed
+  at another argument than its argNum.
+- **A percent sign is written as the source writes it.** Apple formats a string only when the call passes arguments,
+  which the source decides for every language: where it has a specifier, a plural or a substitution, a percent sign
+  is `%%` (a `%` before a space or right after a number reads an argument, `50%OFF` prints "505FF", and a `%` that
+  starts no specifier is dropped); where it has none, a plain `%` (a `%%` shows twice). `check` reports both; landing
+  strings aren't printf, so their `%` is free.
 
 ## Steps
 
