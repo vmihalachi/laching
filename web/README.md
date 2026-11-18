@@ -85,7 +85,7 @@ scripts/verify.sh                   # what applies to your changes, web/ include
 ```
 
 A throwaway server for the Jobs tests:
-`docker run -d -p 55432:5432 -e POSTGRES_PASSWORD=postgres postgres:16` and
+`podman run -d -p 55432:5432 -e POSTGRES_PASSWORD=postgres docker.io/library/postgres:16` and
 `LACHING_WEB_TEST_POSTGRES="Host=localhost;Port=55432;Username=postgres;Password=postgres"`.
 
 Releases are Laching's (`release.yml`): the web packages ship in a release when `web/src` or `web/`'s build files
