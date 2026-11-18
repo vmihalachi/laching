@@ -234,7 +234,7 @@ if [ "$fast" = 0 ]; then
       if web_postgres; then
         check "dotnet build + test (web)" web_dotnet test Laching.Web.sln -v q --nologo
       else
-        skip "Laching.Web.Jobs.Tests: needs PostgreSQL (LACHING_WEB_TEST_POSTGRES, or docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16)"
+        skip "Laching.Web.Jobs.Tests: needs PostgreSQL (LACHING_WEB_TEST_POSTGRES, or podman run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres docker.io/library/postgres:16)"
         check "dotnet build + test (web, without Jobs)" \
           web_dotnet test Laching.Web.sln -v q --nologo --filter 'FullyQualifiedName!~Laching.Web.Jobs.Tests'
       fi
