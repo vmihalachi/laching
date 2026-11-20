@@ -7,6 +7,16 @@ Each rule cost an app a release or a day (mybackhurts first, then Laching's fixt
   `(Brush?)GetValue(...)` for a property holding a XAML object. Under Native AOT (every Store package) the object can
   arrive wrapped as a base type, so the cast throws and `as`/`is` quietly fail. Use `XamlCast.As<T>` (Laching.Windows),
   or a typed helper of the app's that goes through it.
+- Casting a parameter declared `object` to a WinRT class: `e is not RenderingEventArgs args` in a handler of
+  CompositionTarget.Rendering (whose `object e` is all it gets), `sender as MenuFlyout`, `(Border)sender`. Native AOT
+  can hand the argument over as a bare WinRT object, so the test fails or the cast throws where a Debug run passes
+  (every stick figure of an app stood still in its Store build). Use `XamlCast.As<T>`, or don't read it: a Stopwatch
+  for the time, a field for the element. The rule reads the methods, constructors, local functions and typed lambdas
+  with a parameter declared `object` or `object?`, and reports an `is`, `is not`, `as` or cast of that parameter in
+  their body, unless the type is a managed one (the language's own, the .NET ones an app passes around as an object, an
+  exception, a type parameter), a WinRT value (`Visibility`, `Thickness`, `Color`…) or a type or an enum the sources
+  declare. It misses a lambda's untyped parameter (`(s, e) => …`), a `switch` on the parameter, a pattern after `and`
+  or `or`, and a copy of the parameter in a local.
 - A Style setting a shape's Data, Points or StrokeDashArray: the value is one object that WinUI uses for one element
   only, so repeated shapes come out blank. Set it on each element.
 - An element named `Language` (it hides FrameworkElement.Language in the generated code), and an `x:Bind` function
@@ -327,6 +337,7 @@ class Declarations:
         self.parts: dict[Source, list[Part]] = {}
         self.callables: dict[str, list[Callable]] = {}
         self.namespaces: set[str] = set()
+        self.enums: set[str] = set()
         checked = {f.resolve() for f in self.files}
         projects = {next((p for p in f.resolve().parents if any(p.glob("*.csproj"))), None) for f in self.files}
         others = {p for folder in referenced(projects - {None}) for p in files_in(folder) if p.suffix == ".cs"}
@@ -334,6 +345,7 @@ class Declarations:
             self.parts[s] = [Part(s, m) for m in TYPE_DECLARATION.finditer(s.code) if m.group(2) not in KEYWORDS]
             for part in self.parts[s]:
                 self.types.setdefault(part.name, []).append(part)
+            self.enums.update(ENUM.findall(s.code))
             for m in NAMESPACE.finditer(s.code):
                 names = m.group(1).split(".")
                 self.namespaces.update(".".join(names[:n]) for n in range(1, len(names) + 1))
@@ -725,6 +737,120 @@ def collection_expressions(path: Path, known: Declarations) -> list[str]:
     return list(problems.values())
 
 
+# --- A parameter declared `object` cast to a WinRT type ---
+
+# What a cast of such a parameter may name: managed types (the language's own and the .NET ones a WinUI app passes
+# around as an object) and the WinRT values XAML holds (enums and structs, which the property rule takes for fine too).
+MANAGED = frozenset((
+    "bool byte sbyte char decimal double float int uint nint nuint long ulong short ushort object string dynamic "
+    "Byte SByte Decimal Int16 UInt16 UInt32 UInt64 IntPtr UIntPtr Half Action Func Delegate EventHandler EventArgs "
+    "Task ValueTask Type Uri Version TimeSpan DateTime DateTimeOffset DateOnly TimeOnly Guid Enum Array Nullable Tuple "
+    "ValueTuple KeyValuePair Stream StringBuilder Regex CultureInfo Encoding CancellationToken SendOrPostCallback "
+    "IDisposable IAsyncDisposable IComparable IEquatable IFormattable IConvertible IEnumerable IEnumerator ICollection "
+    "IList IDictionary IReadOnlyCollection IReadOnlyList IReadOnlyDictionary ISet List Dictionary HashSet Queue Stack "
+    "JsonElement JsonNode IWinRTObject ComObject "
+    "Visibility Thickness CornerRadius GridLength Color Point Size Rect Duration FontWeight FontStyle FontStretch "
+    "HorizontalAlignment VerticalAlignment Orientation TextAlignment TextWrapping ElementTheme ApplicationTheme "
+    "Stretch FlowDirection VirtualKey VirtualKeyModifiers").split())
+ENUM = re.compile(r"(?<![\w@.])enum\s+@?(\w+)")
+TYPE_PARAMETER = re.compile(r"T(?:[A-Z0-9]\w*)?")  # T, TValue: a type parameter, by .NET's naming
+CAST_NAME = r"(?:global::)?@?[A-Za-z_][\w.]*(?:\s*<[^<>()]*>)?"  # what a pattern or a cast names
+CONSTANTS = frozenset(("null", "true", "false", "var", "default"))  # `e is null`, `e is var x`: no type
+
+
+def body(s: Source, after: int) -> tuple[int, int] | None:
+    """The body of what declares the parameter list that ends before `after`: a block, or the expression after `=>`
+    (to its `;`, or the `,` or bracket that ends a lambda); None for a declaration with none, or a call."""
+    code = s.code
+    found = SOLID.search(code, after)
+    if not found:
+        return None
+    at = found.start()
+    if code[at] == ":" or re.match(r"where\b", code[at:at + 6]):  # a constructor's `: base(…)`, a constraint
+        at = next((j for j, c in top(s, at, len(code)) if c in "{;" or code.startswith("=>", j)), len(code))
+    if code.startswith("=>", at):
+        return at + 2, next((j for j, c in top(s, at + 2, len(code)) if c in ";,)]}"), len(code))
+    return (at, s.partner[at]) if code[at:at + 1] == "{" and at in s.partner else None
+
+
+def functions(s: Source, start: int, end: int, mentions: str):
+    """What code[start:end] declares with parameters and a body, when its parameters name the word `mentions`: a
+    method, a constructor, a local function or a lambda. Each as (its parameters as (type, or None for a lambda's
+    untyped one, name), its type parameters, its body's span)."""
+    code, said = s.code, re.compile(rf"(?<![\w@]){mentions}(?!\w)")
+    for m in re.compile(r"\(|(?<![\w@.])@?(\w+)(?=\s*=>)").finditer(code, start, end):
+        if m.group(1):  # e => …
+            span = body(s, m.end()) if said.fullmatch(m.group(1)) else None
+            if span:
+                yield [(None, m.group(1))], set(), span
+            continue
+        close = s.partner.get(m.start())
+        if close is None or not said.search(code, m.end(), close):
+            continue
+        text, after = code[m.end():close], SOLID.search(code, close + 1)
+        declared = [(type_, name) for type_, name, _ in parameters(text) or []]
+        lambda_ = after is not None and code.startswith("=>", after.start())
+        if not declared and lambda_ and re.fullmatch(r"\s*@?\w+(?:\s*,\s*@?\w+)*\s*", text):
+            declared = [(None, name.strip().lstrip("@")) for name in text.split(",")]  # (s, e) => …
+        span = body(s, close + 1) if declared else None
+        if span:
+            head = re.search(r"(\w+)\s*(?:<([^<>()]*)>\s*)?$", code[max(0, m.start() - 200):m.start()])
+            yield declared, set(re.findall(r"\w+", head.group(2) or "")) - {"in", "out"} if head else set(), span
+
+
+def cast(s: Source, at: int) -> bool:
+    """Whether the brackets at `at` are a cast's, not a condition's (`if (ready) e = …`) or a call's."""
+    j = s.before(at)
+    if j < 0 or not word(s.code[j]):
+        return True
+    before = re.search(r"\w+$", s.code[max(0, j - 100):j + 1]).group()
+    return before in KEYWORDS and before not in BLOCKS
+
+
+def managed(type_: str, type_parameters: set[str], known: Declarations) -> bool:
+    """Whether what a parameter declared `object` is tested or cast for is fine: no type at all (`null`, `var`), or a
+    name in MANAGED, an exception, a type or an enum the sources declare (the app's own, or Laching's) or a type
+    parameter. Of a qualified name that is its last part (`System.Uri`), or the one before it for a constant
+    (`Visibility.Visible`)."""
+    names = [n.lstrip("@") for n in re.split(r"\s*(?:\.|::)\s*", re.sub(r"\s*<.*", "", type_, flags=re.S)) if n]
+    if names[-1] in CONSTANTS or names[-1] in KEYWORDS:
+        return True
+    known.load()
+    return any(alias(n) in MANAGED or n.endswith("Exception") or n in known.types or n in known.enums
+               or n in type_parameters or TYPE_PARAMETER.fullmatch(n) for n in names[-2:])
+
+
+def object_casts(path: Path, known: Declarations) -> list[str]:
+    s = source(path)
+    lines = s.text.split("\n")
+    problems: dict[int, str] = {}  # one a line
+    for declared, type_parameters, (start, end) in functions(s, 0, len(s.code), "[Oo]bject"):
+        for type_, name in declared:
+            if type_ is None or alias(generic(type_)[0]) != "object":
+                continue
+            # A lambda or a local function inside that declares the name again has its own.
+            again = [span for inner, _, span in functions(s, start, end, re.escape(name))
+                     if any(n == name for _, n in inner)]
+            uses = re.compile(rf"(?<![\w@.])@?{name}\s+(?:is\s+(?:not\s+)?|as\s+)({CAST_NAME})"
+                              rf"|\(\s*({CAST_NAME})\s*\??\s*\)\s*@?{name}(?!\w|\s*(?:[.\[(]|\?[.\[]|!\s*[.\[]))")
+            for m in uses.finditer(s.code, start, end):
+                tested, cast_to = m.groups()
+                if any(b <= m.start() < e for b, e in again) or (cast_to and not cast(s, m.start())):
+                    continue
+                if managed(tested or cast_to, type_parameters, known):
+                    continue
+                number = s.code.count("\n", 0, m.start()) + 1
+                line = lines[number - 1]
+                if "winui-check: ok" in line:
+                    continue
+                verb = f"type-tests {name}, a parameter declared object, as" if tested else \
+                    f"casts {name}, a parameter declared object, to"
+                problems.setdefault(number, f"{path}:{number}: {verb} {' '.join((tested or cast_to).split())}; under "
+                                    "Native AOT it can arrive as a bare WinRT object, so use XamlCast.As<T> or leave it "
+                                    f"unread\n    {line.strip()}")
+    return list(problems.values())
+
+
 def check(path: Path, known: Declarations) -> list[str]:
     rules = CSHARP if path.suffix == ".cs" else XAML if path.suffix == ".xaml" else []
     text = path.read_text(encoding="utf-8-sig")
@@ -736,6 +862,7 @@ def check(path: Path, known: Declarations) -> list[str]:
             if pattern.search(line):
                 problems.append(f"{path}:{number}: {message}\n    {line.strip()}")
     if path.suffix == ".cs":
+        problems += object_casts(path, known)
         problems += collection_expressions(path, known)
     if path.suffix == ".xaml" and APP_ROOT.search(text[:600]) and not any(path.parent.glob("*.csproj")):
         problems.append(f"{path}: the app's XAML must sit next to the project file (only a root App.xaml is the ApplicationDefinition)")

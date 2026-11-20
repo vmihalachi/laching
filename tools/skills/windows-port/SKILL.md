@@ -90,7 +90,8 @@ Traps that cost a day each:
 
 - `App.xaml` next to the `.csproj`, never in a folder: elsewhere it isn't the application's XAML and the app stops at
   launch with a message-less `XamlParseException` (0x802B000A). `check-winui.py` knows.
-- Never cast an untyped XAML object (`Resources[…]`, `GetTemplateChild`, `e.NewValue` holding a brush): `XamlCast.As<T>`.
+- Never cast an untyped XAML object (`Resources[…]`, `GetTemplateChild`, `e.NewValue` holding a brush, an event's
+  `object` argument like `CompositionTarget.Rendering`'s): `XamlCast.As<T>`, or don't read the argument (a Stopwatch).
 - Choose the language first (`Loc.UseLanguage(ScreenshotCapture.Language ?? Loc.Choose(languages))`), before the
   speaker, the voice library or any copy is made; phrases go through `Localize(key, source)`, never `Get`.
 - `PurchaseStore.Changed` is an event, not `PropertyChanged`: raise what depends on it (the Supporter's skin) yourself.

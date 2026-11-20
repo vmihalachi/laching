@@ -283,6 +283,77 @@ class CheckWinUITests(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout)
         self.assertIn("ok: 1 WinUI files", done.stdout)
 
+    def test_object_parameter_casts(self):
+        """A parameter declared `object` tested or cast for a WinRT class: CompositionTarget.Rendering's argument froze
+        an app's animations in its Store build."""
+        path = self.write("Handlers.cs", "\n".join((
+            "public sealed class Handlers",
+            "{",
+            "    void OnRendering(object? sender, object e)",
+            "    {",
+            "        if (e is not RenderingEventArgs args) return;",  # 5
+            "    }",
+            "    void OnOpening(object sender, object e) => (sender as MenuFlyout)?.Hide();",  # 7
+            "    void OnSizeChanged(object sender, SizeChangedEventArgs e)",
+            "    {",
+            "        var border = (Border)sender;",  # 10
+            "        var width = ((Microsoft.UI.Xaml.Controls.Grid?)sender).Width;",  # 11
+            "        var size = e.NewSize;",
+            "    }",
+            "    void Hook() => Loaded += (object s, RoutedEventArgs e) => { if (s is FrameworkElement f) f.Width = 1; };",  # 14
+            "    public Handlers(object value) : base() { _ = value as Brush; }",  # 15
+            "}",
+        )))
+        done = self.lint(path)
+        self.assertEqual(done.returncode, 1, done.stdout)
+        self.assertEqual([int(n) for n in re.findall(r"Handlers\.cs:(\d+):", done.stdout)], [5, 7, 10, 11, 14, 15])
+        self.assertIn("type-tests e, a parameter declared object, as RenderingEventArgs", done.stdout)
+        self.assertIn("casts sender, a parameter declared object, to Border", done.stdout)
+        self.assertIn("use XamlCast.As<T> or leave it unread", done.stdout)
+
+    def test_object_parameters_left_alone(self):
+        """A handler that doesn't read its `object` argument or goes through XamlCast.As, a converter testing for
+        managed types, WinRT values and the app's own types, and a lambda that declares the name again all pass."""
+        path = self.write("Fine.cs", "\n".join((
+            "public enum Mode { One, Two }",
+            "public sealed class Model { }",
+            "public sealed class Fine",
+            "{",
+            "    void OnRendering(object? sender, object e)",
+            "    {",
+            "        if (Stopwatch.GetElapsedTime(started) < FrameInterval) return;",
+            "        // if (e is RenderingEventArgs args) return;",
+            "        var said = \"e is RenderingEventArgs\";",
+            "    }",
+            "    void OnFrame(object? sender, object e)",
+            "    {",
+            "        if (XamlCast.As<RenderingEventArgs>(e) is not { } args) return;",
+            "    }",
+            "    object Convert(object value, Type targetType, object parameter, string language)",
+            "    {",
+            "        if (value is string text) return text.ToUpperInvariant();",
+            "        if (value is null || value is int or long) return value;",
+            "        if (value is Visibility.Visible || value is Thickness) return true;",
+            "        if (value is Mode mode || value is Model model) return mode;",
+            "        if (parameter is System.Uri uri || value is IEnumerable<string> list) return uri;",
+            "        var count = (int)value + (int?)parameter ?? 0;",
+            "        if (ready) value = null;",
+            "        return (Brush)value; // winui-check: ok, a SolidColorBrush the app made in code",
+            "    }",
+            "    static T? As<T>(object? value) where T : class => value is T typed ? typed : null;",
+            "    void Run(object e)",
+            "    {",
+            "        Each(e => e is RenderingEventArgs);",
+            "        Each((s, e) => e as Border);",
+            "        if (e is InvalidOperationException failed) throw failed;",
+            "    }",
+            "    void OnSizeChanged(object sender, SizeChangedEventArgs e) => Resize(e.NewSize);",
+            "}",
+        )))
+        done = self.lint(path)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertIn("ok: 1 WinUI files", done.stdout)
+
     def collection_expressions(self, project: str, *paths: str) -> tuple[list[int], str]:
         """The lines of Shapes.cs that the rule reports, checking `paths` of a Proj with this project file."""
         self.write("Lib/Lib.csproj", "<Project />\n")
