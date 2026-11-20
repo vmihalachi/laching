@@ -891,10 +891,10 @@ app builds, packages and checks the same way. Its `.csproj` sets its own propert
   as delivered and Settings says they're on, and after Quit a button on one starts nothing (COM finds no server). So check
   notifications, their buttons and the startup task in the installed package (`smoke-package.ps1 -Keep`), never in a
   Debug run.
-- **Native AOT breaks what a Debug run hides**: a cast of an untyped XAML object throws or quietly fails, so the app
-  goes through `XamlCast.As<T>`, and a collection expression for a read-only list interface (`IReadOnlyList<int> sizes
-  = [20, 30];`) stops the publish (CsWinRT1032, one site a run); `check-winui.py` fails on the patterns, and `verify.sh`
-  runs it on the changed files.
+- **Native AOT breaks what a Debug run hides**: a cast of an untyped XAML object (an event's `object` argument too)
+  throws or quietly fails, so the app goes through `XamlCast.As<T>`, and a collection expression for a read-only list
+  interface (`IReadOnlyList<int> sizes = [20, 30];`) stops the publish (CsWinRT1032, one site a run); `check-winui.py`
+  fails on the patterns, and `verify.sh` runs it on the changed files.
   The Release screenshots and `smoke-package.ps1` on the built package are the proof before an upload.
 - **The model tests run on any OS.** The app's model, its words and the window list use no WinUI type; what has a
   WinUI half sits under `#if WINDOWS` (defined for `-windows` target frameworks only). A `net11.0` test project
@@ -984,6 +984,13 @@ type when the sources write it down and declare it (a type's name, a local, para
 `M(…)` the local functions in scope or the methods of the type around it. It misses what takes the compiler to tell (a
 member of another file, an object initializer, a receiver whose type isn't written down, a parameter of the platform's
 own methods, differing overloads, `params`), so the Native AOT publish stays the proof.
+
+Another rule reads a parameter declared `object`: an event's untyped argument (`CompositionTarget.Rendering` hands its
+handler `object e`) or a sender. Native AOT can pass it as a bare WinRT object, so `e is RenderingEventArgs args` fails
+and `(Border)sender` throws, while a Debug run passes. The check reports an `is`, `as` or cast of such a parameter to a
+type that is neither managed (the language's own, the common .NET ones, an exception, a type parameter), a WinRT value
+(`Visibility`, `Thickness`…) nor declared in the sources, and points at `XamlCast.As<T>` or at not reading the argument.
+A lambda's untyped parameters, a `switch` on the argument and a copy in a local are past what it reads.
 
 ### `windows/assets.py`
 
