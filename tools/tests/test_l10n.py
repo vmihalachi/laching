@@ -384,6 +384,60 @@ class GapTests(L10nTestCase):
             "one": "%lld left, 100%-free", "other": "%lld left, 100%% free"}}}),
             ([], [f"'%lld left, 100%% free': '%-f' {digit}"]))
 
+    def test_a_percent_sign_after_a_number_placeholder_is_advised_as_after_a_digit(self):
+        """Swift writes `\\(n)%` as `%lld%%`, so a translation may put a percent sign right after a placeholder that
+        prints a number (`%lld`, `%1$lld`, a form's `%arg`). Hyphenated, starting a word or as Korean's `%p`, it gets
+        the `%%` advice in check, apply and the export, as after a digit, and never advice that leads nowhere. `%P` is
+        a specifier to Apple (an object, which crashes), not a stray `%`."""
+        digit = "after a number is a specifier to Apple, not a percent sign: write the percent sign as %%"
+        hint = ": a percent sign beside a number is %%"
+
+        def unit(value):
+            return {"stringUnit": {"state": "translated", "value": value}}
+
+        for english, lang, translated, token in (("%lld%% off", "hu", "%lld%-os kedvezmény", "%-o"),
+                                                 ("Over the %lld%% limit", "nb", "Over %lld %-grensen", "%-g"),
+                                                 ("Up %lld%%", "ko", "%lld%p 상승", "%p"),
+                                                 ("Up %1$lld%%", "ko", "%1$lld%p 상승", "%p"),
+                                                 ("%lld%% sure", "de", "%lld%ige Sicherheit", "%i"),
+                                                 ("%lld times, up 1%%p", "ko", "%lld회, 1%P 상승", "%P")):
+            entry = {"localizations": {"en": unit(english), lang: unit(translated)}}
+            self.assertEqual(l10n.number_problem(entry, english), f"{lang} {translated!r}: {token!r} {digit}", "check")
+            issues = l10n.catalog_issues(english, entry, lang)  # what check and the export's work file list
+            self.assertEqual(len(issues), 1, issues)
+            self.assertTrue(issues[0].startswith("format specifiers") and issues[0].endswith(hint), issues)
+            problems = l10n.validate_item(english, {"value": translated}, entry, lang)
+            self.assertEqual(len(problems), 1, problems)
+            self.assertTrue(problems[0].endswith(hint), f"apply: {problems}")
+        self.assertIsNone(l10n.percent_problem("%lld %p", True), "with a space between, only a hyphenated % is text")
+        self.assertIsNone(l10n.percent_problem("%lld%lld, %lld%@, %lld%.1f", True), "what Swift writes")
+
+        self.assertEqual(l10n.token_problem("%lld times", "%lld회, %P"), "format specifiers ['%1$lld'] != ['%1$lld', '%2$P']",
+                         "a specifier, not a % Apple drops")
+        self.assertIsNone(l10n.percent_problem("%lld회, %P", True), "Apple reads %P as a specifier")
+        self.assertTrue(l10n.plain("지난주보다 1%P 상승"), "Korean's percentage point is text in a string without arguments")
+
+        def subs(form):
+            return {"n": {"argNum": 1, "formatSpecifier": "lld", "variations": {"plural": {
+                "one": unit(form), "other": unit(form)}}}}
+
+        for english, translated, token in (("%arg%% off", "%arg%-os", "%-o"), ("%arg%% up", "%arg%p", "%p"),
+                                           ("%arg%% limit", "%arg %-grensen", "%-g")):
+            self.assertEqual(l10n.form_problem(english, translated), f"{token!r} {digit}",
+                             "the percent sign, not a position that would print a number")
+            self.assertEqual(l10n.form_number_problem(translated), f"{token!r} {digit}")
+            entry = {"localizations": {"en": {"stringUnit": {"state": "translated", "value": "%#@n@"},
+                                              "substitutions": subs(english)}}}
+            categories = l10n.categories_for("hu")
+            item = {"value": "%#@n@", "substitutions": {"n": {"value": {cat: translated for cat in categories}}}}
+            self.assertEqual(l10n.validate_item("%#@n@", item, entry, "hu"),
+                             [f"substitution n {cat}: {token!r} {digit}" for cat in categories], "apply")
+            err = io.StringIO()
+            with redirect_stderr(err), self.assertRaises(SystemExit):
+                l10n.to_net_format("%#@n@", subs(translated), "one")
+            self.assertIn(f"the substitution form {translated!r} of '%#@n@': {token!r} {digit}", err.getvalue(),
+                          "the ports' export")
+
     def test_a_plural_over_two_numbers_is_reported(self):
         """Xcode reads a plural's forms together: it can't tell which of two numbers counts, positions or not, and
         can't build one number spelled two ways; export offers no English plural to create for either, and neither
@@ -821,6 +875,38 @@ class ExportTests(L10nTestCase):
                          "a translation without the plural is formatted as its source is")
         self.assertEqual((exported["en"]["100% sure"]["value"], exported["it"]["100% sure"]["value"]),
                          ("100% sure", "Sicuro al 100%"))
+
+    def test_braces_are_doubled_only_where_the_port_formats_the_string(self):
+        """The ports read a string that takes no arguments raw (`StringTable.Get`, `Loc.get`), so its braces export as
+        they are; `Format` and `Plural` read the rest with `string.Format`, where a brace is `{{`."""
+        def unit(value):
+            return {"stringUnit": {"state": "translated", "value": value}}
+
+        catalog = l10n.load_catalog(l10n.CATALOGS["app"])
+        catalog["strings"]["Tap {here} to start"] = {"localizations": {
+            "en": unit("Tap {here} to start"), "it": unit("Tocca {qui} per iniziare")}}
+        catalog["strings"]["%lld taps on {here}"] = {"localizations": {
+            "en": unit("%lld taps on {here}"), "it": unit("%lld tocchi su {qui}")}}
+        catalog["strings"]["%lld {items}"] = {"localizations": {"en": {"variations": {"plural": {
+            "one": unit("One {item}"), "other": unit("%lld {items}")}}}}}
+        l10n.dump_catalog(l10n.CATALOGS["app"], catalog)
+        exported = {lang: {u["key"]: u for u in l10n.export_units(lang)} for lang in ("en", "it")}
+        self.assertEqual([exported[lang]["Tap {here} to start"]["value"] for lang in ("en", "it")],
+                         ["Tap {here} to start", "Tocca {qui} per iniziare"], "Get reads a plain string raw")
+        self.assertEqual([exported[lang]["%lld taps on {here}"]["value"] for lang in ("en", "it")],
+                         ["{0} taps on {{here}}", "{0} tocchi su {{qui}}"], "Format reads it with string.Format")
+        self.assertEqual(exported["en"]["%lld {items}"]["plural"], {"one": "One {{item}}", "other": "{0} {{items}}"},
+                         "Plural reads every form with string.Format, even one without the number")
+        out = self.root / "out"
+        resw = l10n.windows_files(out)[out / "it" / "Resources.resw"]
+        self.assertIn("<value>Tocca {qui} per iniziare</value>", resw)
+        self.assertIn("<value>{0} tocchi su {{qui}}</value>", resw)
+        android = l10n.android_files(out)[out / "values-it" / "strings.xml"]
+        self.assertIn(">Tocca {qui} per iniziare</string>", android)
+        self.assertIn(">{0} tocchi su {{qui}}</string>", android)
+        self.assertEqual(l10n.to_net_format("Tap {here} to start"), "Tap {here} to start")
+        self.assertEqual(l10n.to_net_format("Tap {here} to start", literal=False), "Tap {{here}} to start",
+                         "a plural form is formatted, so its braces are doubled")
 
     def test_a_substitution_form_converts_its_own_numbers(self):
         def subs(one, other):
