@@ -1,0 +1,75 @@
+name: WinUI canary
+
+# The WinUI build on GitHub's hosted Windows image, every Monday and on request. The apps check their WinUI build on the
+# maintainer's self-hosted runner or VM (windows-app.yml without `hosted`), so a break only GitHub's image shows (a new
+# SDK, workload or image) would otherwise wait for a release run. This builds Laching's fixture app as every companion
+# app is built (tools/windows/companion.targets): the WinUI traps, the Native AOT publish for x64 and ARM64, and the
+# launch check, every window opened from the x64 Native AOT build by the screenshot runner the apps' windows-app.yml
+# runs (scripts/fixture-screenshots.ps1, failing on a window that doesn't open or text that doesn't fit). The fixture is
+# never packed, so the MSIX step (store-release.ps1) is left to the apps' runs. It gates nothing: a red run is the
+# report, mailed to whoever last changed the schedule. A pull request that changes this file runs it too.
+on:
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/winui-canary.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  fixture:
+    runs-on: windows-latest
+    # A hung step would otherwise run for six hours of Windows minutes.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      # setup-dotnet downloads the newest .NET 11 SDK whenever the image is a patch behind; the image's own does when it
+      # is in the newest feature band (tools/windows/dotnet-sdk.ps1).
+      - name: The image's .NET SDK
+        id: sdk
+        run: pwsh tools/windows/dotnet-sdk.ps1
+
+      - uses: actions/setup-dotnet@v6
+        if: steps.sdk.outputs.use != 'true'
+        with:
+          dotnet-version: "11.0.x"
+
+      - name: WinUI traps
+        run: python tools/windows/check-winui.py dotnet/Fixture.App dotnet/Laching.Windows.Companion
+
+      # The ARM64 build compiles only: GitHub's runner is x64.
+      - name: Native AOT publish, ARM64
+        shell: powershell
+        run: |
+          & tools/windows/screenshots.ps1 -Project dotnet/Fixture.App/Fixture.App.csproj -Configuration Release -Platform ARM64 -BuildOnly
+          if ($LASTEXITCODE -ne 0) { throw "The ARM64 publish failed." }
+
+      # screenshots.ps1 renders into a folder under %TEMP%, so the step gets the job's own temporary folder.
+      - name: Native AOT publish, x64, and every window opened
+        shell: powershell
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          & scripts/fixture-screenshots.ps1 -Configuration Release -Out "$env:RUNNER_TEMP\shots"
+          if ($LASTEXITCODE -ne 0) { throw "The fixture's screenshot run failed." }
+
+      - name: Keep the screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-screenshots
+          path: ${{ runner.temp }}/shots
+          if-no-files-found: ignore
