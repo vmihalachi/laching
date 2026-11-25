@@ -822,6 +822,38 @@ class ExportTests(L10nTestCase):
         self.assertEqual((exported["en"]["100% sure"]["value"], exported["it"]["100% sure"]["value"]),
                          ("100% sure", "Sicuro al 100%"))
 
+    def test_braces_are_doubled_only_where_the_port_formats_the_string(self):
+        """The ports read a string that takes no arguments raw (`StringTable.Get`, `Loc.get`), so its braces export as
+        they are; `Format` and `Plural` read the rest with `string.Format`, where a brace is `{{`."""
+        def unit(value):
+            return {"stringUnit": {"state": "translated", "value": value}}
+
+        catalog = l10n.load_catalog(l10n.CATALOGS["app"])
+        catalog["strings"]["Tap {here} to start"] = {"localizations": {
+            "en": unit("Tap {here} to start"), "it": unit("Tocca {qui} per iniziare")}}
+        catalog["strings"]["%lld taps on {here}"] = {"localizations": {
+            "en": unit("%lld taps on {here}"), "it": unit("%lld tocchi su {qui}")}}
+        catalog["strings"]["%lld {items}"] = {"localizations": {"en": {"variations": {"plural": {
+            "one": unit("One {item}"), "other": unit("%lld {items}")}}}}}
+        l10n.dump_catalog(l10n.CATALOGS["app"], catalog)
+        exported = {lang: {u["key"]: u for u in l10n.export_units(lang)} for lang in ("en", "it")}
+        self.assertEqual([exported[lang]["Tap {here} to start"]["value"] for lang in ("en", "it")],
+                         ["Tap {here} to start", "Tocca {qui} per iniziare"], "Get reads a plain string raw")
+        self.assertEqual([exported[lang]["%lld taps on {here}"]["value"] for lang in ("en", "it")],
+                         ["{0} taps on {{here}}", "{0} tocchi su {{qui}}"], "Format reads it with string.Format")
+        self.assertEqual(exported["en"]["%lld {items}"]["plural"], {"one": "One {{item}}", "other": "{0} {{items}}"},
+                         "Plural reads every form with string.Format, even one without the number")
+        out = self.root / "out"
+        resw = l10n.windows_files(out)[out / "it" / "Resources.resw"]
+        self.assertIn("<value>Tocca {qui} per iniziare</value>", resw)
+        self.assertIn("<value>{0} tocchi su {{qui}}</value>", resw)
+        android = l10n.android_files(out)[out / "values-it" / "strings.xml"]
+        self.assertIn(">Tocca {qui} per iniziare</string>", android)
+        self.assertIn(">{0} tocchi su {{qui}}</string>", android)
+        self.assertEqual(l10n.to_net_format("Tap {here} to start"), "Tap {here} to start")
+        self.assertEqual(l10n.to_net_format("Tap {here} to start", literal=False), "Tap {{here}} to start",
+                         "a plural form is formatted, so its braces are doubled")
+
     def test_a_substitution_form_converts_its_own_numbers(self):
         def subs(one, other):
             return {"earned": {"argNum": 1, "formatSpecifier": "lld", "variations": {"plural": {

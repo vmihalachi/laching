@@ -1240,16 +1240,18 @@ def to_net_format(text: str, substitutions: dict | None = None, variant: str | N
     """Apple format → .NET composite format. `%lld`/`%@` become `{n}` in order, `%2$@` becomes
     `{1}`, `%%` becomes `%`, braces are doubled. A `%#@name@` substitution is replaced by its
     `variant` (a plural category), converted by `form_to_net`. A `literal` string, one Apple doesn't format (`formats`;
-    left out, `plain`), keeps its `%`s as Apple prints it."""
-    out, index, pos = [], 0, 0
+    left out, `plain`), is returned as Apple prints it, its `%`s and braces as they are: the ports read a string that
+    takes no arguments raw (`StringTable.Get`, Android's `Loc.get`), and format only one that takes some, a plural
+    form or a substitution."""
     literal = plain(text) if literal is None else literal
+    if literal:
+        return text
+    out, index, pos = [], 0, 0
     for m in VALUE_TOKEN_RE.finditer(text):
         out.append(text[pos:m.start()].replace("{", "{{").replace("}", "}}"))
         pos = m.end()
         token = m.group(0)
-        if literal:
-            out.append(token)
-        elif m.group(3) == "%":  # `%%` prints `%`, and with printf's flags what follows its first `%`, as on Apple
+        if m.group(3) == "%":  # `%%` prints `%`, and with printf's flags what follows its first `%`, as on Apple
             out.append(token[1:])
         elif m.group(1):
             sub = (substitutions or {}).get(m.group(1))
