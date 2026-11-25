@@ -165,7 +165,9 @@ def in_scope(key: str, lang: str) -> bool:
     return languages is None or lang == SOURCE or base_language(lang) in languages
 
 
-SPEC_RE = re.compile(r"%(?:(\d+)\$)?[-+ #0]*\d*(?:\.\d+)?(?:hh|h|ll|l|q|z|t|j)?([@dDiuUxXoOfFeEgGcCsSpaA%])")
+# A format specifier: its position (group 1) and conversion (group 2). Apple reads `%P` as one too, printing its argument
+# as an object, as `%@` does.
+SPEC_RE = re.compile(r"%(?:(\d+)\$)?[-+ #0]*\d*(?:\.\d+)?(?:hh|h|ll|l|q|z|t|j)?([@dDiuUxXoOfFeEgGcCsSpPaA%])")
 SUBST_RE = re.compile(r"%(?:\d+\$)?#@([A-Za-z0-9_]+)@")  # `%#@name@`, or with Apple's compiled position, `%1$#@name@`
 # A token in a string: a substitution (group 1, its name) or a format specifier (groups 2 and 3, SPEC_RE's).
 VALUE_TOKEN_RE = re.compile(SUBST_RE.pattern + "|" + SPEC_RE.pattern)
@@ -185,16 +187,20 @@ SWIFT_SPECIFIERS = {"%@", "%lld", "%llu", "%ld", "%lu", "%lf", "%d", "%u", "%f"}
 # What a percent sign makes before a word: a `%`, a length and a conversion (`50%OFF`, `100%ige`), or the same with a
 # hyphen (`100%-Garantie`, `100%-os`, `50%-a`), which a specifier never has without a width.
 WORD_SPEC_RE = re.compile(r"%(-)?(?:hh|h|ll|l|q|z|t|j)?.")
-# A number right before a `%`, or with a space, a no-break space or a hyphen between (nb "50 %-grensen", de
-# "50-%-Grenze"), which group 1 holds.
-AFTER_NUMBER_RE = re.compile(r"\d([ \u00a0\u202f-])?\Z")
+# A number right before a `%`: a digit, or a placeholder that prints one (`%lld`, `%1$lld`, a substitution form's
+# `%arg`), as Swift writes `\(n)%` (`%lld%%`); or the same with a space, a no-break space or a hyphen between (nb
+# "50 %-grensen", de "50-%-Grenze"), which group 1 holds.
+AFTER_NUMBER_RE = re.compile(r"(?:\d|%arg|%(?:\d+\$)?[-+ #0]*\d*(?:\.\d+)?(?:hh|h|ll|l|q|z|t|j)?[dDiuUxXoOfFeEgGaA])"
+                             r"([ \u00a0\u202f-])?\Z")
 
 
 def percent_sign(text: str, m: re.Match) -> bool:
     """Whether a SPEC_RE match in `text` is a percent sign, should the string take no arguments: `%%`, a `%` before a
-    space, or one after a number that starts a word where Swift would write none ("Top 10%@", "U+00%X"): right after
-    it ("100%ige", "50%OFF", "100%-Garantie", and Korean's percentage point, "1%p"), or after a space or hyphen when a
-    hyphen follows ("50 %-grensen", "50-%-Grenze"; "Zoom 1-%gx" is a `specifier:` value with a unit)."""
+    space, or one after a number (a digit, or a placeholder that prints one: `%lld`, `%1$lld`, `%arg`) that starts a
+    word where Swift would write none ("Top 10%@", "U+00%X", "%lld%lld"): right after it ("100%ige", "50%OFF",
+    "100%-Garantie", "%lld%-os", and Korean's percentage point, "1%p" or "1%P"), or after a space or hyphen when a
+    hyphen follows ("50 %-grensen", "%lld %-grensen", "50-%-Grenze"; "Zoom 1-%gx" is a `specifier:` value with a
+    unit)."""
     token = m.group(0)
     if m.group(2) == "%" or LITERAL_PERCENT_RE.match(token):
         return True
@@ -202,8 +208,11 @@ def percent_sign(text: str, m: re.Match) -> bool:
     if not after or token in SWIFT_SPECIFIERS:
         return False
     word = WORD_SPEC_RE.fullmatch(token)
-    return word is not None and (word.group(1) is not None
-                                 or after.group(1) is None and (text[m.end():m.end() + 1].isalpha() or token == "%p"))
+    if word is None:
+        return False
+    if word.group(1) is not None:  # hyphenated
+        return True
+    return after.group(1) is None and (text[m.end():m.end() + 1].isalpha() or token in ("%p", "%P"))
 
 
 def plain(text: str) -> bool:
