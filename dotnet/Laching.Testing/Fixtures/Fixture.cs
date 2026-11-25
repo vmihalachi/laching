@@ -9,7 +9,8 @@ namespace Laching.Testing.Fixtures;
 /// <summary>
 /// The fixtures mechanism tests run over (Swift's <c>PhraseBank.fixture</c>, <c>CompanionDefaults.fixture</c>,
 /// <c>FixtureArt</c>), loaded once from the vectors folder <see cref="ConformanceRoot.Find"/> finds, which must hold
-/// Laching's <c>companion/</c> fixtures.
+/// Laching's <c>companion/</c> fixtures: found from this source file, so from Laching's own checkout (this repo, or an
+/// app's submodule), else from the test binary's folder.
 /// </summary>
 public static class Fixture
 {

@@ -20,6 +20,10 @@ and regenerate. `companion/characters/<skin>.json` is also what `tools/character
 
 Files are byte-exact (`.gitattributes` turns off line-ending conversion). Ports parse the JSON and compare values.
 
+The tests find this folder by its `README.md`, walking up: Swift from the test's `#filePath`, .NET
+(`Laching.Testing`'s `ConformanceRoot`) from the calling source file and then the test binary's folder, so a build
+whose output is outside the repo (`dotnet test --artifacts-path`) finds it too, and Kotlin from the working directory.
+
 ## Shared conventions
 
 - **Dates** are ISO 8601 with an offset (`2026-09-28T10:00:00+03:00`, `Z` for UTC), written in the vector's

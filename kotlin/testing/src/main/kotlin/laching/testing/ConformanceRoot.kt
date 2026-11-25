@@ -11,9 +11,9 @@ import kotlin.io.path.name
 import kotlin.io.path.readText
 
 /**
- * Finds the repository's `conformance/` folder from the working directory (walking up, as Laching.Testing does), so the
- * vector tests run from Gradle, an IDE or the command line alike. An app that consumes Laching as a submodule can point
- * the search at its own checkout with [find]'s `start`.
+ * Finds the repository's `conformance/` folder from the working directory (walking up), so the vector tests run from
+ * Gradle, an IDE or the command line alike. An app that consumes Laching as a submodule can point the search at its own
+ * checkout with [find]'s `start`.
  */
 public object ConformanceRoot {
     /** The folder holding [markerFile]; throws when no parent of [start] has it. */
