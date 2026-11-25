@@ -1,11 +1,14 @@
 using System.Globalization;
 using Laching.Companion.Settings;
 using Laching.Windows.Companion.Views;
+using Laching.Windows.Shell;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Media;
+using Windows.Globalization.DateTimeFormatting;
 
 namespace Laching.Windows.Companion.Settings;
 
@@ -16,7 +19,8 @@ namespace Laching.Windows.Companion.Settings;
 /// pickers don't fit side by side in a companion's window (their minutes get cut off), where the Mac puts them in one
 /// row. Narrator reads the editor as a group named by <see cref="ActiveHoursCopy.ActiveHours"/>, the pickers by their
 /// labels and the weekday chips, with their full day names, as a group named by <see cref="ActiveHoursCopy.Days"/>; the
-/// labels on screen are left out, so nothing is read twice.
+/// labels on screen are left out, so nothing is read twice. At exactly 0:00 WinUI leaves the time out of a picker's
+/// name ("From  time picker"), so the editor puts it back in WinUI's words.
 /// </summary>
 public sealed partial class ActiveHoursEditor : UserControl
 {
@@ -37,6 +41,8 @@ public sealed partial class ActiveHoursEditor : UserControl
         IsTabStop = false;
         from.SelectedTimeChanged += (_, e) => SetMinute(e.NewTime, start: true);
         to.SelectedTimeChanged += (_, e) => SetMinute(e.NewTime, start: false);
+        KeepMidnightNamed(from);
+        KeepMidnightNamed(to);
 
         var pickers = new Grid { ColumnSpacing = Space.Item, RowSpacing = Space.Snug };
         pickers.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -142,6 +148,23 @@ public sealed partial class ActiveHoursEditor : UserControl
 
     public static int Minute(TimeSpan time) => (int)Math.Round(time.TotalMinutes) % (24 * 60);
 
+    /// <summary>
+    /// A time picker's button name as WinUI writes it at 0:00, where its time is left out, with <paramref name="time"/>
+    /// back where the time goes: in the gap after the picker's name (<paramref name="picker"/>), which is followed by two
+    /// spaces ("From  time picker" becomes "From 00:00 time picker") or ends the name (Italian's "Selezione ora From "
+    /// becomes "Selezione ora From 00:00"); at the end when there's no such gap.
+    /// </summary>
+    internal static string WithTime(string name, string picker, string time)
+    {
+        var at = name.IndexOf(picker + "  ", StringComparison.Ordinal);
+        if (at < 0 && name.EndsWith(picker + " ", StringComparison.Ordinal))
+            at = name.Length - picker.Length - 1;
+        if (at < 0)
+            return $"{name.TrimEnd()} {time}";
+        var cut = at + picker.Length + 1;
+        return (name[..cut] + time + name[cut..]).Trim();
+    }
+
     protected override AutomationPeer OnCreateAutomationPeer() => new GroupPeer(this, nameof(ActiveHoursEditor));
 
     private void SetMinute(TimeSpan? time, bool start)
@@ -152,6 +175,50 @@ public sealed partial class ActiveHoursEditor : UserControl
             settings.ActiveStartMinute = Minute(t);
         else
             settings.ActiveEndMinute = Minute(t);
+    }
+
+    // WinUI names a time picker's button "<picker's name> <time> time picker" (in Windows' language), but formats the time
+    // only when it isn't zero, so at 0:00 Narrator would read "From  time picker". WinUI renames the button when the
+    // template is applied and after raising SelectedTimeChanged, so this names it again once loaded and, posted, after
+    // each change.
+    private static void KeepMidnightNamed(TimePicker picker)
+    {
+        void Later() => picker.DispatcherQueue.TryEnqueue(() => NameMidnight(picker));
+        picker.Loaded += (_, _) => Later();
+        picker.SelectedTimeChanged += (_, _) => Later();
+    }
+
+    private static void NameMidnight(TimePicker picker)
+    {
+        if (picker.SelectedTime != TimeSpan.Zero || Named(picker, "FlyoutButton") is not { } button)
+            return;
+        var name = AutomationProperties.GetName(button);
+        var time = ShortTime(picker.ClockIdentifier);
+        if (name.Length > 0 && !name.Contains(time, StringComparison.Ordinal))
+            AutomationProperties.SetName(button, WithTime(name, AutomationProperties.GetName(picker), time));
+    }
+
+    // The template part named so, searched depth first.
+    private static FrameworkElement? Named(DependencyObject node, string name)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++)
+        {
+            var child = VisualTreeHelper.GetChild(node, i);
+            if (XamlCast.As<FrameworkElement>(child) is { } element && element.Name == name)
+                return element;
+            if (Named(child, name) is { } found)
+                return found;
+        }
+        return null;
+    }
+
+    // 0:00 as WinUI writes a picker's time: the system's short time with the picker's clock, on WinUI's sentinel day.
+    private static string ShortTime(string clock)
+    {
+        var system = new DateTimeFormatter("shorttime");
+        return new DateTimeFormatter("shorttime", system.Languages, system.GeographicRegion, system.Calendar, clock).Format(
+            new DateTimeOffset(new DateTime(2011, 7, 21, 0, 0, 0, DateTimeKind.Local))
+        );
     }
 
     private void SetWeekday(int weekday, bool on)
