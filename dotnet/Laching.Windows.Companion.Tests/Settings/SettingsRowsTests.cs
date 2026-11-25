@@ -32,6 +32,21 @@ public sealed class SettingsRowsTests
     }
 
     [Fact]
+    public void AtMidnightTheTimeGoesBackWhereWinUILeftItsGap()
+    {
+        // WinUI's English "%1 %2 time picker" and Italian "Selezione ora %1 %2", written with no time.
+        Assert.Equal("From 00:00 time picker", ActiveHoursEditor.WithTime("From  time picker", "From", "00:00"));
+        Assert.Equal("From 12:00 AM time picker", ActiveHoursEditor.WithTime("From  time picker", "From", "12:00 AM"));
+        Assert.Equal("Selezione ora From 00:00", ActiveHoursEditor.WithTime("Selezione ora From ", "From", "00:00"));
+        // A picker named like WinUI's own words still finds its gap.
+        Assert.Equal("ora 00:00 ora time picker", ActiveHoursEditor.WithTime("ora  ora time picker", "ora", "00:00"));
+        Assert.Equal("Selezione ora ora 00:00", ActiveHoursEditor.WithTime("Selezione ora ora ", "ora", "00:00"));
+        // A picker with no name, and words with no gap.
+        Assert.Equal("00:00 time picker", ActiveHoursEditor.WithTime("  time picker", "", "00:00"));
+        Assert.Equal("From: 00:00", ActiveHoursEditor.WithTime("From: ", "From", "00:00"));
+    }
+
+    [Fact]
     public void QuietHoursAreLabelledTheWayTheCultureWritesHours()
     {
         var american = QuietHoursEditor.Label(15, CultureInfo.GetCultureInfo("en-US"));
