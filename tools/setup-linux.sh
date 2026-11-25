@@ -55,8 +55,10 @@ if [ -n "$WINDOWS_DIR" ] && [ ! -d "$WINDOWS_DIR" ]; then
 elif [ -n "$WINDOWS_DIR" ]; then
   # An earlier run's SDK, which a fresh shell doesn't have on PATH.
   [ -x "$HOME/.dotnet/dotnet" ] && export PATH="$HOME/.dotnet:$PATH"
-  # Any 11.0 SDK, though a newer one may be the one picked where global.json pins nothing.
-  if ! dotnet_sdk >/dev/null || ! dotnet --list-sdks 2>/dev/null | grep -q '^11\.'; then
+  # Any 11.0 SDK, though a newer one may be the one picked where global.json pins nothing. The list is read whole
+  # first: piped, grep -q quits at the first match, and dotnet, still writing the rest, dies of SIGPIPE, which pipefail
+  # takes for no 11.0 SDK.
+  if ! dotnet_sdk >/dev/null || ! grep -q '^11\.' <<<"$(dotnet --list-sdks 2>/dev/null)"; then
     echo "Installing the .NET 11 SDK into ~/.dotnet"
     installer="${TMPDIR:-/tmp}/dotnet-install.sh"
     if curl -fsSL https://dot.net/v1/dotnet-install.sh -o "$installer" &&

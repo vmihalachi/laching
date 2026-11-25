@@ -230,6 +230,23 @@ class SetupLinuxTests(FixtureAppTestCase):
         self.assertNotIn("DOTNET_ROOT", self.exports())
         self.assertIn("Linux setup done: 12.0.100, node", result.stdout)
 
+    def test_an_11_sdk_first_in_a_list_longer_than_a_pipe_installs_nothing(self):
+        # More SDKs after the 11.0 one than a pipe holds: a check that stops reading at the first match kills dotnet
+        # mid-list (SIGPIPE) every time, where two SDKs did only now and then.
+        more = self.root.parent / "more-sdks"
+        more.write_text("".join(f"12.0.{patch} [/fake/sdk]\n" for patch in range(20000)), "utf8")
+        self.fake("dotnet", f"""echo "$PWD: dotnet $*" >>"$LOG"
+case "$1" in
+  --list-sdks) echo "11.0.100 [/fake/sdk]"; exec cat "{more}" ;;
+  --version) echo 12.0.19999 ;;
+esac
+exit 0
+""")
+        result = self.run_setup()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse([call for call in self.calls() if "dotnet-install" in call], self.calls())
+        self.assertIn("Linux setup done: 12.0.19999, node", result.stdout)
+
     def pin(self, version: str) -> None:
         (self.root / "windows/global.json").write_text(
             json.dumps({"sdk": {"version": version, "rollForward": "disable"}}) + "\n", "utf8")
