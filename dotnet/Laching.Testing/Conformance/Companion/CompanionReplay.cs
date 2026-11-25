@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Laching.Companion.Figures;
 using Laching.Companion.Phrases;
 using Laching.Companion.Settings;
@@ -36,9 +37,16 @@ public static class CompanionReplay
     public static IReadOnlyList<string> Character(string path, IReadOnlyList<RiggedCharacter> characters) =>
         Open(path, (s, f) => CharacterReplay.Verify(s, f, characters));
 
-    /// <summary>The <c>.json</c> files in <paramref name="folder"/> of the vectors folder, one per row (xUnit's <c>MemberData</c>).</summary>
-    public static IEnumerable<object[]> Files(string folder, string markerFile = "conformance/README.md") =>
-        ConformanceRoot.Files(folder, "*.json", markerFile);
+    /// <summary>
+    /// The <c>.json</c> files in <paramref name="folder"/> of the vectors folder, one per row (xUnit's <c>MemberData</c>):
+    /// <see cref="ConformanceRoot.Files"/> from the caller's source file (<paramref name="sourceFile"/>, left to the
+    /// compiler), so an app's replay test finds the app's vectors, not Laching's beside this file in a submodule.
+    /// </summary>
+    public static IEnumerable<object[]> Files(
+        string folder,
+        string markerFile = "conformance/README.md",
+        [CallerFilePath] string sourceFile = ""
+    ) => ConformanceRoot.Files(folder, "*.json", markerFile, sourceFile);
 
     private static IReadOnlyList<string> Open(string path, Func<Stream, string, IReadOnlyList<string>> verify)
     {
