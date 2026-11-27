@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { build } from "vite-plus";
@@ -197,6 +197,38 @@ describe("companionLanding", () => {
       "it-privacy",
       "notFound",
     ]);
+  });
+
+  it("keeps max-width and min-width media queries, which Safari before 16.4 reads", async () => {
+    const site = mkdtempSync(join(tmpdir(), "laching-landing-css-"));
+    try {
+      writeFileSync(
+        join(site, "index.html"),
+        '<!doctype html><link rel="stylesheet" href="./style.css"><p>Hi</p>',
+      );
+      writeFileSync(
+        join(site, "style.css"),
+        "p { margin: 2rem }\n" +
+          "@media (max-width: 720px) { p { margin: 1rem } }\n" +
+          "@media (min-width: 1040px) { p { margin: 3rem } }\n",
+      );
+      const dist = join(site, "dist");
+      await build({
+        root: site,
+        configFile: false,
+        logLevel: "silent",
+        build: { outDir: dist, cssTarget: landing().build.cssTarget },
+      });
+      const css = readdirSync(join(dist, "assets"))
+        .filter((file) => file.endsWith(".css"))
+        .map((file) => readFileSync(join(dist, "assets", file), "utf8"))
+        .join("");
+      expect(css).toContain("max-width:720px");
+      expect(css).toContain("min-width:1040px");
+      expect(css).not.toMatch(/width\s*[<>]=?/);
+    } finally {
+      rmSync(site, { recursive: true, force: true });
+    }
   });
 
   it("leaves the social cards to the app without og", () => {
