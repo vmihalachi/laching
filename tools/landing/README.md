@@ -34,6 +34,11 @@ const landing = companionLanding({
 export default defineConfig({ ...landing, fmt: {}, lint: {} });
 ```
 
+Its `build` holds the pages' inputs and `cssTarget`, `landingCssTarget`: Vite+'s default browsers with Safari and iOS
+lowered to 15, so the built media queries keep their `max-width` and `min-width` form instead of `width<=720px`, which
+Safari before 16.4 ignores (iPhones on iOS 15 would get the desktop layout). A landing that sets its own `build` spreads
+`landing.build` into it.
+
 The template's `{{key}}` placeholders are the app's own (`placeholders`, asked first), then the generated ones:
 `langRedirectScript`, `storeButton`, `storeButtonBig`, `contactEmail`, `legal<Page>Url`, `jsonLd`,
 `languageSwitcher` (`"menu"`, `"inline"` or a function), `hreflangLinks`, `ogLocale`, `ogLocaleAlternates`,

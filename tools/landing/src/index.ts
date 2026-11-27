@@ -145,7 +145,10 @@ export interface CompanionLandingOptions<L extends Language = Language> {
  */
 export function companionLanding<L extends Language>(
   options: CompanionLandingOptions<L>,
-): { plugins: Plugin[]; build: { rollupOptions: { input: Record<string, string> } } } {
+): {
+  plugins: Plugin[];
+  build: { cssTarget: string[]; rollupOptions: { input: Record<string, string> } };
+} {
   const { root, siteUrl, languages, locales } = options;
   const legalPages = options.legalPages ?? ["privacy", "terms"];
   const defaultLanguage = languages.find(({ code }) => code === options.defaultLanguageCode);
@@ -353,8 +356,23 @@ export function companionLanding<L extends Language>(
     notFound: resolve(root, "404.html"),
   };
 
-  return { plugins, build: { rollupOptions: { input } } };
+  return { plugins, build: { cssTarget: [...landingCssTarget], rollupOptions: { input } } };
 }
+
+/**
+ * The browsers `companionLanding`'s CSS is built for: Vite+'s default (Baseline widely available) with Safari and iOS
+ * lowered to 15. At the default's Safari 16.4 the minifier rewrites `(max-width: 720px)` as `(width<=720px)`, which
+ * Safari before 16.4 ignores, so an iPhone that stops at iOS 15 or 16.3 would get the desktop layout. With Safari 15 in
+ * the target the media queries keep their `max-width` and `min-width` form. Container queries are left as they are:
+ * no Safari before 16 has them.
+ */
+export const landingCssTarget: readonly string[] = [
+  "chrome111",
+  "edge111",
+  "firefox114",
+  "safari15",
+  "ios15",
+];
 
 /** `url` without its trailing slashes (a loop: CodeQL flags `/\/+$/` on library input as polynomial). */
 function withoutTrailingSlashes(url: string) {
