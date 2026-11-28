@@ -10,6 +10,7 @@ import {
   createRenderer,
   headersFile,
   icoFromPngs,
+  langRedirectScript,
   socialAssets,
   type Language,
   type LandingCheckOptions,
@@ -84,8 +85,43 @@ describe("companionLanding", () => {
   });
 
   it("puts the redirect script on the default page only", () => {
-    expect(render("/")).toContain('localStorage.getItem("lang")');
+    expect(render("/")).toContain('const saved = localStorage.getItem("lang")');
     expect(render("/it/")).not.toContain("localStorage");
+  });
+
+  it("redirects the root by the saved language, else by the browser's", () => {
+    const redirectLanguages: readonly Language[] = [
+      languages[0]!,
+      { ...languages[1]!, notFor: ["it-ch"] },
+      { code: "pt-BR", path: "/pt-br/", label: "PT", nativeName: "Português", ogLocale: "pt_BR" },
+    ];
+    const script = langRedirectScript(
+      redirectLanguages,
+      redirectLanguages[0]!,
+      redirectLanguages[0]!,
+    );
+    const [open, close] = ["<script>", "</script>"];
+    expect(script.startsWith(open) && script.endsWith(close)).toBe(true);
+    const body = script.slice(open.length, -close.length);
+    /** Where the script sends a visitor with `saved` in `localStorage.lang` and `browser` as their first language. */
+    function destination(saved: string | null, browser: string) {
+      let replaced: string | undefined;
+      new Function("localStorage", "navigator", "location", body)(
+        { getItem: (key: string) => (key === "lang" ? saved : null) },
+        { languages: [browser], language: browser },
+        { hash: "#faq", replace: (url: string) => (replaced = url) },
+      );
+      return replaced;
+    }
+    expect(destination(null, "it-IT")).toBe("/it/#faq");
+    expect(destination(null, "pt-BR")).toBe("/pt-br/#faq");
+    expect(destination(null, "it-CH")).toBeUndefined();
+    expect(destination(null, "en-US")).toBeUndefined();
+    expect(destination("en", "it-IT")).toBeUndefined();
+    expect(destination("it", "en-US")).toBe("/it/#faq");
+    expect(destination("it", "it-CH")).toBe("/it/#faq");
+    expect(destination("pt-BR", "it-IT")).toBe("/pt-br/#faq");
+    expect(destination("xx", "it-IT")).toBeUndefined();
   });
 
   it("gives the legal pages their canonical and alternates", () => {
@@ -226,6 +262,49 @@ describe("companionLanding", () => {
       expect(css).toContain("max-width:720px");
       expect(css).toContain("min-width:1040px");
       expect(css).not.toMatch(/width\s*[<>]=?/);
+    } finally {
+      rmSync(site, { recursive: true, force: true });
+    }
+  });
+
+  it("builds no modulepreload polyfill", async () => {
+    const site = mkdtempSync(join(tmpdir(), "laching-landing-preload-"));
+    try {
+      for (const page of ["index", "other"]) {
+        writeFileSync(
+          join(site, `${page}.html`),
+          `<!doctype html><script type="module" src="./${page}.js"></script><p>Hi</p>`,
+        );
+        writeFileSync(
+          join(site, `${page}.js`),
+          `import { hi } from "./shared.js";\nhi("${page}");\n`,
+        );
+      }
+      writeFileSync(join(site, "shared.js"), "export const hi = (page) => console.log(page);\n");
+      const dist = join(site, "dist");
+      const { cssTarget, modulePreload } = landing().build;
+      expect(modulePreload).toEqual({ polyfill: false });
+      await build({
+        root: site,
+        configFile: false,
+        logLevel: "silent",
+        build: {
+          outDir: dist,
+          cssTarget,
+          modulePreload,
+          rollupOptions: {
+            input: { main: join(site, "index.html"), other: join(site, "other.html") },
+          },
+        },
+      });
+      const assets = readdirSync(join(dist, "assets"));
+      expect(assets.some((file) => file.endsWith(".js"))).toBe(true);
+      expect(assets.filter((file) => file.includes("modulepreload-polyfill"))).toEqual([]);
+      const js = assets
+        .filter((file) => file.endsWith(".js"))
+        .map((file) => readFileSync(join(dist, "assets", file), "utf8"))
+        .join("");
+      expect(js).not.toContain("modulepreload");
     } finally {
       rmSync(site, { recursive: true, force: true });
     }

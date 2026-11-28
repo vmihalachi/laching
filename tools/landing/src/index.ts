@@ -147,7 +147,11 @@ export function companionLanding<L extends Language>(
   options: CompanionLandingOptions<L>,
 ): {
   plugins: Plugin[];
-  build: { cssTarget: string[]; rollupOptions: { input: Record<string, string> } };
+  build: {
+    cssTarget: string[];
+    modulePreload: { polyfill: false };
+    rollupOptions: { input: Record<string, string> };
+  };
 } {
   const { root, siteUrl, languages, locales } = options;
   const legalPages = options.legalPages ?? ["privacy", "terms"];
@@ -356,7 +360,16 @@ export function companionLanding<L extends Language>(
     notFound: resolve(root, "404.html"),
   };
 
-  return { plugins, build: { cssTarget: [...landingCssTarget], rollupOptions: { input } } };
+  return {
+    plugins,
+    build: {
+      cssTarget: [...landingCssTarget],
+      // Safari before 17 skips `modulepreload` links and loads the modules from their script tags; the polyfill would
+      // fetch() them instead, which `connect-src 'none'` blocks, and it costs every page an extra chunk.
+      modulePreload: { polyfill: false },
+      rollupOptions: { input },
+    },
+  };
 }
 
 /**

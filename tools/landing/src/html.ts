@@ -62,8 +62,9 @@ export function inlineLanguageSwitcher(
 }
 
 /**
- * On the default page only: sends a first-time visitor to their browser's preferred language (or an alias of one),
- * once, skipping the tags a language says it isn't for.
+ * On the default page only: sends a visitor to the language they last picked in the switcher (the code the page's
+ * script saves as `localStorage.lang`, matched exactly, so a saved default stays here), or else to their browser's
+ * preferred language (or an alias of one), skipping the tags a language says it isn't for.
  */
 export function langRedirectScript(
   languages: readonly Language[],
@@ -79,11 +80,9 @@ export function langRedirectScript(
   );
   // An empty skip list costs ~20 bytes of inline script and keeps one template.
   const skip = others.flatMap((other) => other.notFor ?? []);
-  return `<script>try { if (!localStorage.getItem("lang")) { const paths = ${JSON.stringify(
-    paths,
-  )}; const skip = ${JSON.stringify(
+  return `<script>try { const paths = ${JSON.stringify(paths)}; const skip = ${JSON.stringify(
     skip,
-  )}; const wanted = (navigator.languages?.[0] || navigator.language || "").toLowerCase(); const base = wanted.split("-")[0]; const path = skip.some((tag) => wanted.startsWith(tag)) ? undefined : paths[wanted] || paths[base] || Object.entries(paths).find(([code]) => code.split("-")[0] === base)?.[1]; if (path) location.replace(path + location.hash); } } catch {}</script>`;
+  )}; const saved = localStorage.getItem("lang"); const wanted = (saved || navigator.languages?.[0] || navigator.language || "").toLowerCase(); const base = wanted.split("-")[0]; const path = saved ? paths[wanted] : skip.some((tag) => wanted.startsWith(tag)) ? undefined : paths[wanted] || paths[base] || Object.entries(paths).find(([code]) => code.split("-")[0] === base)?.[1]; if (path) location.replace(path + location.hash); } catch {}</script>`;
 }
 
 /**
