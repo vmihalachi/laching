@@ -100,7 +100,9 @@ describe("companionLanding", () => {
       redirectLanguages[0]!,
       redirectLanguages[0]!,
     );
-    const body = script.replace(/^<script>/, "").replace(/<\/script>$/, "");
+    const [open, close] = ["<script>", "</script>"];
+    expect(script.startsWith(open) && script.endsWith(close)).toBe(true);
+    const body = script.slice(open.length, -close.length);
     /** Where the script sends a visitor with `saved` in `localStorage.lang` and `browser` as their first language. */
     function destination(saved: string | null, browser: string) {
       let replaced: string | undefined;
