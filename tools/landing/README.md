@@ -36,8 +36,14 @@ export default defineConfig({ ...landing, fmt: {}, lint: {} });
 
 Its `build` holds the pages' inputs and `cssTarget`, `landingCssTarget`: Vite+'s default browsers with Safari and iOS
 lowered to 15, so the built media queries keep their `max-width` and `min-width` form instead of `width<=720px`, which
-Safari before 16.4 ignores (iPhones on iOS 15 would get the desktop layout). A landing that sets its own `build` spreads
-`landing.build` into it.
+Safari before 16.4 ignores (iPhones on iOS 15 would get the desktop layout), and `modulePreload: { polyfill: false }`:
+no `modulepreload` polyfill on any page, whose `fetch()` the CSP's `connect-src 'none'` blocks in Safari before 17 (which
+then loads the modules from their script tags). A landing that sets its own `build` spreads `landing.build` into it.
+
+`{{langRedirectScript}}`, on the default language's home page, sends a visitor to the language they last picked: the
+code the page's own script saves as `localStorage.lang` when a switcher link (`[data-lang]`) is clicked, matched
+exactly, so a saved default language stays. Without one it sends a visitor by their browser's first language (a code,
+an alias or the same base), skipping the `notFor` tags.
 
 The template's `{{key}}` placeholders are the app's own (`placeholders`, asked first), then the generated ones:
 `langRedirectScript`, `storeButton`, `storeButtonBig`, `contactEmail`, `legal<Page>Url`, `jsonLd`,
